@@ -1,0 +1,4 @@
+{
+  "tui.input.newLine": ["ctrl+j", "ctrl+o", "shift+enter"],
+  "app.tools.expand": ["alt+o"]
+}

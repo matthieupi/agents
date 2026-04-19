@@ -1,0 +1,96 @@
+#!/bin/bash
+# Pi - Unified interface for container management and execution
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+usage() {
+    cat << EOF
+Pi - Containerized Coding Agent
+
+Usage: $(basename "$0") [command] [options]
+
+Run Mode:
+    $(basename "$0")                                  Run Pi in current workspace
+    $(basename "$0") /path/to/project                 Run Pi in a specific workspace
+    $(basename "$0") -p "Prompt"                      Send a prompt to Pi explicitly
+    $(basename "$0") /path/to/project -p "Prompt"     Send a prompt in a specific workspace
+    $(basename "$0") ext-agent-team [path] [pi args]   Run Pi with the agent-team orchestration preset
+    $(basename "$0") ext-agent-teams [path] [pi args]  Alias for ext-agent-team
+    $(basename "$0") ext-agent-chain [path] [pi args]  Run Pi with the agent-chain orchestration preset
+    $(basename "$0") ext-pi-pi [path] [pi args]        Run Pi with the pi-pi meta-agent preset
+
+Management Commands:
+    list, ls                              List all pi containers
+    build, rebuild, update                Rebuild image and refresh containers
+    login [path]                          Run Pi with OAuth callback ports open
+    stop <name|all>                       Stop container(s)
+    start <name>                          Start a stopped container
+    remove, rm <name|all>                 Remove container(s)
+    clean [-f]                            Remove stopped containers (-f: stop all first)
+    fclean                                Force clean: stop all containers, then remove
+    logs <name>                           Show container logs
+    shell <name>                          Open bash shell in container
+
+Examples:
+    $(basename "$0")
+    $(basename "$0") /path/to/project
+    $(basename "$0") -p "Explain this repo"
+    $(basename "$0") ext-agent-team
+    $(basename "$0") ext-agent-chain /path/to/project
+    $(basename "$0") ext-pi-pi
+    $(basename "$0") login
+    $(basename "$0") build
+    $(basename "$0") list
+EOF
+    exit 0
+}
+
+CMD="${1:-}"
+
+if [[ -n "${CMD}" && -d "${CMD}" ]]; then
+    exec "${SCRIPT_DIR}/pi-run" "$@"
+fi
+
+case "$CMD" in
+    "")
+        exec "${SCRIPT_DIR}/pi-run"
+        ;;
+    -r|--rebuild)
+        exec "${SCRIPT_DIR}/pi-mgr" build
+        ;;
+    -p|--prompt)
+        shift
+        exec "${SCRIPT_DIR}/pi-run" -p "$@"
+        ;;
+    ext-agent-team|ext-agent-teams)
+        shift
+        exec "${SCRIPT_DIR}/pi-run" --extension-preset agent-team "$@"
+        ;;
+    ext-agent-chain)
+        shift
+        exec "${SCRIPT_DIR}/pi-run" --extension-preset agent-chain "$@"
+        ;;
+    ext-pi-pi)
+        shift
+        exec "${SCRIPT_DIR}/pi-run" --extension-preset pi-pi "$@"
+        ;;
+    list|ls|build|rebuild|update|login|stop|start|remove|rm|clean|fclean|logs|shell)
+        exec "${SCRIPT_DIR}/pi-mgr" "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        log_error() { echo "[pi] Unknown command: $1" >&2; }
+        log_error "$CMD"
+        echo "Use 'pi -p \"...\"' to send a prompt to the Pi agent." >&2
+        usage
+        ;;
+esac

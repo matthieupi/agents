@@ -1,0 +1,79 @@
+services:
+  pi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lab/pi:latest
+    container_name: pi
+    restart: unless-stopped
+
+    user: "${UID:-1000}:${GID:-1000}"
+
+    stdin_open: true
+    tty: true
+
+    security_opt: []
+    read_only: false
+
+    environment:
+      - HOME=/home/pi
+      - PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin
+      - TERM=xterm-256color
+      - PI_CODING_AGENT_DIR=/home/pi/.pi/agent
+      - PI_SKIP_VERSION_CHECK=${PI_SKIP_VERSION_CHECK:-1}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-pi-xmist}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-pi@xmist.dev}
+      - GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-pi-xmist}
+      - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-pi@xmist.dev}
+
+    volumes:
+      - ${WORKSPACE_PATH:-./workspace}:/workspace:rw
+      - ../agent:/opt/agent:rw
+      - ./init.sh:/opt/harness/init.sh:ro
+      - ./.pi:/home/pi/.pi:rw
+      - ${SSH_DIR_PATH:-./ssh}:/home/pi/.ssh:ro
+      - ${GITCONFIG_PATH:-/dev/null}:/home/pi/.gitconfig:ro
+
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    networks:
+      - devai-xmist
+      - proxy_net
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    entrypoint: ["bash", "-lc", "/opt/harness/init.sh && tail -f /dev/null"]
+
+networks:
+  devai-xmist:
+    external: true
+  proxy_net:
+    external: true
