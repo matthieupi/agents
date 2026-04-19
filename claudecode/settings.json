@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.anthropic.com/claude-code/config-schema.json",
+  "permissions": {
+    "allow_file_read": true,
+    "allow_file_write": true,
+    "allow_bash": true,
+    "allow_mcp": false,
+    "trust_mode": "prompt"
+  },
+  "model": {
+    "default": "claude-sonnet-4-20250514",
+    "fallback": "claude-sonnet-4-20250514"
+  },
+  "behavior": {
+    "auto_compact": true,
+    "verbose": false,
+    "skip_permissions": false
+  },
+  "ui": {
+    "theme": "dark",
+    "show_token_count": true
+  }
+}

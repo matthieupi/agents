@@ -1,0 +1,54 @@
+#!/bin/bash
+# Claude Code - Unified interface for container management and execution
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Management commands handled by claude-mgr
+MANAGEMENT_CMDS="list|ls|stop|start|remove|rm|clean|fclean|logs|shell"
+
+usage() {
+    cat << EOF
+Claude Code - Containerized Claude CLI
+
+Usage: $(basename "$0") [command] [options]
+
+Run Mode (default):
+    $(basename "$0") [options] [path]     Run Claude in a workspace
+        -d, --dangerous                   Skip permission prompts
+        -r, --rebuild                     Rebuild image before running
+
+Management Commands:
+    list, ls                              List all claude containers
+    stop <name|all>                       Stop container(s)
+    start <name>                          Start a stopped container
+    remove, rm <name|all>                 Remove container(s)
+    clean [-f]                            Remove stopped containers (-f: stop all first)
+    fclean                                Force clean: stop all containers, then remove
+    logs <name>                           Show container logs
+    shell <name>                          Open bash shell in container
+
+Examples:
+    $(basename "$0")                      Run in current directory
+    $(basename "$0") /path/to/project     Run in specific directory
+    $(basename "$0") -r .                 Rebuild image and run
+    $(basename "$0") list                 List all containers
+    $(basename "$0") fclean                Stop all and clean
+EOF
+    exit 0
+}
+
+# Check if first arg is a management command
+CMD="${1:-}"
+
+case "$CMD" in
+    list|ls|stop|start|remove|rm|clean|fclean|logs|shell)
+        exec "${SCRIPT_DIR}/claude-mgr" "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        exec "${SCRIPT_DIR}/claude-run" "$@"
+        ;;
+esac

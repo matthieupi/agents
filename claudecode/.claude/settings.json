@@ -1,0 +1,10 @@
+{
+  "model": "opus[1m]",
+  "statusLine": {
+    "type": "command",
+    "command": "/home/claude/.claude/statusline-command.sh"
+  },
+  "effortLevel": "high",
+  "autoUpdatesChannel": "stable",
+  "skipDangerousModePermissionPrompt": true
+}

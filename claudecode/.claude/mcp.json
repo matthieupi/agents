@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp",
+        "--headless",
+        "--config",
+        "/home/claude/.claude/playwright-mcp.json"
+      ]
+    }
+  }
+}

@@ -1,0 +1,25 @@
+# Environment templates
+.env
+
+# Runtime credentials and local state
+.claude/.credentials.json
+.claude/.claude.json
+.claude/.session-titles/
+.claude/history.jsonl
+.claude/stats-cache.json
+
+# Generated runtime directories
+.claude/backups/
+.claude/cache/
+.claude/debug/
+.claude/file-history/
+.claude/paste-cache/
+.claude/plans/
+.claude/projects/
+.claude/session-env/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/statsig/
+.claude/tasks/
+.claude/telemetry/
+.claude/todos/
