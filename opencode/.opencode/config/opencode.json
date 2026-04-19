@@ -1,0 +1,62 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-5.4",
+  "small_model": "openai/gpt-5-mini",
+  "agent": {
+    "explore": {
+      "prompt": "{file:./system/explore.md}",
+      "temperature": 0.1,
+      "mode": "all",
+      "description": "Read-only codebase exploration and discovery",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "task": "allow",
+        "webfetch": "allow",
+        "edit": "deny"
+      }
+    },
+    "plan": {
+      "prompt": "{file:./system/plan.md}",
+      "temperature": 0.2,
+      "mode": "primary"
+    },
+    "build": {
+      "prompt": "{file:./system/build.md}",
+      "temperature": 0.3,
+      "mode": "primary"
+    }
+  },
+  "permission": "allow",
+  "provider": {
+    "anthropic": {
+      "options": {
+        "apiKey": "{env:ANTHROPIC_API_KEY}"
+      }
+    },
+    "openai": {
+      "options": {
+        "apiKey": "{env:OPENAI_API_KEY}"
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "{env:OLLAMA_HOST}/v1"
+      },
+      "models": {
+        "qwen2.5-coder:32b": {
+          "name": "Qwen 2.5 Coder 32B",
+          "limit": { "context": 32768, "output": 8192 }
+        },
+        "deepseek-coder-v2:latest": {
+          "name": "DeepSeek Coder V2",
+          "limit": { "context": 131072, "output": 8192 }
+        }
+      }
+    }
+  }
+}

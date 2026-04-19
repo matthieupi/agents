@@ -1,0 +1,104 @@
+services:
+  opencode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lab/opencode:latest
+    container_name: opencode
+    restart: unless-stopped
+
+    user: "${UID:-1000}:${GID:-1000}"
+
+    # Interactive terminal support
+    stdin_open: true
+    tty: true
+
+    # Security settings - relaxed to allow sudo
+    # Note: no-new-privileges and cap_drop ALL prevent sudo from working
+    security_opt: []
+    read_only: false  # Needs write for git operations
+
+    environment:
+      - HOME=/home/opencode
+      - PATH=/home/opencode/.local/bin:/usr/local/bin:/usr/bin:/bin
+      - OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
+
+      # LLM Provider API keys (set the ones you need)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+
+      # LAN-hosted models (Ollama)
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama.xmist.dev:11434}
+
+      # OpenAI-compatible endpoints (vLLM, LocalAI, LM Studio, etc.)
+      - OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}
+      - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
+
+      # OpenCode specific
+      - OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json
+      - OPENCODE_DISABLE_AUTOUPDATE=1
+      - TERM=xterm-256color
+
+      # Git config for commits
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-opencode-xmist}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-opencode@xmist.dev}
+      - GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-opencode-xmist}
+      - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-opencode@xmist.dev}
+
+    volumes:
+      # Project workspace - mount your repos here
+      - ${WORKSPACE_PATH:-./workspace}:/workspace:rw
+
+      # Shared default resources from workspace root
+      - ../agent:/opt/agent:rw
+
+      # Harness-local startup wiring
+      - ./init.sh:/opt/harness/init.sh:ro
+
+      # Config persistence (opencode.json)
+      - ./.opencode/config:/home/opencode/.config/opencode:rw
+
+      # Data persistence (sessions, auth)
+      - ./.opencode/data:/home/opencode/.local/share/opencode:rw
+
+      # Cache persistence (provider/plugin state)
+      - ./.opencode/cache:/home/opencode/.cache/opencode:rw
+
+      # SSH directory for remote access
+      - ${SSH_DIR_PATH:-./ssh}:/home/opencode/.ssh:ro
+
+      # Git config (optional)
+      - ${GITCONFIG_PATH:-/dev/null}:/home/opencode/.gitconfig:ro
+
+    # Resource limits - OpenCode is lightweight, heavy lifting is API-side
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    networks:
+      - devai-xmist
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Keep-alive for docker exec attach pattern
+    # Access: docker exec -it opencode opencode
+    entrypoint: ["bash", "-lc", "/opt/harness/init.sh && tail -f /dev/null"]
+
+    # Alternative entrypoints:
+    # entrypoint: ["opencode"]                 # Direct TUI
+    # entrypoint: ["opencode", "serve"]        # Headless API server
+
+networks:
+  devai-xmist:
+    external: true

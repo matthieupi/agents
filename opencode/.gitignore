@@ -1,0 +1,17 @@
+# Environment (contains secrets)
+.env
+
+# Workspace data
+workspace/
+
+# Session and auth data
+data/
+
+# Runtime cache (provider/plugin state)
+cache/
+
+# Local overrides
+docker-compose.override.yml
+
+# Logs
+*.log
