@@ -17,3 +17,6 @@ ssh/
 .pi
 .claude
 .agents
+
+# IDE metadata
+.idea/
