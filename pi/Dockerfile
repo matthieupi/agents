@@ -53,6 +53,10 @@ RUN mkdir -p /home/pi/.pi/agent \
 RUN npm install -g @mariozechner/pi-coding-agent \
     && npm cache clean --force
 
+# Preinstall Playwright for frontend workflows
+RUN npm install -g playwright \
+    && playwright install --with-deps chromium
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD pi --version || exit 1
 

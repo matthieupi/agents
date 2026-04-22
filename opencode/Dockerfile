@@ -65,6 +65,10 @@ RUN mkdir -p /home/opencode/.config/opencode \
 RUN npm install -g opencode-ai@latest \
     && npm cache clean --force
 
+# Preinstall Playwright for frontend workflows
+RUN npm install -g playwright \
+    && playwright install --with-deps chromium
+
 # Health check - verify CLI exists and responds
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD opencode --version || exit 1
