@@ -36,13 +36,24 @@ function truncateTitle(text, maxLength = 72) {
   return safe.trimEnd() + "...";
 }
 
+function stopAtFirstLineWithinWindow(text, maxLength = 72) {
+  const trimmed = String(text || "").trim();
+  const newlineIndex = trimmed.search(/\r?\n/);
+
+  if (newlineIndex === -1 || newlineIndex > maxLength) {
+    return trimmed;
+  }
+
+  return trimmed.slice(0, newlineIndex);
+}
+
 function deriveTitle(parts) {
-  const prompt = normalizePrompt(
-    parts
-      .filter((part) => part.type === "text" && !part.synthetic && !part.ignored)
-      .map((part) => part.text)
-      .join(" "),
-  );
+  const rawPrompt = parts
+    .filter((part) => part.type === "text" && !part.synthetic && !part.ignored)
+    .map((part) => part.text)
+    .join(" ");
+
+  const prompt = normalizePrompt(stopAtFirstLineWithinWindow(rawPrompt));
 
   if (!prompt) return undefined;
 
