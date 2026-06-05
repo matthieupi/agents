@@ -20,11 +20,21 @@ Usage: $(basename "$0") [command] [options]
 Run Mode (default):
     $(basename "$0") [options] [path]     Run OpenCode in a workspace
         -d, --dangerous                   Skip permission prompts
-        -r, --rebuild                     Rebuild image before running
+        -r, --rebuild                     Rebuild CPU and GPU images
+        -w, --web [port]                  Run browser UI locally on localhost
+        --wlan [port]                     Run browser UI exposed on the LAN
+        --port <port>                     Port for --web/--wlan mode
+        --gpu, -gpu [devices]             Enable GPU access (default: all)
+        --cpus <number>                   CPU limit for container (default: 8.0)
+        --memory, --mem <size>            Memory limit for container (default: 16g)
+        --publish, -p <spec>              Publish extra host port(s) into container
 
 Management Commands:
+    menu, tui                             Open guided launcher menu
     list, ls                              List all opencode containers
-    rebuild, update                       Rebuild image and refresh containers
+    rebuild, update                       Rebuild CPU image and refresh containers
+    rebuild gpu                           Rebuild GPU CUDA devel image and refresh containers
+    rebuild all                           Rebuild CPU and GPU images and refresh containers
     stop <name|all>                       Stop container(s)
     start <name>                          Start a stopped container
     remove, rm <name|all>                 Remove container(s)
@@ -36,8 +46,16 @@ Management Commands:
 Examples:
     $(basename "$0")                      Run in current directory
     $(basename "$0") /path/to/project     Run in specific directory
-    $(basename "$0") -r .                 Rebuild image and run
+    $(basename "$0") -w 4096 .            Run browser UI at http://localhost:4096
+    $(basename "$0") --wlan 4096 .        Run browser UI on the LAN
+    $(basename "$0") --gpu .              Run with all GPUs available
+    $(basename "$0") --gpu 0 .            Run with GPU device 0 available
+    $(basename "$0") --cpus 4 --memory 8g . Run with custom resources
+    $(basename "$0") --publish 3000 .     Expose host port 3000 to container port 3000
+    $(basename "$0") -r .                 Rebuild CPU and GPU images
     $(basename "$0") rebuild              Rebuild image and refresh containers
+    $(basename "$0") rebuild gpu          Rebuild GPU image and refresh containers
+    $(basename "$0") menu                 Open guided launcher menu
     $(basename "$0") list                 List all containers
     $(basename "$0") fclean               Stop all and clean
 EOF
@@ -48,6 +66,9 @@ EOF
 CMD="${1:-}"
 
 case "$CMD" in
+    menu|tui)
+        exec "${SCRIPT_DIR}/opencode-menu" "${@:2}"
+        ;;
     list|ls|rebuild|update|stop|start|remove|rm|clean|fclean|logs|shell)
         exec "${SCRIPT_DIR}/opencode-mgr" "$@"
         ;;

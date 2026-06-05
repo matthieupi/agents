@@ -23,6 +23,15 @@ docker exec -it opencode opencode
 
 The `opencode` wrapper manages per-workspace containerized instances.
 
+### Guided launcher
+
+```bash
+./opencode menu                # Open an interactive command builder
+./opencode tui                 # Same as menu
+```
+
+The guided launcher uses [`gum`](https://github.com/charmbracelet/gum) to present common run, web, GPU, rebuild, and container-management options. It shows the generated `./opencode ...` command before executing it, so the normal CLI remains the source of truth.
+
 ### Interactive TUI (default)
 
 ```bash
@@ -30,11 +39,28 @@ The `opencode` wrapper manages per-workspace containerized instances.
 ./opencode /path/to/project     # Run in specific directory
 ```
 
+### Browser UI
+
+```bash
+./opencode -w                   # Run browser UI locally on http://localhost:4096
+./opencode --web 4096 .         # Run browser UI locally on a specific port
+./opencode --web --port 4096 .  # Equivalent explicit port form
+./opencode --wlan 4096 .        # Expose browser UI on the LAN
+```
+
+For LAN access, set `OPENCODE_SERVER_PASSWORD` so the web server is protected:
+
+```bash
+OPENCODE_SERVER_PASSWORD=secret ./opencode --wlan 4096 /path/to/project
+```
+
 ### Rebuild image
 
 ```bash
-./opencode -r .                 # Rebuild image
+./opencode -r .                 # Rebuild CPU and GPU images
 ./opencode rebuild              # Rebuild image + refresh workspace containers
+./opencode rebuild gpu          # Rebuild CUDA devel GPU image + refresh containers
+./opencode rebuild all          # Rebuild CPU and GPU images + refresh containers
 ```
 
 ### Dangerous mode (auto-approve all permissions)
@@ -42,6 +68,50 @@ The `opencode` wrapper manages per-workspace containerized instances.
 ```bash
 ./opencode -d                   # Skip permission prompts
 ```
+
+### GPU access
+
+```bash
+./opencode --gpu .              # Run with all host GPUs available
+./opencode -gpu .               # Same as --gpu
+./opencode --gpu 0 .            # Run with GPU device 0 available
+./opencode --gpu 0,1 .          # Run with GPU devices 0 and 1 available
+./opencode --web 4096 --gpu .   # Combine browser UI and GPU access
+```
+
+GPU mode requires the host Docker engine to support GPU containers through the NVIDIA Container Toolkit. Validate the host first:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
+
+GPU access is an explicit opt-in because agent-run commands can consume significant VRAM, compute, power, and thermal headroom.
+
+When `--gpu` is used, the wrapper runs `lab/opencode:gpu` instead of the default `lab/opencode:latest` image. The GPU image is based on NVIDIA CUDA devel and includes CUDA compiler/toolkit headers, Python 3.11 development headers, and native build tools for packages that compile extensions.
+
+### Container resources
+
+```bash
+./opencode --cpus 4 --memory 8g .             # Run with 4 CPUs and 8 GB memory
+./opencode --web 4096 --cpus 2 --mem 4g .    # Combine web port and resource limits
+./opencode --gpu 1 --cpus 8 --memory 32g .   # GPU workload with larger limits
+```
+
+Defaults are `--cpus 8.0` and `--memory 16g`. Changing CPU, memory, web port, or GPU settings for an existing workspace container recreates that container because Docker applies those settings when the container is created.
+
+### Extra published ports
+
+Use `--publish`/`-p` to expose arbitrary ports for dev servers that agents start inside the container.
+
+```bash
+./opencode --publish 3000 .                    # host 3000 -> container 3000
+./opencode --publish 5173:5173 .               # host 5173 -> container 5173
+./opencode -p 3000 -p 5173:5173 .              # expose multiple ports
+./opencode -p 127.0.0.1:8080:80 .              # localhost 8080 -> container 80
+./opencode -p 0.0.0.0:8080:80 .                # LAN 8080 -> container 80
+```
+
+Inside the container, the server must listen on `0.0.0.0`, not only `localhost`, for Docker port publishing to work.
 
 ### Container management
 
@@ -62,11 +132,13 @@ The `opencode` wrapper manages per-workspace containerized instances.
 ```
 opencode/
 ├── Dockerfile              # Container definition
+├── Dockerfile.gpu          # CUDA devel GPU container definition
 ├── docker-compose.yml      # Service orchestration
 ├── .env.example            # Environment template
 ├── .env                    # Your config (git-ignored)
 ├── opencode.json           # OpenCode app config (reference)
 ├── opencode                # Main CLI wrapper
+├── opencode-menu           # Guided launcher menu
 ├── opencode-mgr            # Container management script
 ├── opencode-run            # Runtime execution script
 ├── .opencode/
