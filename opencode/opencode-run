@@ -32,6 +32,9 @@ REBUILD_IMAGE=""
 WEB_MODE=""
 WEB_BIND_HOST="127.0.0.1"
 WEB_PORT="4096"
+AGENT_WEB_MODE=""
+AGENT_WEB_BIND_HOST="0.0.0.0"
+AGENT_WEB_PORT=""
 GPU_MODE=""
 GPU_DEVICES="all"
 GPU_LABEL_DEVICES=""
@@ -64,6 +67,26 @@ is_memory_limit() {
 
 is_publish_spec() {
     [[ "${1:-}" =~ ^[0-9]+$ || "${1:-}" =~ ^[0-9]+:[0-9]+$ || "${1:-}" =~ ^(127\.0\.0\.1|0\.0\.0\.0):[0-9]+:[0-9]+$ ]]
+}
+
+ensure_host_port_free() {
+    local host="$1"
+    local port="$2"
+
+    python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((host, port))
+    except OSError:
+        sys.exit(1)
+PY
 }
 
 publish_label() {
@@ -108,6 +131,15 @@ while [[ $# -gt 0 ]]; do
             WEB_PORT="$2"
             shift 2
             ;;
+        --agent-web-port)
+            if ! is_port "${2:-}"; then
+                log_error "--agent-web-port requires a numeric port between 1 and 65535"
+                exit 1
+            fi
+            AGENT_WEB_MODE="1"
+            AGENT_WEB_PORT="$2"
+            shift 2
+            ;;
         --gpu|-gpu)
             GPU_MODE="1"
             shift
@@ -147,6 +179,17 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -n "${WEB_MODE}" && -n "${AGENT_WEB_MODE}" ]]; then
+    log_error "--agent-web-port cannot be combined with --web or --wlan"
+    log_error "Use --web/--wlan to start the server immediately, or --agent-web-port to let the agent start it later."
+    exit 1
+fi
+
+AGENT_WEB_URL=""
+if [[ -n "${AGENT_WEB_MODE}" ]]; then
+    AGENT_WEB_URL="http://${OPENCODE_AGENT_WEB_HOST:-localhost}:${AGENT_WEB_PORT}"
+fi
 
 if [[ -n "${GPU_MODE}" ]]; then
     IMAGE_NAME="${GPU_IMAGE_NAME}"
@@ -203,6 +246,21 @@ has_requested_web_port() {
     fi
 }
 
+has_requested_agent_web_port() {
+    local published configured_port configured_bind_host
+
+    [[ -n "${AGENT_WEB_MODE}" ]] || return 0
+
+    published="$(docker port "${CONTAINER_NAME}" "${AGENT_WEB_PORT}/tcp" 2>/dev/null || true)"
+    configured_port="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.agent-web.port" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+    configured_bind_host="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.agent-web.bind-host" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+
+    [[ "${configured_port}" == "${AGENT_WEB_PORT}" ]] || return 1
+    [[ "${configured_bind_host}" == "${AGENT_WEB_BIND_HOST}" ]] || return 1
+    [[ -n "${published}" ]] || return 1
+    grep -Eq "^(0\.0\.0\.0|:::):${AGENT_WEB_PORT}$" <<< "${published}"
+}
+
 has_requested_gpu_config() {
     local configured_devices
     configured_devices="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.gpu.devices" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
@@ -235,6 +293,9 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
             if [[ -n "${WEB_MODE}" ]] && ! has_requested_web_port; then
                 log_warn "Container lacks requested web port mapping (${WEB_BIND_HOST}:${WEB_PORT}), recreating..."
                 docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+            elif [[ -n "${AGENT_WEB_MODE}" ]] && ! has_requested_agent_web_port; then
+                log_warn "Container lacks requested agent web port mapping (${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT}), recreating..."
+                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
             elif [[ -n "${GPU_MODE}" ]] && ! has_requested_gpu_config; then
                 log_warn "Container lacks requested GPU configuration (${GPU_DEVICES}), recreating..."
                 docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
@@ -255,11 +316,11 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
                     exec docker exec -it \
                         -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
                         -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
-                        "${CONTAINER_NAME}" opencode web --hostname 0.0.0.0 --port "${WEB_PORT}"
+                        "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
                 fi
             log_info "Attaching to existing session: ${CONTAINER_NAME}"
             log_info "Workspace: ${WORKSPACE_PATH}"
-            exec docker exec -it "${CONTAINER_NAME}" opencode ${DANGEROUS_MODE}
+            exec docker exec -it "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
             fi
         else
             log_warn "Container uses old image (${CONTAINER_IMAGE}), recreating..."
@@ -317,6 +378,19 @@ if [[ -n "${WEB_MODE}" ]]; then
     fi
 fi
 
+if [[ -n "${AGENT_WEB_MODE}" ]]; then
+    if ! ensure_host_port_free "${AGENT_WEB_BIND_HOST}" "${AGENT_WEB_PORT}"; then
+        log_error "Host port ${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT} is already in use"
+        log_error "Choose a different --agent-web-port or stop the process/container using that port."
+        exit 1
+    fi
+
+    PORT_ARGS+=(-p "${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT}:${AGENT_WEB_PORT}")
+    if [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
+        log_warn "Agent web port is exposed on the LAN without OPENCODE_SERVER_PASSWORD"
+    fi
+fi
+
 for publish_spec in "${PUBLISH_SPECS[@]}"; do
     PORT_ARGS+=(-p "${publish_spec}")
 done
@@ -339,6 +413,8 @@ docker run -d \
     --label "dev.xmist.opencode.cpus=${CPU_LIMIT}" \
     --label "dev.xmist.opencode.memory=${MEMORY_LIMIT}" \
     --label "dev.xmist.opencode.publish=$(publish_label)" \
+    --label "dev.xmist.opencode.agent-web.port=${AGENT_WEB_PORT}" \
+    --label "dev.xmist.opencode.agent-web.bind-host=${AGENT_WEB_BIND_HOST}" \
     --restart unless-stopped \
     --user "1000:1000" \
     -e "HOME=/home/opencode" \
@@ -353,6 +429,9 @@ docker run -d \
     -e "OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}" \
     -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
     -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
+    -e "OPENCODE_AGENT_WEB_PORT=${AGENT_WEB_PORT}" \
+    -e "OPENCODE_AGENT_WEB_BIND_HOST=${AGENT_WEB_BIND_HOST}" \
+    -e "OPENCODE_AGENT_WEB_URL=${AGENT_WEB_URL}" \
     -e "NVIDIA_VISIBLE_DEVICES=${GPU_DEVICES}" \
     -e "NVIDIA_DRIVER_CAPABILITIES=compute,utility" \
     -e "OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json" \
@@ -395,9 +474,9 @@ if [[ -n "${WEB_MODE}" ]]; then
     exec docker exec -it \
         -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
         -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
-        "${CONTAINER_NAME}" opencode web --hostname 0.0.0.0 --port "${WEB_PORT}"
+        "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
 fi
 
 # Attach to the new container
 log_info "Attaching to TUI..."
-exec docker exec -it "${CONTAINER_NAME}" opencode ${DANGEROUS_MODE}
+exec docker exec -it "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}

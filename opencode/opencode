@@ -24,6 +24,7 @@ Run Mode (default):
         -w, --web [port]                  Run browser UI locally on localhost
         --wlan [port]                     Run browser UI exposed on the LAN
         --port <port>                     Port for --web/--wlan mode
+        --agent-web-port <port>           Pre-publish LAN web port for agent-started UI
         --gpu, -gpu [devices]             Enable GPU access (default: all)
         --cpus <number>                   CPU limit for container (default: 8.0)
         --memory, --mem <size>            Memory limit for container (default: 16g)
@@ -48,6 +49,7 @@ Examples:
     $(basename "$0") /path/to/project     Run in specific directory
     $(basename "$0") -w 4096 .            Run browser UI at http://localhost:4096
     $(basename "$0") --wlan 4096 .        Run browser UI on the LAN
+    $(basename "$0") --agent-web-port 4096 . Pre-publish LAN port for /start-web
     $(basename "$0") --gpu .              Run with all GPUs available
     $(basename "$0") --gpu 0 .            Run with GPU device 0 available
     $(basename "$0") --cpus 4 --memory 8g . Run with custom resources

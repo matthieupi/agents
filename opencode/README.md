@@ -54,6 +54,29 @@ For LAN access, set `OPENCODE_SERVER_PASSWORD` so the web server is protected:
 OPENCODE_SERVER_PASSWORD=secret ./opencode --wlan 4096 /path/to/project
 ```
 
+### Agent-started Browser UI
+
+Pre-publish a LAN-accessible port when the container starts, then ask the
+agent inside that container to start the web server later:
+
+```bash
+OPENCODE_SERVER_PASSWORD=secret ./opencode --agent-web-port 4096 /path/to/project
+```
+
+The wrapper checks that the host port is free before creating the container,
+publishes `0.0.0.0:4096 -> container 4096`, and exposes these environment
+variables to the agent:
+
+```bash
+OPENCODE_AGENT_WEB_PORT=4096
+OPENCODE_AGENT_WEB_BIND_HOST=0.0.0.0
+OPENCODE_AGENT_WEB_URL=http://localhost:4096
+```
+
+Inside OpenCode, run `/start-web` to launch the server on the pre-published
+port. Because this mode exposes the web server on the LAN by default, set
+`OPENCODE_SERVER_PASSWORD` before using it on a shared network.
+
 ### Rebuild image
 
 ```bash
@@ -188,8 +211,9 @@ Shared default agents, commands, and skills live under the shared workspace `age
 
 - `../agent/commands/` -> `~/.agents/commands` -> `~/.config/opencode/commands`
 - `../agent/skills/` -> `~/.agents/skills` -> `~/.config/opencode/skills`
+- `../agent/gsd/` -> `~/.config/opencode/gsd`
 
-Only the `prompts/commands` and `skills/` defaults are applied to OpenCode. Shared `agents/` stay Claude/Pi-only unless they are converted to OpenCode's native schema.
+Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaults are applied to OpenCode. Shared `agents/` stay Claude/Pi-only unless they are converted to OpenCode's native schema.
 
 ### Environment Variables
 
