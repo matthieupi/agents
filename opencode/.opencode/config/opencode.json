@@ -36,6 +36,180 @@
         "edit": "ask"
       }
     },
+    "gsd-planner": {
+      "prompt": "{file:./gsd/planner.md}",
+      "temperature": 0.2,
+      "mode": "all",
+      "description": "GSD phase and quick-task planner",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "webfetch": "allow",
+        "edit": "allow"
+      }
+    },
+    "gsd-phase-researcher": {
+      "prompt": "{file:./gsd/phase-researcher.md}",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "description": "Researches GSD roadmap phases before planning",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "webfetch": "allow",
+        "edit": "ask"
+      }
+    },
+    "gsd-plan-checker": {
+      "prompt": "{file:./gsd/plan-checker.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Verifies generated GSD plans for executability and coverage",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "deny"
+      }
+    },
+    "gsd-executor": {
+      "prompt": "{file:./gsd/executor.md}",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "description": "Executes GSD plans and writes implementation summaries",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "webfetch": "allow",
+        "edit": "allow"
+      }
+    },
+    "gsd-verifier": {
+      "prompt": "{file:./gsd/verifier.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Verifies completed GSD phases against goals and requirements",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
+    "gsd-project-researcher": {
+      "prompt": "{file:./gsd/project-researcher.md}",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "description": "Researches project dimensions for GSD project and milestone setup",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "webfetch": "allow",
+        "edit": "ask"
+      }
+    },
+    "gsd-research-synthesizer": {
+      "prompt": "{file:./gsd/research-synthesizer.md}",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "description": "Synthesizes GSD research into planning inputs",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
+    "gsd-roadmapper": {
+      "prompt": "{file:./gsd/roadmapper.md}",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "description": "Creates and revises GSD roadmaps",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
+    "gsd-integration-checker": {
+      "prompt": "{file:./gsd/integration-checker.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Audits GSD milestone integration and end-to-end gaps",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
+    "gsd-debugger": {
+      "prompt": "{file:./gsd/debugger.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Investigates GSD debug sessions with persistent evidence",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "edit": "ask"
+      }
+    },
+    "gsd-entity-generator": {
+      "prompt": "{file:./gsd/entity-generator.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Generates GSD codebase intelligence entities",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
+    "gsd-codebase-mapper": {
+      "prompt": "{file:./gsd/codebase-mapper.md}",
+      "temperature": 0.1,
+      "mode": "subagent",
+      "description": "Maps codebase structure into GSD planning documents",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "ask",
+        "edit": "ask"
+      }
+    },
     "plan": {
       "prompt": "{file:./system/plan.md}",
       "temperature": 0.2,
