@@ -68,13 +68,21 @@ ensure_shared_home_root() {
     fi
 }
 
+remove_legacy_link() {
+    local current_path="$1"
+    local shared_path="$2"
+
+    if [[ -L "$current_path" && "$(readlink "$current_path")" == "$shared_path" ]]; then
+        rm -f "$current_path"
+    fi
+}
+
 init_home() {
     local shared_root="$HOME_ROOT/.agents"
     local opencode_root="$HOME_ROOT/.config/opencode"
 
     [[ -d "$HOME_ROOT" ]] || return 0
 
-    ensure_shared_home_root "$shared_root"
     ensure_real_dir "$HOME_ROOT/.config"
     ensure_real_dir "$opencode_root"
 
@@ -85,9 +93,19 @@ init_home() {
     link_path "$opencode_root/commands" "$DEFAULTS_ROOT/commands"
     link_path "$opencode_root/skills" "$DEFAULTS_ROOT/skills"
     link_path "$opencode_root/system" "$DEFAULTS_ROOT/system"
-    link_path "$shared_root/commands" "$DEFAULTS_ROOT/commands"
-    link_path "$shared_root/skills" "$DEFAULTS_ROOT/skills"
-    link_path "$shared_root/system" "$DEFAULTS_ROOT/system"
+    if [[ -d "$DEFAULTS_ROOT/gsd" ]]; then
+        link_path "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
+    fi
+
+    # opencode already discovers project commands and skills from
+    # ~/.config/opencode. Exposing the same mounted trees through ~/.agents as
+    # well makes opencode scan duplicate roots and can amplify symlink loops
+    # into paths like skills/skills/skills/... and commands/commands/commands/...
+    remove_legacy_link "$shared_root/commands" "$DEFAULTS_ROOT/commands"
+    remove_legacy_link "$shared_root/skills" "$DEFAULTS_ROOT/skills"
+    remove_legacy_link "$shared_root/system" "$DEFAULTS_ROOT/system"
+    remove_legacy_link "$shared_root/gsd" "$DEFAULTS_ROOT/gsd"
+    remove_legacy_link "$shared_root/prompts" "commands"
 }
 
 init_home
