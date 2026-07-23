@@ -236,12 +236,12 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "anthropic/claude-sonnet-4-5",
-  "small_model": "anthropic/claude-haiku-4-5",
+  "model": "openai/gpt-5.6-sol",
+  "small_model": "openai/gpt-5-mini",
   "permission": "allow",
   "provider": {
-    "anthropic": {
-      "options": { "apiKey": "{env:ANTHROPIC_API_KEY}" }
+    "openai": {
+      "options": { "apiKey": "{env:OPENAI_API_KEY}" }
     }
   }
 }
@@ -251,7 +251,7 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 
 OpenCode supports 75+ providers. Common ones pre-configured:
 - **Anthropic** (Claude) - via `ANTHROPIC_API_KEY`
-- **OpenAI** (GPT-4) - via `OPENAI_API_KEY`
+- **OpenAI** (GPT) - via `OPENAI_API_KEY`
 - **Ollama** (local models) - via `OLLAMA_HOST`
 - **OpenRouter** - via `OPENROUTER_API_KEY`
 
