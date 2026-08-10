@@ -36,7 +36,7 @@
         "edit": "ask"
       }
     },
-    "coo": {
+    "COO": {
       "prompt": "{file:./system/coo.md}",
       "temperature": 0.2,
       "mode": "all",
@@ -51,7 +51,7 @@
         "task": "allow",
         "skill": "allow",
         "webfetch": "allow",
-        "bash": "ask",
+        "bash": "allow",
         "edit": "allow"
       }
     },
