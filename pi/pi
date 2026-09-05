@@ -18,6 +18,7 @@ Usage: $(basename "$0") [command] [options]
 
 Run Mode:
     $(basename "$0")                                  Run Pi in current workspace
+    $(basename "$0") --oh [path] [omp args]           Run Oh My Pi in a workspace
     $(basename "$0") /path/to/project                 Run Pi in a specific workspace
     $(basename "$0") -p "Prompt"                      Send a prompt to Pi explicitly
     $(basename "$0") /path/to/project -p "Prompt"     Send a prompt in a specific workspace
@@ -40,6 +41,8 @@ Management Commands:
 
 Examples:
     $(basename "$0")
+    $(basename "$0") --oh
+    $(basename "$0") --oh -p "Review this repo"
     $(basename "$0") /path/to/project
     $(basename "$0") -p "Explain this repo"
     $(basename "$0") ext-agent-team
@@ -64,6 +67,15 @@ case "$CMD" in
         ;;
     -r|--rebuild)
         exec "${SCRIPT_DIR}/pi-mgr" build
+        ;;
+    --oh)
+        shift
+        OMP_HARNESS_ARGS=(--agent-cli omp)
+        if [[ "${1:-}" == "--login" ]]; then
+            OMP_HARNESS_ARGS+=(--login)
+            shift
+        fi
+        exec "${SCRIPT_DIR}/pi-run" "${OMP_HARNESS_ARGS[@]}" -- "$@"
         ;;
     -p|--prompt)
         shift

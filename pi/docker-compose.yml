@@ -17,8 +17,9 @@ services:
 
     environment:
       - HOME=/home/pi
-      - PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin
+      - PATH=/opt/bun/bin:/home/pi/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - TERM=xterm-256color
+      - PI_CONFIG_DIR=.pi
       - PI_CODING_AGENT_DIR=/home/pi/.pi/agent
       - PI_SKIP_VERSION_CHECK=${PI_SKIP_VERSION_CHECK:-1}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}

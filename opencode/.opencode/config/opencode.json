@@ -55,6 +55,18 @@
         "edit": "allow"
       }
     },
+    "DevOps": {
+      "prompt": "{file:./system/devops.md}",
+      "temperature": 0.2,
+      "mode": "all",
+      "description": "Gilfoyle: secure infrastructure, deployment, reliability, and operations engineering"
+    },
+    "SecOps": {
+      "prompt": "{file:./system/secops.md}",
+      "temperature": 0.1,
+      "mode": "all",
+      "description": "Dan: security hardening, green and red teaming, vulnerability auditing, and remediation"
+    },
     "gsd-planner": {
       "prompt": "{file:./gsd/planner.md}",
       "temperature": 0.2,

@@ -11,9 +11,11 @@
     "enabled": true,
     "maxRetries": 3,
     "baseDelayMs": 2000,
-    "maxDelayMs": 60000
+    "provider": {
+      "maxRetryDelayMs": 60000
+    }
   },
-  "lastChangelogVersion": "0.66.1",
+  "lastChangelogVersion": "0.73.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4"
 }

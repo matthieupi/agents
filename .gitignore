@@ -18,5 +18,20 @@ ssh/
 .claude
 .agents
 
+# Keep the OMP coexistence configuration in the Pi harness while ignoring all
+# other untracked runtime state under pi/.pi.
+!pi/.pi/
+pi/.pi/*
+!pi/.pi/agent/
+pi/.pi/agent/*
+!pi/.pi/agent/config.yml
+!pi/.pi/agent/models.yml
+!pi/.pi/agent/extensions/
+!pi/.pi/agent/extensions/**
+!pi/.pi/agent/extension-library/
+!pi/.pi/agent/extension-library/**
+!pi/.pi/agent/themes/
+!pi/.pi/agent/themes/**
+
 # IDE metadata
 .idea/
