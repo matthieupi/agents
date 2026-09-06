@@ -1,5 +1,10 @@
 # Shared Config Defaults
 
+Native, non-Docker lifecycle documentation: [OpenCode](opencode/README.md#native-lifecycle)
+and [Pi](pi/README.md#native-srvpi-lifecycle). Both execute locally as non-root
+accounts, not in a sandbox. Remote-only DevAI activation must remain disabled in
+Ansible until adapted and validated.
+
 This workspace root hosts a shared default `agent/` tree consumed by the local Claude Code, Pi, and OpenCode containers.
 
 - `agent/` contains shared agent definitions at its root
