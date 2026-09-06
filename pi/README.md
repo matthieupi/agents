@@ -66,7 +66,7 @@ do not clone the infrastructure repository or reuse a dirty Docker checkout.
 | `PI_USER` | Required existing named non-root account; home derived from passwd, owned by that user, separate from deployment |
 | `PI_BUILD_USER` | Required for provision; separate existing non-root account. Operator must exclude credentials, sudo and privileged groups; scripts verify only account identity and distinct nonzero UID |
 | `PI_UNIT` | Default `pi.service`; Ansible-created systemd unit, inactive/failed for provision/update |
-| `PI_APT_PACKAGES` | Required exact `package=version` list for `ca-certificates git nodejs npm ripgrep python3 openssh-client build-essential`; extras also need pins |
+| `PI_APT_PACKAGES` | Required exact `package=version` list for `ca-certificates git nodejs ripgrep python3 openssh-client build-essential`; separate `npm` is optional only when bundled in pinned `nodejs`; extras also need pins |
 | `PI_WORKSPACE` | Required at launch: existing canonical absolute directory, outside deployment and `/opt`; CLI/launcher cwd, **not** UI session containment or remote target authorization |
 | `PI_PORT` | Required for service, decimal `1024..65535`; no implicit/random/public port |
 | `PI_WEB_PASSWORD` | Required service secret supplied by Ansible/systemd; never placed on argv |
@@ -75,8 +75,14 @@ do not clone the infrastructure repository or reuse a dirty Docker checkout.
 Use a supported Debian/Ubuntu image with Bash, coreutils, util-linux (`flock`,
 `runuser`), Git, systemd and apt already available for bootstrap. Apt sources and
 exact package versions come from inventory, not hardcoded distribution versions.
-Node must be at least `22.19.0` at `/usr/bin/node`, npm available on the system
-PATH. Provide compiler/Node headers or permitted header-download access for
+Node must be at least `22.19.0` at `/usr/bin/node`, and `/usr/bin/npm --version`
+must succeed on every provision, including runtime reuse. When a separate `npm`
+pin is omitted, `dpkg-query` must report `/usr/bin/npm` owned by `nodejs` and
+that package installed at the exact supplied version. This supports NodeSource's
+bundled npm without requesting the conflicting distribution `npm` package.
+When using a separate npm package, supply its exact `npm=version` pin as before.
+Builds invoke `/usr/bin/npm` explicitly; an npm elsewhere on PATH is insufficient.
+Provide compiler/Node headers or permitted header-download access for
 node-gyp. Target npm must permit dependency scripts for the non-root build; an
 npm policy that blocks node-pty compilation must not be silently ignored.
 

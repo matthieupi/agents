@@ -131,7 +131,7 @@ provision() (
     umask 022
     : "${PI_APT_PACKAGES:?supply whitespace-separated package=version pins from inventory}"
     local -a packages
-    local package required stage record account password build_uid build_gid rest
+    local package required stage record account password build_uid build_gid rest npm_owner node_pin
     : "${PI_BUILD_USER:?supply a separate existing unprivileged build account without credentials}"
     record=$(getent passwd "$PI_BUILD_USER") || die 'build account does not exist'
     IFS=: read -r account password build_uid build_gid rest <<< "$record"
@@ -141,13 +141,24 @@ provision() (
     for package in "${packages[@]}"; do
         [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*=[a-zA-Z0-9.+:~_-]+$ ]] || die 'every apt package needs an exact version'
     done
-    for required in ca-certificates git nodejs npm ripgrep python3 openssh-client build-essential; do
+    for required in ca-certificates git nodejs ripgrep python3 openssh-client build-essential; do
         [[ " ${packages[*]} " == *" $required="* ]] || die "missing required apt pin: $required"
     done
     export DEBIAN_FRONTEND=noninteractive
     timeout 600 apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
     timeout 600 apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends -- "${packages[@]}"
     env -i PATH=/usr/bin:/bin /usr/bin/node -e 'const [a,b]=process.versions.node.split(".").map(Number); if(a<22 || (a===22 && b<19)) process.exit(1)' || die 'pinned system Node must be >=22.19.0'
+    if [[ " ${packages[*]} " != *" npm="* ]]; then
+        # NodeSource bundles npm and conflicts with the separate distro package.
+        npm_owner=$(dpkg-query -S /usr/bin/npm) || die 'bundled /usr/bin/npm must be owned by pinned nodejs'
+        [[ "$npm_owner" =~ ^nodejs(:[a-z0-9-]+)?:\ /usr/bin/npm$ ]] || die 'bundled /usr/bin/npm must be owned by pinned nodejs'
+        for package in "${packages[@]}"; do
+            [[ "$package" != nodejs=* ]] || node_pin=${package#nodejs=}
+        done
+        record=$(dpkg-query -W -f='${Status} ${Version}' nodejs) || die 'cannot inspect installed nodejs package'
+        [[ "$record" == "install ok installed $node_pin" ]] || die 'bundled npm requires the exact pinned nodejs version installed'
+    fi
+    env -i PATH=/usr/bin:/bin /usr/bin/npm --version >/dev/null || die 'system /usr/bin/npm must be usable'
     if ! verify_runtime "$PI_PREFIX" >/dev/null 2>&1; then
         stage=$(mktemp -d "$PI_ROOT/.build.XXXXXXXX")
         chmod 0711 "$stage"
@@ -162,7 +173,7 @@ provision() (
             # a separate non-root account, not a sandbox. Dependency code remains
             # trusted supply-chain input; runuser does not contain child processes.
             timeout 600 runuser -u "$PI_BUILD_USER" -- env -i HOME="$stage/home" PATH=/usr/bin:/bin \
-                npm install --global --prefix "$stage/runtime" --cache "$stage/home/cache" \
+                /usr/bin/npm install --global --prefix "$stage/runtime" --cache "$stage/home/cache" \
                 --registry=https://registry.npmjs.org --userconfig=/dev/null --globalconfig=/dev/null \
                 --ignore-scripts=false --no-audit --no-fund --include=optional \
                 --fetch-retries=2 --fetch-timeout=60000 \

@@ -258,8 +258,29 @@ class LifecycleTests(unittest.TestCase):
         git() { :; }
         getent() { printf 'builder:x:12345:12345::/nonexistent:/usr/sbin/nologin\\n'; }
         systemctl() { printf inactive; }
-        timeout() { shift; if [[ $1 == apt-get ]]; then printf 'apt\\n' >> "$TRACE"; else "$@"; fi; }
-        env() { printf 'node-version-check\\n' >> "$TRACE"; }
+        timeout() { shift; if [[ $1 == apt-get ]]; then printf 'apt %s\\n' "$*" >> "$TRACE"; else "$@"; fi; }
+        env() {
+            case "$3" in
+                /usr/bin/node) printf 'node-version-check\\n' >> "$TRACE"; return "${NODE_RESULT:-0}" ;;
+                /usr/bin/npm)
+                    [[ "$4" == --version && $# == 4 ]] || return 99
+                    printf 'npm-version-check\\n' >> "$TRACE"
+                    return "${NPM_RESULT:-0}" ;;
+                *) return 99 ;;
+            esac
+        }
+        dpkg-query() {
+            printf 'dpkg-query %s\\n' "$*" >> "$TRACE"
+            case "$*" in
+                '-S /usr/bin/npm')
+                    printf '%s\\n' "${NPM_OWNER-nodejs: /usr/bin/npm}"
+                    return "${OWNER_RESULT:-0}" ;;
+                '-W -f=${Status} ${Version} nodejs')
+                    printf '%s' "${NODE_PACKAGE-install ok installed 1}"
+                    return "${PACKAGE_RESULT:-0}" ;;
+                *) return 99 ;;
+            esac
+        }
         install() { mkdir -p -- "${@: -1}"; }
         chown() { printf 'chown\\n' >> "$TRACE"; }
         chmod() { :; }
@@ -295,6 +316,70 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("Unit remains stopped", result.stdout)
         self.assertNotIn("systemctl start", trace)
         self.assertEqual(list(self.deploy.glob(".build.*")), [])
+
+    def test_provision_accepts_npm_bundled_in_exact_pinned_nodejs(self):
+        env = self.pinned_apt_env()
+        env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
+        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision; provision", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dpkg-query -S /usr/bin/npm", self.trace())
+        self.assertNotIn(" npm=", self.trace())
+        self.assertEqual(self.trace().count("npm-version-check"), 2)
+        self.assertEqual(self.trace().count("/usr/bin/npm install --global"), 1)
+        self.assertTrue((self.prefix / "ready").exists())
+
+    def test_provision_accepts_separate_npm_pin_without_nodejs_ownership(self):
+        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision",
+                                env=self.pinned_apt_env(NPM_OWNER="npm: /usr/bin/npm"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(" npm=1 ", self.trace())
+        self.assertIn("npm-version-check", self.trace())
+        self.assertNotIn("dpkg-query", self.trace())
+
+    def test_provision_rejects_unowned_or_wrong_version_bundled_npm(self):
+        cases = [({"OWNER_RESULT": "1"}, "must be owned"),
+                 ({"NPM_OWNER": ""}, "must be owned"),
+                 ({"NPM_OWNER": "npm: /usr/bin/npm"}, "must be owned"),
+                 ({"NPM_OWNER": "other: /usr/bin/npm\nnodejs: /usr/bin/npm"}, "must be owned"),
+                 ({"NODE_PACKAGE": "install ok installed 2"}, "exact pinned nodejs"),
+                 ({"NODE_PACKAGE": "deinstall ok config-files 1"}, "exact pinned nodejs"),
+                 ({"PACKAGE_RESULT": "1"}, "cannot inspect installed nodejs")]
+        for extra, message in cases:
+            with self.subTest(extra=extra):
+                Path(self.env["TRACE"]).unlink(missing_ok=True)
+                env = self.pinned_apt_env(**extra)
+                env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
+                result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
+                self.assert_failed(result, message)
+                self.assertNotIn("runuser", self.trace())
+                self.assertEqual(list(self.deploy.glob(".build.*")), [])
+
+    def test_provision_requires_usable_npm_even_when_runtime_exists(self):
+        (self.prefix / "ready").write_text("existing runtime")
+        for bundled in (True, False):
+            for status in (127, 126, 1):  # Missing, not executable, broken npm.
+                with self.subTest(bundled=bundled, status=status):
+                    Path(self.env["TRACE"]).unlink(missing_ok=True)
+                    env = self.pinned_apt_env(NPM_RESULT=str(status))
+                    if bundled:
+                        env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
+                    result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
+                    self.assert_failed(result, "system /usr/bin/npm must be usable")
+                    self.assertNotIn("verify ", self.trace())
+                    self.assertNotIn("runuser", self.trace())
+                    self.assertEqual((self.prefix / "ready").read_text(), "existing runtime")
+
+    def test_provision_keeps_other_required_pins_and_node_minimum(self):
+        for name in ("ca-certificates", "git", "nodejs", "ripgrep", "python3", "openssh-client", "build-essential"):
+            with self.subTest(name=name):
+                env = self.pinned_apt_env()
+                env["PI_APT_PACKAGES"] = " ".join(pin for pin in env["PI_APT_PACKAGES"].split()
+                                                   if not pin.startswith(name + "="))
+                result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
+                self.assert_failed(result, "missing required apt pin: " + name)
+        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision",
+                                env=self.pinned_apt_env(NODE_RESULT="1"))
+        self.assert_failed(result, "pinned system Node must be >=22.19.0")
 
     def test_failed_stage_preserves_existing_runtime_and_evidence(self):
         before = (self.prefix / "bin/pi").read_bytes()
