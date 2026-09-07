@@ -1,7 +1,5 @@
-"""Offline behavioral tests. No apt/npm install, service action or network access.
-
-Run with unittest discovery. Native launches execute locally.
-"""
+"""Pi-only Bash lifecycle tests. Temporary fixtures; no installs or live services."""
+import json
 import os
 from pathlib import Path
 import pwd
@@ -11,423 +9,400 @@ import tempfile
 import unittest
 
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-SHA = "a" * 40
+SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+ROOT = SCRIPTS.parents[1]
 
 
+class RootRejection(unittest.TestCase):
+    @unittest.skipUnless(os.geteuid() == 0, 'actual root guard requires root runner')
+    def test_root_refused_before_account_lookup_or_mutations(self):
+        for script, args in [('entrypoint.sh', ['install']), ('entrypoint.sh', ['initialize-home']),
+                             ('start.sh', ['session']), ('start.sh', ['service']),
+                             ('manage.sh', ['status']), ('manage.sh', ['version']),
+                             ('manage.sh', ['update', 'a' * 40])]:
+            result = subprocess.run(['/bin/bash', SCRIPTS / script, *args],
+                                    env={'PATH': '/usr/bin:/bin'}, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('never root', result.stderr)
+
+    def test_no_privileged_install_or_shared_framework(self):
+        text = (SCRIPTS / 'entrypoint.sh').read_text()
+        self.assertIn('[[ $EUID != 0 && $UID != 0 ]]', text)
+        self.assertIn('$EUID == "${PI_UID:-}"', text)
+        for obsolete in ('apt-get', 'runuser', 'PI_BUILD_USER', 'provision()', 'lifecycle.py'):
+            self.assertNotIn(obsolete, text)
+        for name in ('pi', 'pi-run', 'pi-mgr', 'init.sh', 'Dockerfile', 'docker-compose.yml'):
+            docker = (ROOT / 'pi' / name).read_text()
+            self.assertNotIn('scripts/start.sh', docker)
+            self.assertNotIn('scripts/entrypoint.sh', docker)
+
+
+@unittest.skipIf(os.geteuid() == 0, 'run fixture Git/build/launch tests as a real non-root user')
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="pi-lifecycle-")
+        self.temp = tempfile.TemporaryDirectory(prefix='pi-lifecycle-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.root.chmod(0o755)
-        self.uid = pwd.getpwnam("nobody").pw_uid if os.geteuid() == 0 else os.geteuid()
-        self.gid = pwd.getpwnam("nobody").pw_gid if os.geteuid() == 0 else os.getegid()
-        self.home = self.root / "home"
-        self.home.mkdir(mode=0o700)
-        if os.geteuid() == 0:
-            os.chown(self.home, self.uid, self.gid)
-        self.deploy = self.root / "deploy"
-        self.repo = self.deploy / "repo"
-        self.prefix = self.deploy / "runtime"
-        (self.repo / ".git").mkdir(parents=True)
-        (self.prefix / "bin").mkdir(parents=True)
-        self.workspace = self.root / "workspace with spaces"
-        self.workspace.mkdir()
-        for name in ("pi", "pi-web"):
-            path = self.prefix / "bin" / name
-            path.write_text('#!/bin/bash\nprintf "%s\\n" "$0" "$@" > "$TRACE"\nprintf "pid=%s\\nhome=%s\\ncwd=%s\\n" "$$" "$HOME" "$PWD" >> "$TRACE"\n')
+        self.home = self.root / 'home'
+        self.repo = self.root / 'repo'
+        self.component = self.repo / 'pi'
+        self.prefix = self.component / '.runtime'
+        self.workspace = self.root / 'workspace with spaces'
+        self.bin = self.root / 'fixtures'
+        for path in (self.home, self.component, self.workspace, self.bin):
+            path.mkdir(parents=True)
+        self.user = pwd.getpwuid(os.geteuid()).pw_name
+        self.trace = self.root / 'build-calls'
+        self.env = dict(os.environ, PATH=f'{self.bin}:/usr/bin:/bin', PI_USER=self.user,
+                        PI_REPO=str(self.repo), PI_ROOT=str(self.component), PI_PREFIX=str(self.prefix),
+                        PI_WORKSPACE=str(self.workspace), PI_UNIT='fixture.service', PI_BRANCH='agents/devai-team',
+                        HOME='/wrong-home', PI_PORT='30141', PI_WEB_PASSWORD='web-secret-nonce',
+                        PI_WEB_ALLOWED_HOSTS='pi.example', OPENAI_API_KEY='provider-secret-nonce',
+                        NODE_OPTIONS='poison', NPM_CONFIG_REGISTRY='https://invalid.example',
+                        FIXTURE_NODE=str(self.bin / 'node'), FIXTURE_NPM=str(self.bin / 'npm'))
+        self.mock('getent', f"printf '%s\\n' '{self.user}:x:{os.geteuid()}:{os.getegid()}::{self.home}:/bin/bash'")
+        for name in ('skills', 'commands'):
+            (self.repo / 'agent' / name).mkdir(parents=True)
+            (self.repo / 'agent' / name / '.keep').touch()
+        (self.repo / 'agent/prompts').symlink_to('commands')
+        (self.repo / '.gitignore').write_text('/pi/.runtime/\n/pi/.build.*/\n/pi/.lifecycle.lock\n')
+        (self.repo / 'tracked').write_text('initial')
+        self.git('init', '-q', '-b', 'agents/devai-team')
+        self.git('add', '.')
+        self.commit('fixture initial')
+        # Executed through real env -i and real timeout, not a mocked root/user guard.
+        common = ('#!/usr/bin/python3\nimport json,os,sys\nfrom pathlib import Path\n'
+                  f'trace=Path({str(self.trace)!r})\n'
+                  'assert os.geteuid()!=0\n'
+                  'with trace.open("a") as out: out.write(json.dumps({"args":sys.argv,"env":dict(os.environ),"cwd":os.getcwd()})+"\\n")\n')
+        node = common + '''if len(sys.argv)>3:
+ root=Path(sys.argv[3])/"lib/node_modules"
+ for name,version in zip(("@earendil-works/pi-coding-agent","@agegr/pi-web"),sys.argv[4:]):
+  assert json.loads((root/name/"package.json").read_text())["version"]==version
+'''
+        npm = common + f'''if "--version" in sys.argv:
+ print("10.9.0"); sys.exit(0)
+if Path({str(self.root / 'fail-build')!r}).exists(): sys.exit(42)
+prefix=Path(sys.argv[sys.argv.index("--prefix")+1])
+for name,version in (("@earendil-works/pi-coding-agent","0.85.1"),("@agegr/pi-web","0.9.0")):
+ path=prefix/"lib/node_modules"/name; path.mkdir(parents=True)
+ (path/"package.json").write_text(json.dumps({{"version":version}}))
+(prefix/"bin").mkdir()
+for name in ("pi","pi-web"):
+ path=prefix/"bin"/name; path.write_text({self.binary_program()!r}); path.chmod(0o755)
+'''
+        for name, text in [('node', node), ('npm', npm)]:
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+
+    def mock(self, name, body):
+        path = self.bin / name
+        path.write_text('#!/bin/bash\nset -eu\n' + body + '\n')
+        path.chmod(0o755)
+
+    def binary_program(self):
+        return ('#!/usr/bin/python3\nimport os,sys,json\n'
+                'if "--version" in sys.argv: print("0.85.1")\n'
+                'elif "--help" in sys.argv: print("fixture help")\n'
+                'else: print(json.dumps({"args":sys.argv[1:],"pid":os.getpid(),"uid":os.geteuid(),'
+                '"cwd":os.getcwd(),"home":os.environ["HOME"],"provider":bool(os.environ.get("OPENAI_API_KEY")),'
+                '"password":bool(os.environ.get("PI_WEB_PASSWORD")),"node_options":os.environ.get("NODE_OPTIONS")}))\n')
+
+    def seed_runtime(self):
+        (self.prefix / 'bin').mkdir(parents=True, exist_ok=True)
+        for name in ('pi', 'pi-web'):
+            path = self.prefix / 'bin' / name
+            path.write_text(self.binary_program())
             path.chmod(0o755)
-        self.env = dict(os.environ, PI_ROOT=str(self.deploy), PI_REPO=str(self.repo),
-                        PI_PREFIX=str(self.prefix), PI_USER="fixture", PI_BUILD_USER="builder", PI_HOME=str(self.home),
-                        PI_UID=str(self.uid), PI_GID=str(self.gid), PI_UNIT="fixture-pi.service",
-                        PI_WORKSPACE=str(self.workspace), PI_PORT="30141",
-                        PI_WEB_PASSWORD="test-secret-not-logged", TRACE=str(self.home / "trace"),
-                        PI_CODING_AGENT_DIR=str(self.home / ".pi/agent"))
 
-    def run_shell(self, script, body, *, nonroot=False, contract=False, env=None):
-        prelude = f'source {shlex.quote(str(SCRIPTS / script))}\n'
-        if not contract:
-            prelude += 'load_contract() { :; }\n'
-        def demote():
-            os.setgroups([])
-            os.setgid(self.gid)
-            os.setuid(self.uid)
-        return subprocess.run(["/bin/bash", "-c", prelude + body], env=env or self.env,
-                              text=True, capture_output=True,
-                              preexec_fn=demote if nonroot and os.geteuid() == 0 else None)
+    def git(self, *args):
+        return subprocess.check_output(['/usr/bin/git', '-C', str(self.repo), *args],
+                                       env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)},
+                                       text=True, stderr=subprocess.PIPE).strip()
 
-    def trace(self):
-        path = Path(self.env["TRACE"])
-        return path.read_text() if path.exists() else ""
+    def commit(self, message):
+        self.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                 '-c', 'commit.gpgsign=false', 'commit', '-qm', message)
+
+    def run_script(self, script, *args, **env):
+        return subprocess.run(['/bin/bash', SCRIPTS / script, *args],
+                              env=dict(self.env, **env), text=True, capture_output=True, timeout=20)
+
+    def shell(self, script, body, **env):
+        return subprocess.run(['/bin/bash', '-c', f'source {shlex.quote(str(SCRIPTS / script))}; load_contract; ' + body],
+                              env=dict(self.env, **env), text=True, capture_output=True, timeout=20)
+
+    def install(self, body='install_runtime'):
+        # Swap only the two OS executable paths for fixture binaries. Real env -i,
+        # timeout, UID checks, version validation, filesystem and locks still run.
+        return self.shell('entrypoint.sh', '''env() {
+            local arg; local -a args=()
+            for arg in "$@"; do
+                case "$arg" in
+                    /usr/bin/node) args+=("$FIXTURE_NODE") ;;
+                    /usr/bin/npm) args+=("$FIXTURE_NPM") ;;
+                    *) args+=("$arg") ;;
+                esac
+            done
+            command env "${args[@]}"
+        }; ''' + body)
 
     def assert_failed(self, result, message):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(message, result.stderr)
+        self.assertNotIn('provider-secret-nonce', result.stdout + result.stderr)
+        self.assertNotIn('web-secret-nonce', result.stdout + result.stderr)
 
-    def test_service_and_session_launch_without_remote_adapter(self):
-        for mode in ("service", "session"):
-            with self.subTest(mode=mode):
-                env = dict(self.env, PI_REMOTE_ADAPTER_READY="1", PI_EXECUTION_POLICY="local")
-                result = self.run_shell("start.sh", f"start_main {mode}", nonroot=True, env=env)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("cwd=" + str(self.workspace), self.trace())
-
-    @unittest.skipUnless(os.geteuid() == 0, "root rejection requires root test runner")
-    def test_root_cannot_launch(self):
-        self.assert_failed(self.run_shell("start.sh", "start_main session"), "never root")
-
-    def test_service_launch_shape_and_exec(self):
-        result = self.run_shell("start.sh", 'printf "%s" "$$" > "$HOME/expected-pid"; start_main service', nonroot=True,
-                                env=dict(self.env, HOME=str(self.home), PI_WEB_HOSTNAME="0.0.0.0", PORT="9999"))
+    def test_dirty_install_is_nonroot_selected_only_idempotent_and_secret_free(self):
+        (self.repo / 'tracked').write_text('agent edit')
+        (self.repo / 'new-edit').write_text('uncommitted')
+        result = self.install('install_runtime; install_runtime')
         self.assertEqual(result.returncode, 0, result.stderr)
-        lines = self.trace().splitlines()
-        self.assertEqual(lines[1:6], ["--hostname", "127.0.0.1", "--port", "30141", "--no-open"])
-        self.assertIn("pid=" + (self.home / "expected-pid").read_text(), lines)
-        self.assertIn("home=" + str(self.home), lines)
-        self.assertIn("cwd=" + str(self.workspace), lines)
-        self.assertNotIn("test-secret", self.trace())
+        calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
+        installs = [c for c in calls if 'install' in c['args']]
+        self.assertEqual(len(installs), 1)
+        self.assertEqual(installs[0]['args'][-2:], ['@earendil-works/pi-coding-agent@0.85.1', '@agegr/pi-web@0.9.0'])
+        self.assertIn('--ignore-scripts=false', installs[0]['args'])
+        for call in calls:
+            for key in ('PI_WEB_PASSWORD', 'PI_WEB_ALLOWED_HOSTS', 'OPENAI_API_KEY', 'NODE_OPTIONS'):
+                self.assertNotIn(key, call['env'])
+            self.assertNotEqual(call['env']['HOME'], str(self.home))
+        configs = [a.split('=', 1)[1] for a in installs[0]['args'] if a.startswith(('--userconfig=', '--globalconfig='))]
+        self.assertEqual(len(set(configs)), 2)
+        self.assertEqual((self.repo / 'tracked').read_text(), 'agent edit')
+        self.assertEqual((self.repo / 'new-edit').read_text(), 'uncommitted')
+        self.assertFalse((self.repo / 'omp').exists())
+        self.assertEqual((self.home / '.pi/agent/skills').readlink(), self.repo / 'agent/skills')
+        self.assertEqual(list(self.component.glob('.build.*')), [])
 
-    def test_session_preserves_argument_boundaries(self):
-        result = self.run_shell("start.sh", 'start_main session -p "two words" --resume', nonroot=True)
+    def test_failed_build_and_failed_promotion_preserve_runtime(self):
+        self.seed_runtime()
+        before = (self.prefix / 'bin/pi').read_bytes()
+        (self.root / 'fail-build').touch()
+        self.assert_failed(self.install(), 'existing runtime preserved')
+        self.assertEqual((self.prefix / 'bin/pi').read_bytes(), before)
+        self.assertEqual(self.git('status', '--porcelain'), '')
+        self.assertEqual(len(list(self.component.glob('.build.*'))), 1)
+        (self.root / 'fail-build').unlink()
+        result = self.install('''mv() {
+            if [[ "$*" == *"/runtime $PI_PREFIX" ]]; then return 42; fi
+            command mv "$@"
+        }; install_runtime''')
+        self.assert_failed(result, 'promotion failed')
+        self.assertEqual((self.prefix / 'bin/pi').read_bytes(), before)
+
+    def test_version_mismatch_rebuilds_and_post_promotion_verifies(self):
+        self.assertEqual(self.install().returncode, 0)
+        package = self.prefix / 'lib/node_modules/@agegr/pi-web/package.json'
+        package.write_text('{"version":"wrong"}')
+        result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.trace().splitlines()[1:4], ["-p", "two words", "--resume"])
-        self.assertIn("cwd=" + str(self.workspace), self.trace())
+        self.assertEqual(json.loads(package.read_text())['version'], '0.9.0')
+        calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
+        self.assertTrue(any(str(self.prefix) in c['args'] for c in calls))
 
-    def test_bad_service_inputs_never_launch(self):
-        cases = [("PI_PORT", "0", "port must"), ("PI_PORT", "65536", "port must"),
-                 ("PI_PORT", "030141", "port must"), ("PI_PORT", "80", "port must"),
-                 ("PI_WEB_PASSWORD", "", "supply web password"),
-                 ("PI_WORKSPACE", str(self.repo), "inside the deployment")]
-        for key, value, message in cases:
-            with self.subTest(key=key, value=value):
-                result = self.run_shell("start.sh", "start_main service", nonroot=True,
-                                        env=dict(self.env, **{key: value}))
-                self.assert_failed(result, message)
-        self.assert_failed(self.run_shell("start.sh", "start_main service --hostname 0.0.0.0", nonroot=True), "no extra flags")
-        self.assertEqual(self.trace(), "")
+    def test_session_service_exact_args_home_uid_pid_and_loopback(self):
+        self.seed_runtime()
+        for mode, args, expected in [('session', ['-p', 'two words', '--resume'], ['-p', 'two words', '--resume']),
+                                     ('service', [], ['--hostname', '127.0.0.1', '--port', '30141', '--no-open'])]:
+            with subprocess.Popen(['/bin/bash', SCRIPTS / 'start.sh', mode, *args], env=self.env,
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                output, error = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, error)
+                data = json.loads(output)
+                self.assertEqual(data['pid'], process.pid)
+            self.assertEqual(data['uid'], os.geteuid())
+            self.assertEqual(data['args'], expected)
+            self.assertEqual(data['home'], str(self.home))
+            self.assertEqual(data['cwd'], str(self.workspace))
+            self.assertTrue(data['provider'])
+            self.assertTrue(data['password'])  # retain original launch environment behavior
+            self.assertIsNone(data['node_options'])
 
-    def test_contract_account_and_path_validation(self):
-        record = 'getent() { printf "fixture:x:%s:%s::%s:/bin/bash\\n" "$PI_UID" "$PI_GID" "$PI_HOME"; }; load_contract'
-        result = self.run_shell("entrypoint.sh", record, contract=True)
+    def test_invalid_service_inputs_and_contract_fail_without_launch(self):
+        self.seed_runtime()
+        for port in ('0', '80', '65536', '030141', '1;id'):
+            self.assert_failed(self.run_script('start.sh', 'service', PI_PORT=port), 'port must')
+        self.assert_failed(self.run_script('start.sh', 'service', '--hostname', '0.0.0.0'), 'no extra flags')
+        self.assert_failed(self.run_script('start.sh', 'service', PI_WEB_PASSWORD=''), 'supply web password')
+        for key, value in [('PI_PREFIX', str(self.home)), ('PI_ROOT', str(self.repo)), ('PI_WORKSPACE', str(self.prefix))]:
+            self.assertNotEqual(self.run_script('start.sh', 'session', **{key: value}).returncode, 0)
+        self.assert_failed(self.run_script('start.sh', 'session', PI_UNIT='--all'), 'invalid unit')
+        self.mock('getent', f"printf '%s\\n' '{self.user}:x:0:0::{self.home}:/bin/bash'")
+        self.assert_failed(self.run_script('entrypoint.sh', 'install'), 'non-root account')
+        self.mock('getent', f"printf '%s\\n' '{self.user}:x:99999:99999::{self.home}:/bin/bash'")
+        self.assert_failed(self.run_script('entrypoint.sh', 'install'), 'exact account UID')
+
+    def test_managed_link_migration_preserves_auth_sessions_settings_and_real_dirs(self):
+        config = self.home / '.pi/agent'
+        config.mkdir(parents=True)
+        old = self.root / 'old-repo'
+        old.mkdir()
+        (config / 'skills').symlink_to(old / 'agent/skills')
+        (config / 'prompts').symlink_to(self.root / 'unknown')
+        (config / 'agents').mkdir()
+        (config / 'agents/mine').write_text('real resource')
+        for name in ('auth.json', 'settings.json', 'agent.db', 'config.yml', 'models.json'):
+            (config / name).write_text('preserve ' + name)
+        (config / 'sessions').mkdir()
+        (config / 'sessions/one').write_text('saved session')
+        # Without the explicit previous checkout, do not guess which link to migrate.
+        result = self.run_script('entrypoint.sh', 'initialize-home')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_failed(self.run_shell("entrypoint.sh", record, contract=True,
-                                         env=dict(self.env, PI_PREFIX=str(self.repo / "runtime"))), "must not overlap")
-        self.assert_failed(self.run_shell("entrypoint.sh", record, contract=True,
-                                         env=dict(self.env, PI_UID="0")), "non-root account")
-        self.assert_failed(self.run_shell("entrypoint.sh", record, contract=True,
-                                         env=dict(self.env, PI_UNIT="--all")), "invalid unit")
-
-    def test_home_seeding_preserves_auth_omp_and_existing_defaults(self):
-        for name in ("prompts", "skills"):
-            (self.repo / "agent" / name).mkdir(parents=True)
-        setup = '''
-        mkdir -p "$PI_CODING_AGENT_DIR"
-        printf existing > "$PI_CODING_AGENT_DIR/settings.json"
-        for f in auth.json agent.db config.yml models.json; do printf preserve > "$PI_CODING_AGENT_DIR/$f"; done
-        git() {
-            case " $* " in
-                *" ls-files "*) printf '%s\\0' pi/.pi/agent/settings.json pi/.pi/agent/auth.json pi/.pi/agent/agent.db pi/.pi/agent/models.json pi/.pi/agent/extensions/demo.ts pi/.pi/agent/themes/nord.json ;;
-                *" show "*) printf seeded ;;
-                *) return 99 ;;
-            esac
-        }
-        initialize_home
-        initialize_home
-        '''
-        result = self.run_shell("entrypoint.sh", setup, nonroot=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        state = self.home / ".pi/agent"
-        self.assertEqual((state / "settings.json").read_text(), "existing")
-        for name in ("auth.json", "agent.db", "config.yml", "models.json"):
-            self.assertEqual((state / name).read_text(), "preserve")
-        self.assertEqual((state / "extensions/demo.ts").read_text(), "seeded")
-        self.assertEqual((state / "skills").readlink(), self.repo / "agent/skills")
-
-    def test_home_rejects_redirected_state(self):
-        result = self.run_shell("entrypoint.sh", 'ln -s "$PI_REPO" "$PI_HOME/.pi"; initialize_home', nonroot=True)
-        self.assert_failed(result, "preserved redirected Pi state")
-
-    def test_home_conflicting_resource_is_not_moved(self):
-        (self.repo / "agent").mkdir()
-        result = self.run_shell("entrypoint.sh", 'mkdir -p "$PI_CODING_AGENT_DIR/agents"; printf keep > "$PI_CODING_AGENT_DIR/agents/mine"; initialize_home', nonroot=True)
-        self.assert_failed(result, "preserved conflicting resource")
-        self.assertEqual((self.home / ".pi/agent/agents/mine").read_text(), "keep")
-
-    def test_failed_default_read_leaves_no_partial_file(self):
-        for name in ("prompts", "skills"):
-            (self.repo / "agent" / name).mkdir(parents=True)
-        result = self.run_shell("entrypoint.sh", '''
-        git() {
-            case " $* " in
-                *" ls-files "*) printf '%s\\0' pi/.pi/agent/settings.json ;;
-                *" show "*) printf partial; return 1 ;;
-            esac
-        }
-        initialize_home
-        ''', nonroot=True)
-        self.assertNotEqual(result.returncode, 0)
-        state = self.home / ".pi/agent"
-        self.assertFalse((state / "settings.json").exists())
-        self.assertEqual(list(state.glob(".pi-default.*")), [])
-
-    def update_mocks(self):
-        return '''
-        deployment_lock() { printf 'lock\\n' >> "$TRACE"; }
-        systemctl() { printf '%s' "${STATE:-inactive}"; }
-        timeout() { shift; "$@"; }
-        git() {
-            printf 'git %s\\n' "$*" >> "$TRACE"
-            case " $* " in
-                *" status "*) printf '%s' "${DIRTY:-}"; return "${STATUS_RESULT:-0}" ;;
-                *" rev-parse HEAD "*) printf '%040d' 0 ;;
-                *" rev-parse --verify "*) printf '%s' "${TARGET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;
-                *" fetch "*) return "${FETCH_RESULT:-0}" ;;
-                *" checkout "*) return "${CHECKOUT_RESULT:-0}" ;;
-                *) return 99 ;;
-            esac
-        }
-        '''
-
-    def test_update_check_fetches_but_never_checks_out(self):
-        result = self.run_shell("manage.sh", self.update_mocks() + f"manage_main update-check {SHA}")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("fetch --quiet --no-tags origin " + SHA, self.trace())
-        self.assertNotIn(" checkout ", self.trace())
-
-    def test_update_exact_sha_detached_and_no_restart(self):
-        result = self.run_shell("manage.sh", self.update_mocks() + f"manage_main update {SHA}")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("checkout --quiet --detach --no-overwrite-ignore " + SHA, self.trace())
-        self.assertIn("No automatic restart or rollback", result.stdout)
-        self.assertNotIn("systemctl", self.trace())
-
-    def test_update_failures_never_checkout(self):
-        for extra, message in [({"DIRTY": "!! secret.env"}, "checkout is dirty"),
-                               ({"STATUS_RESULT": "1"}, "cannot inspect checkout status"),
-                               ({"STATE": "active"}, "stop the Ansible-managed unit"),
-                               ({"TARGET": "b" * 40}, "revision mismatch"),
-                               ({"FETCH_RESULT": "1"}, "fetch failed")]:
-            with self.subTest(extra=extra):
-                Path(self.env["TRACE"]).unlink(missing_ok=True)
-                result = self.run_shell("manage.sh", self.update_mocks() + f"manage_main update {SHA}", env=dict(self.env, **extra))
-                self.assert_failed(result, message)
-                self.assertNotIn(" checkout ", self.trace())
-
-    def test_update_rejects_branch_before_lock(self):
-        result = self.run_shell("manage.sh", self.update_mocks() + "manage_main update main")
-        self.assert_failed(result, "full lowercase commit SHA")
-        self.assertEqual(self.trace(), "")
-
-    def test_checkout_failure_does_not_claim_success(self):
-        result = self.run_shell("manage.sh", self.update_mocks() + f"manage_main update {SHA}", env=dict(self.env, CHECKOUT_RESULT="1"))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("Checkout updated", result.stdout)
-
-    def test_management_start_restart_stop_status_logs(self):
-        mocks = '''
-        require_root() { :; }
-        deployment_lock() { printf 'lock\\n' >> "$TRACE"; }
-        systemctl() { printf 'systemctl %s\\n' "$*" >> "$TRACE"; }
-        '''
-        for command in ("start", "restart"):
-            result = self.run_shell("manage.sh", mocks + f"manage_main {command}")
+        self.assertEqual((config / 'skills').readlink(), old / 'agent/skills')
+        for _ in range(2):
+            result = self.run_script('entrypoint.sh', 'initialize-home', PI_PREVIOUS_REPO=str(old))
             self.assertEqual(result.returncode, 0, result.stderr)
-        result = self.run_shell("manage.sh", mocks + "manage_main stop")
+        self.assertEqual((config / 'skills').readlink(), self.repo / 'agent/skills')
+        self.assertEqual((config / 'prompts').readlink(), self.root / 'unknown')
+        self.assertEqual((config / 'agents/mine').read_text(), 'real resource')
+        for name in ('auth.json', 'settings.json', 'agent.db', 'config.yml', 'models.json'):
+            self.assertEqual((config / name).read_text(), 'preserve ' + name)
+        self.assertEqual((config / 'sessions/one').read_text(), 'saved session')
+        self.assertTrue(old.exists())
+
+    def test_install_passes_previous_checkout_only_to_home_migration(self):
+        old = self.root / 'old-repo'
+        old.mkdir()
+        config = self.home / '.pi/agent'
+        config.mkdir(parents=True)
+        (config / 'skills').symlink_to(old / 'agent/skills')
+        (config / 'auth.json').write_text('preserved auth')
+        self.env['PI_PREVIOUS_REPO'] = str(old)
+        result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.trace().splitlines(), ["lock", "systemctl start fixture-pi.service", "lock", "systemctl restart fixture-pi.service", "systemctl stop fixture-pi.service"])
-        # exec bypasses shell functions: intercept exec itself, never invoke host services.
-        for command, expected in (("status", "systemctl --no-pager --full status fixture-pi.service"),
-                                  ("logs", "journalctl --no-pager -u fixture-pi.service -n 100")):
-            result = self.run_shell("manage.sh", 'exec() { printf "%s\\n" "$*"; }; manage_main ' + command)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), expected)
+        self.assertEqual((config / 'skills').readlink(), self.repo / 'agent/skills')
+        self.assertEqual((config / 'auth.json').read_text(), 'preserved auth')
+        for line in self.trace.read_text().splitlines():
+            self.assertNotIn('PI_PREVIOUS_REPO', json.loads(line)['env'])
 
-    def test_provision_rejects_active_unit_and_unpinned_dependencies(self):
-        mocks = 'deployment_lock() { :; }; git() { :; }; getent() { printf "builder:x:12345:12345::/nonexistent:/usr/sbin/nologin\\n"; }; systemctl() { printf "%s" "${STATE:-inactive}"; }; timeout() { printf unexpected-install >> "$TRACE"; return 99; }; '
-        for extra, message in [({"STATE": "active"}, "stop the Ansible-managed unit"),
-                               ({"PI_APT_PACKAGES": "nodejs"}, "exact version"),
-                               ({"PI_APT_PACKAGES": "nodejs=22.19.0"}, "missing required apt pin")]:
-            result = self.run_shell("entrypoint.sh", mocks + "provision", env=dict(self.env, **extra))
-            self.assert_failed(result, message)
-        self.assertEqual(self.trace(), "")
-
-    def provision_mocks(self):
-        return '''
-        deployment_lock() { printf 'lock\\n' >> "$TRACE"; }
-        git() { :; }
-        getent() { printf 'builder:x:12345:12345::/nonexistent:/usr/sbin/nologin\\n'; }
-        systemctl() { printf inactive; }
-        timeout() { shift; if [[ $1 == apt-get ]]; then printf 'apt %s\\n' "$*" >> "$TRACE"; else "$@"; fi; }
-        env() {
-            case "$3" in
-                /usr/bin/node) printf 'node-version-check\\n' >> "$TRACE"; return "${NODE_RESULT:-0}" ;;
-                /usr/bin/npm)
-                    [[ "$4" == --version && $# == 4 ]] || return 99
-                    printf 'npm-version-check\\n' >> "$TRACE"
-                    return "${NPM_RESULT:-0}" ;;
-                *) return 99 ;;
-            esac
-        }
-        dpkg-query() {
-            printf 'dpkg-query %s\\n' "$*" >> "$TRACE"
-            case "$*" in
-                '-S /usr/bin/npm')
-                    printf '%s\\n' "${NPM_OWNER-nodejs: /usr/bin/npm}"
-                    return "${OWNER_RESULT:-0}" ;;
-                '-W -f=${Status} ${Version} nodejs')
-                    printf '%s' "${NODE_PACKAGE-install ok installed 1}"
-                    return "${PACKAGE_RESULT:-0}" ;;
-                *) return 99 ;;
-            esac
-        }
-        install() { mkdir -p -- "${@: -1}"; }
-        chown() { printf 'chown\\n' >> "$TRACE"; }
-        chmod() { :; }
-        runuser() {
-            printf 'runuser %s\\n' "$*" >> "$TRACE"
-            local next=0 arg
-            for arg in "$@"; do
-                if (( next )); then printf ready > "$arg/ready"; break; fi
-                [[ $arg != --prefix ]] || next=1
-            done
-        }
-        verify_runtime() {
-            printf 'verify %s\\n' "$1" >> "$TRACE"
-            [[ ${VERIFY_FAIL:-0} != 1 && -f "$1/ready" ]]
-        }
-        '''
-
-    def pinned_apt_env(self, **extra):
-        pins = " ".join(name + "=1" for name in (
-            "ca-certificates", "git", "nodejs", "npm", "ripgrep", "python3", "openssh-client", "build-essential"))
-        return dict(self.env, PI_APT_PACKAGES=pins, **extra)
-
-    def test_provision_stages_nonroot_installs_once_and_leaves_unit_stopped(self):
-        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision; provision", env=self.pinned_apt_env())
+    def test_default_copy_is_allowlisted_exclusive_and_preserves_existing(self):
+        source = self.component / '.pi/agent'
+        (source / 'themes').mkdir(parents=True)
+        for name in ('settings.json', 'themes/nord.json', 'auth.json', 'models.json'):
+            (source / name).write_text('default ' + name)
+        self.git('add', '.')
+        self.commit('fixture defaults')
+        config = self.home / '.pi/agent'
+        config.mkdir(parents=True)
+        (config / 'settings.json').write_text('private settings')
+        self.assertEqual(self.run_script('entrypoint.sh', 'initialize-home').returncode, 0)
+        self.assertEqual((config / 'settings.json').read_text(), 'private settings')
+        self.assertEqual((config / 'themes/nord.json').read_text(), 'default themes/nord.json')
+        self.assertFalse((config / 'auth.json').exists())
+        self.assertFalse((config / 'models.json').exists())
+        (config / 'themes/nord.json').unlink()
+        failure = self.shell('entrypoint.sh', '''pi_git() {
+            if [[ $1 == show ]]; then printf partial; return 42; fi
+            command git -C "$PI_REPO" "$@"
+        }; initialize_home''')
+        self.assertNotEqual(failure.returncode, 0)
+        self.assertFalse((config / 'themes/nord.json').exists())
+        self.assertFalse(list((config / 'themes').glob('.pi-default.*')))
+        result = self.shell('entrypoint.sh', '''ln() {
+            printf concurrent > "$PI_HOME/.pi/agent/themes/nord.json"
+            command ln "$@"
+        }; initialize_home''')
         self.assertEqual(result.returncode, 0, result.stderr)
-        trace = self.trace()
-        self.assertEqual(trace.count("npm install --global"), 1)
-        self.assertIn("runuser -u builder -- env -i HOME=", trace)
-        self.assertIn("--ignore-scripts=false", trace)
-        self.assertIn("@earendil-works/pi-coding-agent@0.85.1 @agegr/pi-web@0.9.0", trace)
-        self.assertIn("chown\nverify ", trace)
-        self.assertTrue((self.prefix / "ready").exists())
-        self.assertIn("Unit remains stopped", result.stdout)
-        self.assertNotIn("systemctl start", trace)
-        self.assertEqual(list(self.deploy.glob(".build.*")), [])
+        self.assertEqual((config / 'themes/nord.json').read_text(), 'concurrent')
 
-    def test_provision_accepts_npm_bundled_in_exact_pinned_nodejs(self):
-        env = self.pinned_apt_env()
-        env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
-        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision; provision", env=env)
+    def test_redirected_state_and_runtime_are_preserved(self):
+        (self.home / '.pi').symlink_to(self.repo)
+        self.assert_failed(self.run_script('entrypoint.sh', 'initialize-home'), 'redirected Pi state')
+        self.seed_runtime()
+        self.assert_failed(self.run_script('start.sh', 'session'), 'redirected Pi state')
+        (self.prefix / 'bin/pi').unlink()
+        (self.prefix / 'bin/pi-web').unlink()
+        (self.prefix / 'bin').rmdir()
+        self.prefix.rmdir()
+        self.prefix.symlink_to(self.home)
+        self.assert_failed(self.run_script('entrypoint.sh', 'install'), 'canonical absolute')
+
+    def test_checkout_subdirectory_rejected_before_install(self):
+        nested = self.repo / 'nested'
+        (nested / 'pi').mkdir(parents=True)
+        self.assert_failed(self.run_script('entrypoint.sh', 'install', PI_REPO=str(nested),
+                           PI_ROOT=str(nested / 'pi'), PI_PREFIX=str(nested / 'pi/.runtime')), 'whole agents Git checkout')
+        self.assertFalse((nested / 'pi/.runtime').exists())
+        self.assertFalse(self.trace.exists())
+
+    def update_target(self, collision=False):
+        if collision:
+            with (self.repo / '.gitignore').open('a') as ignore:
+                ignore.write('private.scratch\n')
+            self.git('add', '.gitignore')
+            self.commit('fixture ignore')
+        first = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-qb', 'fixture-upstream')
+        (self.repo / 'tracked').write_text('upstream edit')
+        self.git('add', 'tracked')
+        if collision:
+            (self.repo / 'private.scratch').write_text('upstream collision')
+            self.git('add', '-f', 'private.scratch')
+        self.commit('fixture upstream')
+        target = self.git('rev-parse', 'HEAD')
+        remote = self.root / 'origin.git'
+        subprocess.run(['/usr/bin/git', 'clone', '-q', '--bare', self.repo, remote], check=True)
+        subprocess.run(['/usr/bin/git', '-C', remote, 'update-ref', 'refs/heads/agents/devai-team', target], check=True)
+        self.git('remote', 'add', 'origin', str(remote))
+        self.git('checkout', '-q', 'agents/devai-team')
+        return first, target
+
+    def test_explicit_update_ff_only_preserves_branch_and_ignored_runtime(self):
+        first, target = self.update_target()
+        self.seed_runtime()
+        result = self.run_script('manage.sh', 'update-check', target)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("dpkg-query -S /usr/bin/npm", self.trace())
-        self.assertNotIn(" npm=", self.trace())
-        self.assertEqual(self.trace().count("npm-version-check"), 2)
-        self.assertEqual(self.trace().count("/usr/bin/npm install --global"), 1)
-        self.assertTrue((self.prefix / "ready").exists())
-
-    def test_provision_accepts_separate_npm_pin_without_nodejs_ownership(self):
-        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision",
-                                env=self.pinned_apt_env(NPM_OWNER="npm: /usr/bin/npm"))
+        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
+        result = self.run_script('manage.sh', 'update', target)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(" npm=1 ", self.trace())
-        self.assertIn("npm-version-check", self.trace())
-        self.assertNotIn("dpkg-query", self.trace())
+        self.assertEqual(self.git('rev-parse', 'HEAD'), target)
+        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'agents/devai-team')
+        self.assertTrue((self.prefix / 'bin/pi').exists())
 
-    def test_provision_rejects_unowned_or_wrong_version_bundled_npm(self):
-        cases = [({"OWNER_RESULT": "1"}, "must be owned"),
-                 ({"NPM_OWNER": ""}, "must be owned"),
-                 ({"NPM_OWNER": "npm: /usr/bin/npm"}, "must be owned"),
-                 ({"NPM_OWNER": "other: /usr/bin/npm\nnodejs: /usr/bin/npm"}, "must be owned"),
-                 ({"NODE_PACKAGE": "install ok installed 2"}, "exact pinned nodejs"),
-                 ({"NODE_PACKAGE": "deinstall ok config-files 1"}, "exact pinned nodejs"),
-                 ({"PACKAGE_RESULT": "1"}, "cannot inspect installed nodejs")]
-        for extra, message in cases:
-            with self.subTest(extra=extra):
-                Path(self.env["TRACE"]).unlink(missing_ok=True)
-                env = self.pinned_apt_env(**extra)
-                env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
-                result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
-                self.assert_failed(result, message)
-                self.assertNotIn("runuser", self.trace())
-                self.assertEqual(list(self.deploy.glob(".build.*")), [])
+    def test_explicit_update_refuses_dirty_tree_divergence_and_wrong_branch(self):
+        first, target = self.update_target()
+        (self.repo / 'untracked').write_text('keep')
+        self.assert_failed(self.run_script('manage.sh', 'update', target), 'dirty')
+        (self.repo / 'untracked').unlink()
+        (self.repo / 'tracked').write_text('local edit')
+        self.assert_failed(self.run_script('manage.sh', 'update-check', target), 'dirty')
+        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
+        self.git('add', 'tracked')
+        self.commit('fixture local commit')
+        self.assert_failed(self.run_script('manage.sh', 'update', target), 'not a fast-forward')
+        self.git('checkout', '-qb', 'other')
+        self.assert_failed(self.run_script('manage.sh', 'update', target), 'assigned PI_BRANCH')
 
-    def test_provision_requires_usable_npm_even_when_runtime_exists(self):
-        (self.prefix / "ready").write_text("existing runtime")
-        for bundled in (True, False):
-            for status in (127, 126, 1):  # Missing, not executable, broken npm.
-                with self.subTest(bundled=bundled, status=status):
-                    Path(self.env["TRACE"]).unlink(missing_ok=True)
-                    env = self.pinned_apt_env(NPM_RESULT=str(status))
-                    if bundled:
-                        env["PI_APT_PACKAGES"] = env["PI_APT_PACKAGES"].replace(" npm=1", "")
-                    result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
-                    self.assert_failed(result, "system /usr/bin/npm must be usable")
-                    self.assertNotIn("verify ", self.trace())
-                    self.assertNotIn("runuser", self.trace())
-                    self.assertEqual((self.prefix / "ready").read_text(), "existing runtime")
+    def test_explicit_update_refuses_ignored_file_collision(self):
+        first, target = self.update_target(collision=True)
+        (self.repo / 'private.scratch').write_text('private ignored content')
+        result = self.run_script('manage.sh', 'update', target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
+        self.assertEqual((self.repo / 'private.scratch').read_text(), 'private ignored content')
 
-    def test_provision_keeps_other_required_pins_and_node_minimum(self):
-        for name in ("ca-certificates", "git", "nodejs", "ripgrep", "python3", "openssh-client", "build-essential"):
-            with self.subTest(name=name):
-                env = self.pinned_apt_env()
-                env["PI_APT_PACKAGES"] = " ".join(pin for pin in env["PI_APT_PACKAGES"].split()
-                                                   if not pin.startswith(name + "="))
-                result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=env)
-                self.assert_failed(result, "missing required apt pin: " + name)
-        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision",
-                                env=self.pinned_apt_env(NODE_RESULT="1"))
-        self.assert_failed(result, "pinned system Node must be >=22.19.0")
+    def test_status_is_read_only_and_version_does_not_dump_secrets(self):
+        # Intercept exec itself: no host systemctl invocation.
+        result = self.shell('manage.sh', 'exec() { printf "%s\\n" "$@"; }; manage_main status')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['env', '-i', 'PATH=/usr/bin:/bin', '/usr/bin/systemctl',
+                         '--no-pager', 'show', '--property=Id,LoadState,ActiveState,SubState', 'fixture.service'])
+        self.seed_runtime()
+        result = self.run_script('manage.sh', 'version')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), '0.85.1')
+        self.assert_failed(self.run_script('manage.sh', 'status', 'extra'), 'unexpected arguments')
 
-    def test_failed_stage_preserves_existing_runtime_and_evidence(self):
-        before = (self.prefix / "bin/pi").read_bytes()
-        result = self.run_shell("entrypoint.sh", self.provision_mocks() + "provision", env=self.pinned_apt_env(VERIFY_FAIL="1"))
-        self.assert_failed(result, "staged runtime verification failed")
-        self.assertIn("inspect retained stage", result.stderr)
-        self.assertEqual((self.prefix / "bin/pi").read_bytes(), before)
-        self.assertEqual(len(list(self.deploy.glob(".build.*"))), 1)
-        self.assertNotIn("provisioned.", result.stdout)
-
-    def test_real_lock_contention_with_mocked_ownership(self):
-        result = self.run_shell("entrypoint.sh", 'require_root() { :; }; trusted_path() { :; }; find() { :; }; exec 8>"$PI_ROOT/.lifecycle.lock"; flock -n 8; deployment_lock')
-        self.assert_failed(result, "another lifecycle operation")
-
-    def test_untrusted_deployment_path(self):
-        result = self.run_shell("entrypoint.sh", 'trusted_path "$PI_ROOT"')
-        self.assert_failed(result, "not root-owned/non-writable")
-
-    def test_nonroot_cannot_manage_privileged_operations(self):
-        for command in ("start", "stop", "restart"):
-            result = self.run_shell("manage.sh", "manage_main " + command, nonroot=True)
-            self.assert_failed(result, "administrator/root required")
-
-    def test_start_restart_still_require_lifecycle_lock(self):
-        for command in ("start", "restart"):
-            result = self.run_shell("manage.sh", 'deployment_lock() { die "lock busy"; }; '
-                                    'systemctl() { printf unexpected; }; manage_main ' + command)
-            self.assert_failed(result, "lock busy")
-            self.assertNotIn("unexpected", result.stdout)
-
-    def test_stop_bypasses_contract_audit_and_lock_and_preserves_exit(self):
-        result = self.run_shell("manage.sh", '''
-        require_root() { :; }
-        load_contract() { die 'broken deployment'; }
-        deployment_lock() { die 'lock busy'; }
-        systemctl() { printf '%s\n' "$*"; return 23; }
-        manage_main stop
-        ''')
-        self.assertEqual(result.returncode, 23, result.stderr)
-        self.assertEqual(result.stdout.strip(), "stop fixture-pi.service")
-
-    def test_stop_rejects_invalid_unit_and_extra_arguments(self):
-        for unit, args in [("--all", "stop"), ("other.service extra", "stop"), ("pi.service", "stop extra")]:
-            result = self.run_shell("manage.sh", 'require_root() { :; }; systemctl() { printf unexpected; }; manage_main ' + args,
-                                    env=dict(self.env, PI_UNIT=unit))
-            self.assertNotEqual(result.returncode, 0)
-            self.assertNotIn("unexpected", result.stdout)
+    def test_lock_bad_commands_and_update_inputs(self):
+        self.assert_failed(self.shell('entrypoint.sh', 'exec 8>"$PI_ROOT/.lifecycle.lock"; flock -n 8; install_runtime'), 'another lifecycle')
+        for command in ('start', 'stop', 'restart', 'logs'):
+            self.assert_failed(self.run_script('manage.sh', command), 'systemctl directly')
+        for sha in ('main', '-x', 'a' * 39, 'A' * 40):
+            self.assert_failed(self.run_script('manage.sh', 'update', sha), 'full lowercase')
+        self.assert_failed(self.run_script('entrypoint.sh', 'provision'), 'usage:')
+        self.assert_failed(self.run_script('entrypoint.sh', 'install', 'extra'), 'usage:')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

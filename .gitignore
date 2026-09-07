@@ -35,3 +35,8 @@ pi/.pi/agent/*
 
 # IDE metadata
 .idea/
+
+# Native Pi generated runtime and install evidence
+/pi/.runtime/
+/pi/.build.*/
+/pi/.lifecycle.lock

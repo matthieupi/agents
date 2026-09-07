@@ -1,14 +1,12 @@
 # Pi lifecycle — native VM and retained Docker workflows
 
-## Native `/srv/pi` lifecycle
+## Native lifecycle
 
 **Native UI and CLI launch with LOCAL execution under `PI_USER`.**
-This is not a remote-only adapter or an agent sandbox. The remote-only DevAI
-deployment must remain disabled in Ansible until its adapter and containment
-are implemented and validated; generic native launch is not gated on that work.
-The native scripts install upstream Pi and a community web UI, not Docker, OMP,
-or Claude. The existing Docker files, wrappers, `init.sh`, and checked-in `.pi`
-tree remain unchanged. Native provisioning never invokes the container initializer.
+This is not a remote-only adapter or an agent sandbox. Remote-only DevAI activation
+still requires validated adapters and containment. This pass installs only Pi and
+Pi Web; OpenCode/OMP native porting is deferred. Docker files, wrappers, `init.sh`,
+and the checked-in `.pi` tree remain independent and unchanged.
 
 ### Chosen UI and verified upstream evidence (2026-09-05)
 
@@ -36,143 +34,118 @@ Verified release-specific contracts:
   upstream package's `pi` executable is `dist/bundle/cli.js`; package includes
   shrinkwrap. This is the current upstream scope, not an OMP substitute.
 - [node-pty 1.1.0 distribution](https://unpkg.com/node-pty@1.1.0/prebuilds/):
-  only macOS/Windows prebuilds. Linux needs compilation. `build-essential` and
-   Python are required; dependency install scripts run as a separate non-root account.
-  The UI's own [postinstall](https://github.com/agegr/pi-web/blob/8463025a321b8a660e9c27b1fa9e1938e1e84c1f/bin/prepare-terminal.js)
-  is a macOS permission workaround, not a Linux build substitute.
+  Linux needs compilation. Ansible supplies compiler/Python/Node headers;
+  dependency scripts run as `PI_USER`, with `--ignore-scripts=false`.
 
 ### Ownership and configuration contract
 
 ```text
-Ansible: accounts + dedicated checkout + apt sources/pins + unit + environment
-                        |
-                        v
-root entrypoint provision --> non-root npm build --> root-owned runtime
-                        |
-                        +--> PI_USER: seed missing home defaults
-
-systemd User=PI_USER / login hook --> start.sh --> foreground pi-web / interactive pi
-                                                LOCAL execution as PI_USER
+Ansible: accounts + OS packages/pins + checkout + unit + environment
+                         |
+                         v
+PI_USER: entrypoint.sh install --> pi/.runtime + missing home defaults
+PI_USER: start.sh              --> foreground pi-web / interactive pi
 ```
 
-The checkout is the **agents repository**, with `pi/` and `agent/` at its root;
-do not clone the infrastructure repository or reuse a dirty Docker checkout.
+The checkout is the **whole agents repository**, user-owned and editable. Root
+must never execute its Pi scripts or Git. There is no root provisioning command,
+build account, shared native framework or manifest. Administrators use protected
+systemctl directly; these editable scripts never control services.
 
 | Input | Contract |
 |---|---|
-| `PI_ROOT` | Default `/srv/pi`; root-owned, no writable or symlink ancestors |
-| `PI_REPO` | Default `$PI_ROOT/repo`; dedicated root-owned Git checkout |
-| `PI_PREFIX` | Default `$PI_ROOT/runtime`; root-owned native runtime, disjoint from checkout |
-| `PI_USER` | Required existing named non-root account; home derived from passwd, owned by that user, separate from deployment |
-| `PI_BUILD_USER` | Required for provision; separate existing non-root account. Operator must exclude credentials, sudo and privileged groups; scripts verify only account identity and distinct nonzero UID |
-| `PI_UNIT` | Default `pi.service`; Ansible-created systemd unit, inactive/failed for provision/update |
-| `PI_APT_PACKAGES` | Required exact `package=version` list for `ca-certificates git nodejs ripgrep python3 openssh-client build-essential`; separate `npm` is optional only when bundled in pinned `nodejs`; extras also need pins |
-| `PI_WORKSPACE` | Required at launch: existing canonical absolute directory, outside deployment and `/opt`; CLI/launcher cwd, **not** UI session containment or remote target authorization |
-| `PI_PORT` | Required for service, decimal `1024..65535`; no implicit/random/public port |
-| `PI_WEB_PASSWORD` | Required service secret supplied by Ansible/systemd; never placed on argv |
-| `PI_WEB_ALLOWED_HOSTS` | Exact external proxy hostnames, supplied by Ansible if needed; never changes loopback binding |
+| `PI_USER` | Existing named non-root account; process UID must match exactly |
+| `PI_REPO` | Default `/srv/agents`; canonical absolute checkout owned by PI_USER |
+| `PI_ROOT` | Default `$PI_REPO/pi`; must equal that component path |
+| `PI_PREFIX` | Default `$PI_ROOT/.runtime`; must equal that generated runtime path |
+| `PI_UNIT` | Default `pi.service`; existing Ansible-owned unit, read-only status only |
+| `PI_WORKSPACE` | Required at launch: existing canonical directory outside the Pi component; the whole editable checkout may be the workspace |
+| `PI_BRANCH` | Required for explicit updates; assigned local branch, e.g. `agents/devai-team` |
+| `PI_PREVIOUS_REPO` | Optional install/initialize-home migration input; previous checkout, e.g. `/srv/pi/repo` |
+| `PI_PORT` | Required service port, decimal `1024..65535`, no leading zeroes |
+| `PI_WEB_PASSWORD` | Required service secret; never placed on argv |
+| `PI_WEB_ALLOWED_HOSTS` | Exact proxy hostnames if needed; does not change loopback binding |
 
-Use a supported Debian/Ubuntu image with Bash, coreutils, util-linux (`flock`,
-`runuser`), Git, systemd and apt already available for bootstrap. Apt sources and
-exact package versions come from inventory, not hardcoded distribution versions.
-Node must be at least `22.19.0` at `/usr/bin/node`, and `/usr/bin/npm --version`
-must succeed on every provision, including runtime reuse. When a separate `npm`
-pin is omitted, `dpkg-query` must report `/usr/bin/npm` owned by `nodejs` and
-that package installed at the exact supplied version. This supports NodeSource's
-bundled npm without requesting the conflicting distribution `npm` package.
-When using a separate npm package, supply its exact `npm=version` pin as before.
-Builds invoke `/usr/bin/npm` explicitly; an npm elsewhere on PATH is insufficient.
-The build ignores the user's npm config and uses a separate empty, root-owned
-global config in the staging directory. npm rejects using `/dev/null` for both
-config sources; distinct sources preserve configuration isolation on npm 10.
-Provide compiler/Node headers or permitted header-download access for
-node-gyp. Target npm must permit dependency scripts for the non-root build; an
-npm policy that blocks node-pty compilation must not be silently ignored.
+HOME comes from `getent passwd`, must be owned by PI_USER, and must not overlap
+the checkout. Canonical paths outside `/opt` are required; redirected private
+Pi state is refused. Scripts do not source `.env` or root-only service secrets.
+Ansible supplies separate install and runtime environments. Provider/web variables
+remain available to launched sessions/services, but never to npm build children.
 
-Ansible exclusively owns accounts, units, login hooks, proxy/TLS, secret delivery,
-firewall, SSH identity/host-key trust and target policy. No units or accounts are
-created here. The loopback HTTP listener cannot be reached directly from the
-separate nginx VM: protected backend transport is still an infrastructure gate,
-not permission to bind public/LAN HTTP. Authentication and TLS remain mandatory.
+### Commands and installation
 
-### Commands (on the intended VM only)
-
-Supply the contract above through administrator-managed configuration; scripts
-do not source a repo `.env`, run sudo, or install anything at session startup.
+All native commands run explicitly **as PI_USER**, never root:
 
 ```bash
-# Administrator, with approved inventory environment and a stopped unit:
-bash /srv/pi/repo/pi/scripts/entrypoint.sh provision
-bash /srv/pi/repo/pi/scripts/manage.sh version
-bash /srv/pi/repo/pi/scripts/manage.sh status
-bash /srv/pi/repo/pi/scripts/manage.sh logs
-bash /srv/pi/repo/pi/scripts/manage.sh stop
-bash /srv/pi/repo/pi/scripts/manage.sh update-check "$REVIEWED_FULL_SHA"
-bash /srv/pi/repo/pi/scripts/manage.sh update "$REVIEWED_FULL_SHA"
-
-# Native LOCAL execution (not permission to enable remote-only DevAI):
-# Run these explicitly as PI_USER, with its supplied environment:
-bash /srv/pi/repo/pi/scripts/start.sh service
-bash /srv/pi/repo/pi/scripts/start.sh session
-# Administrator entrypoints for the supplied native unit:
-bash /srv/pi/repo/pi/scripts/manage.sh start
-bash /srv/pi/repo/pi/scripts/manage.sh restart
+bash "$PI_REPO/pi/scripts/entrypoint.sh" install
+bash "$PI_REPO/pi/scripts/entrypoint.sh" initialize-home
+bash "$PI_REPO/pi/scripts/start.sh" session -p "Review this checkout"
+bash "$PI_REPO/pi/scripts/start.sh" service
+bash "$PI_REPO/pi/scripts/manage.sh" status
+bash "$PI_REPO/pi/scripts/manage.sh" version
+bash "$PI_REPO/pi/scripts/manage.sh" update-check "$REVIEWED_FULL_SHA"
+bash "$PI_REPO/pi/scripts/manage.sh" update "$REVIEWED_FULL_SHA"
 ```
 
-`update-check` fetches the explicit 40-character lowercase commit SHA into
-`FETCH_HEAD`, but does not change HEAD or install packages. Both update commands
-hold the lifecycle lock and reject tracked, untracked **and ignored** checkout
-state. `update` additionally requires a stopped unit, then checks out the exact
-commit detached, without overwriting ignored files. It does not automatically
-provision or restart. No `pull`, moving branch/tag, reset, clean or auto-rollback.
-The checkout SHA is a revision lock, **not** a signature verification mechanism;
-origin/access and commit approval belong to the administrator. Updates affect the
-whole dedicated agents checkout, including shared resources, not just `pi/`.
+Ansible exclusively supplies system Node >=22.19.0, `/usr/bin/npm`, Git, Bash,
+coreutils, flock, getent, compiler/Python/headers and certificates. No APT work or
+OS pins are implemented here; `PI_BUILD_USER` is no longer used.
 
-`stop` requires only root authorization and a valid `PI_UNIT` (default
-`pi.service`); it bypasses account/path checks, recursive audits and the lifecycle
-lock so damaged deployments and busy installers cannot prevent emergency stop.
-Start/restart still take the lifecycle lock. Close unmanaged CLI sessions separately.
+Install stages npm under `$PI_ROOT/.build.*`, using `env -i`, an empty HOME/cache
+and **distinct empty npm user/global config files**. The install timeout is 600
+seconds with a kill grace; verification calls are bounded too. Package metadata,
+`pi --version`, Pi Web help and native PTY loading are checked before reuse or
+promotion. A matching runtime is reused. Install does **not** require a clean
+checkout, so agent edits and branch commits survive reapply.
 
-Provisioning uses an empty staging prefix and private npm HOME. It runs npm and
-dependency scripts as `PI_BUILD_USER`, verifies metadata, native PTY loading,
-`pi --version` and `pi-web --help` as `PI_USER`, then promotes the root-owned
-runtime. A matching verified runtime is reused on repeated provisioning. Failed
-stages remain at the reported `.build.*` path for administrator inspection. If a
-promotion rename fails, an old runtime may be under `previous/` there; there is
-**no automatic rollback**. Successful promotion removes the old staged runtime.
-Drain unmanaged CLI sessions before changing runtime or checkout; systemd status
-does not prove that all manually started sessions have exited.
+Build/verification failure leaves the existing runtime untouched and retains the
+ignored stage/logs. Promotion failure attempts to restore the previous runtime;
+the promoted path is verified again before removing the stage. The two renames
+are not crash-atomic: after interruption inspect `.build.*/previous` before
+recovery. Install then initializes missing home defaults as the same user. It
+never starts/stops a service. Drain sessions and stop the concerned unit through
+administrator-owned tools before replacing an in-use runtime.
 
-Top-level Pi/UI versions are exact; the UI still has transitive npm semver ranges
-and no published shrinkwrap. Fresh installs are **not a fully reproducible supply
-chain lockset**. Preserve/review resolved dependency evidence during target-image
-validation before production acceptance. No controller installation is required.
+The runtime, build directories and `.lifecycle.lock` are Git-ignored. A shared Pi
+lock serializes install, standalone initialization and explicit updates; it does
+not coordinate arbitrary user edits or direct systemctl calls. Dependency scripts
+are trusted supply-chain code with PI_USER's filesystem access, **not sandboxed**
+by the clean environment. Exact top-level versions do not fully lock transitive
+dependencies. Real concerned-host package/service validation remains required.
 
-`runuser` is an account switch, **not a sandbox**: dependency scripts can access
-anything permitted to the builder, use the network and leave background processes.
-Changing runtime ownership does not prove those processes have exited or make
-build output trustworthy. Runtime verification also executes built code as
-`PI_USER`. Treat dependencies as trusted supply-chain input; stronger build
-containment and artifact review are external responsibilities.
+### Explicit Git updates and home preservation
 
-### Home preservation and remote-only deployment boundary
+Updates require a clean tracked/untracked tree, the assigned `PI_BRANCH`, and a
+full lowercase SHA. Ignored runtime/build state is allowed. Both commands fetch
+the assigned origin branch without tags; the requested SHA must be on its history
+and a descendant of local HEAD. `update-check` leaves HEAD unchanged. `update`
+uses `merge --ff-only --no-overwrite-ignore`, preserving the branch and refusing
+divergence or ignored-file collisions. No reset, clean, forced checkout, commits,
+pushes, config writes, dependency installs or service actions. Git output from
+fetch is suppressed to avoid exposing credential-bearing URLs. Branch selection
+does not enforce GitHub permissions; infrastructure owns source approval and any
+future server-side publication restrictions.
 
-`initialize-home` runs as `PI_USER`, creates private `~/.pi/agent`, links
-`agents`, `prompts`, and `skills` to the checkout's shared `agent/` tree, and seeds
-only missing tracked settings, TypeScript extensions and JSON themes. It never
-overwrites existing files or relocates conflicting resources; conflicts fail
-with their path. It does not add a second `.agents` discovery tree. Review any
-existing discovery tree for duplicate resources before eventual activation.
+`initialize-home` retains `~/.pi/agent`, auth, sessions, databases, model settings
+and real user resource directories. Only `agents`, `prompts`, `skills` links whose
+literal targets match the new checkout or explicitly supplied previous checkout
+are reused/repointed. Unknown links and real directories are preserved with a
+notice. No `.agents` discovery tree is created or removed.
 
-Pi/OMP auth, databases, sessions, model settings, prompts and skills remain
-untouched. No Docker auth/state is copied from the checkout. Docker-specific
-`models.json`/`models.yml` defaults are deliberately not seeded into native home;
-Ansible/provider configuration must supply reachable, authorized endpoints.
-Seeded extensions are preserved, not claimed compatible or remote-safe at the
-new pin. Existing `config.yml` and OMP `agent.db` are never modified.
+Only missing tracked settings, TypeScript extensions and JSON themes are copied
+from the committed checkout defaults. Existing files, including concurrently
+created files, win. No auth, sessions, OMP config/databases, Docker model endpoints
+or ignored npm state are seeded. Linked shared resources reflect checkout edits;
+copied defaults/private config do not automatically change with later repo edits.
+Review and merge those deliberately. Generated runtime packages are not commit-back
+source, and this checkout is not the upstream npm packages' source history.
 
-The launch commands are:
+Migration retains the existing passwd home and `/srv/pi/repo`, `/srv/pi/runtime`,
+unit and service credentials for protected-SHA rollback. These scripts neither
+delete nor rewrite the old deployment. Publication and live cutover require later
+explicit approval and infrastructure's normal source preflight.
+
+### Launch behavior and verification
 
 ```text
 cd "$PI_WORKSPACE"
@@ -181,40 +154,21 @@ pi [arguments...]                                      # session
 ```
 
 The [pinned Pi CLI](https://github.com/earendil-works/pi/blob/d981de1229ef899957bbe968bc8dcda02a21f477/packages/coding-agent/src/main.ts)
-uses process cwd for new sessions; resuming a session can select its saved cwd.
-The pinned UI parser accepts no workspace positional argument or `--cwd` flag.
-Its launcher starts Next from the installed **package directory**, not
-`PI_WORKSPACE`; select the intended local project in the UI. Shell cwd is not
-UI session isolation. Both UI and CLI can operate locally with the account's
-permissions, including extensions and UI filesystem/Git/terminal routes.
-
-Keep remote-only DevAI activation **disabled in Ansible** until the separate
-adapter work verifies:
-
-- Current Pi callback signatures; strict validated target/SSH host keys and
-  successful pre-mount for every worker/session; isolated target/cwd.
-- Bash/read/write/edit/search, cancellation, RPC bash, extension-spawned agents,
-  disconnects and target revocation, with no local fallback.
-- UI SDK session creation plus file/upload/Git/worktree/package-management and
-  [local PTY routes](https://github.com/agegr/pi-web/blob/8463025a321b8a660e9c27b1fa9e1938e1e84c1f/lib/terminal-manager.ts).
-  A Pi tool extension alone does not cover these routes. The upstream launcher
-  starts Next from the package directory, so shell cwd alone is not session isolation.
-- Browser session/auth behavior and externally enforced containment. Merely
-  declaring an adapter ready cannot satisfy the VM plan's remote-only policy.
-
-### Verification
+uses cwd for new sessions; resuming may select saved cwd. The UI launches Next
+from the installed package directory, not PI_WORKSPACE; choose the project in
+the UI. Shell cwd is not UI isolation. A Pi tool extension alone does not cover
+UI filesystem/Git/terminal routes. Keep remote-only activation disabled until
+adapters, authenticated proxy transport and containment are validated separately.
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi/tests -v
-bash -n pi/scripts/entrypoint.sh pi/scripts/start.sh pi/scripts/manage.sh
-# If available:
-shellcheck -x -P pi/scripts pi/scripts/{entrypoint,start,manage}.sh
+python3 -B -m unittest discover -s pi/tests -v
+for script in pi/scripts/*.sh; do bash -n "$script"; done
 ```
 
-Run from the agents repository. Tests mock package/service/network operations;
-launch tests execute fixture binaries without an adapter override. No live
-installation, server, provider session, proxy or remote adapter is exercised.
-Root-only tests are explicitly skipped when running unprivileged.
+Tests use non-root temporary Git/build/launch fixtures and a real npm config-only
+probe. They do not install controller dependencies or change live services. The
+actual-root refusal test skips on non-root runners; fixture Git/install tests
+skip on root runners. Docker workflows below retain their original lifecycle.
 
 ## Retained Docker workflows
 

@@ -1,7 +1,7 @@
 # Shared Config Defaults
 
 Native, non-Docker lifecycle documentation: [OpenCode](opencode/README.md#native-lifecycle)
-and [Pi](pi/README.md#native-srvpi-lifecycle). Both execute locally as non-root
+and [Pi](pi/README.md#native-lifecycle). Both execute locally as non-root
 accounts, not in a sandbox. Remote-only DevAI activation must remain disabled in
 Ansible until adapted and validated.
 

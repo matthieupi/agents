@@ -1,4 +1,4 @@
-"""Exercise the installer's config flags with real npm, without installing/network."""
+"""Parse the Bash installer's flags with real npm. No install or network access."""
 import os
 from pathlib import Path
 import re
@@ -12,31 +12,26 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/entrypoint.sh'
 
 
-@unittest.skipUnless(shutil.which('npm'), 'real npm required')
+@unittest.skipUnless(shutil.which('npm') and shutil.which('node') and os.geteuid() != 0,
+                     'real npm/Node and a non-root runner required')
 class NpmConfigTests(unittest.TestCase):
-    def probe(self, poisoned_home=False):
+    def test_distinct_empty_configs_and_scripts_enabled(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
-            (stage / 'npm-globalrc').touch(mode=0o644)
-            if poisoned_home:
-                (stage / '.npmrc').write_text('registry=https://example.invalid/\n')
+            home = stage / 'home'
+            home.mkdir()
+            for name in ('npm-userrc', 'npm-globalrc'):
+                (stage / name).touch()
+            (home / '.npmrc').write_text('registry=https://invalid.example/\n')
             text = SCRIPT.read_text()
-            flags = [shlex.split(match)[0].replace('$stage', temporary)
-                     for match in re.findall(r'--(?:user|global)config=(?:"[^"]+"|\S+)', text)]
+            flags = list(dict.fromkeys(shlex.split(match)[0].replace('$stage', temporary)
+                         for match in re.findall(r'--(?:user|global)config=(?:"[^"]+"|\S+)', text)))
             self.assertEqual(len(flags), 2)
-            return subprocess.run([shutil.which('npm'), 'config', 'get', 'registry', '--global', *flags],
-                                  env={'HOME': temporary, 'PATH': os.environ['PATH']},
-                                  cwd=temporary, text=True, capture_output=True, timeout=15)
-
-    def test_distinct_config_sources_are_accepted_by_real_npm(self):
-        result = self.probe()
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_empty_configs_preserve_public_registry_default(self):
-        result = self.probe()
-        self.assertEqual(result.stdout.strip(), 'https://registry.npmjs.org/', result.stderr)
-
-    def test_home_npmrc_cannot_redirect_installer(self):
-        result = self.probe(poisoned_home=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'https://registry.npmjs.org/')
+            self.assertNotEqual(flags[0].split('=', 1)[1], flags[1].split('=', 1)[1])
+            script_flag, = re.findall(r'--ignore-scripts=\w+', text)
+            env = {'HOME': str(home), 'PATH': str(Path(shutil.which('node')).parent) + ':/usr/bin:/bin'}
+            for key, expected in [('registry', 'https://registry.npmjs.org/'), ('ignore-scripts', 'false')]:
+                result = subprocess.run([shutil.which('npm'), 'config', 'get', key, '--global', *flags, script_flag],
+                                        env=env, cwd=home, text=True, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
