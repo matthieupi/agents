@@ -167,6 +167,9 @@ provision() (
         trap 'printf "Provision failed; inspect retained stage: %s\\n" "$stage" >&2' EXIT
         install -d -o "$build_uid" -g "$build_gid" -m 0700 "$stage/home"
         install -d -o "$build_uid" -g "$build_gid" -m 0755 "$stage/runtime"
+        # npm rejects loading the same path as both user and global config.
+        # Keep this empty global config outside build-writable directories.
+        install -o root -g root -m 0644 /dev/null "$stage/npm-globalrc"
         (
             cd -- "$stage/home"
             # node-pty builds on Linux. All npm/dependency lifecycle code runs as
@@ -174,7 +177,7 @@ provision() (
             # trusted supply-chain input; runuser does not contain child processes.
             timeout 600 runuser -u "$PI_BUILD_USER" -- env -i HOME="$stage/home" PATH=/usr/bin:/bin \
                 /usr/bin/npm install --global --prefix "$stage/runtime" --cache "$stage/home/cache" \
-                --registry=https://registry.npmjs.org --userconfig=/dev/null --globalconfig=/dev/null \
+                --registry=https://registry.npmjs.org --userconfig=/dev/null --globalconfig="$stage/npm-globalrc" \
                 --ignore-scripts=false --no-audit --no-fund --include=optional \
                 --fetch-retries=2 --fetch-timeout=60000 \
                 "@earendil-works/pi-coding-agent@$PI_VERSION" "@agegr/pi-web@$PI_UI_VERSION"

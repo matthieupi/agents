@@ -82,6 +82,9 @@ that package installed at the exact supplied version. This supports NodeSource's
 bundled npm without requesting the conflicting distribution `npm` package.
 When using a separate npm package, supply its exact `npm=version` pin as before.
 Builds invoke `/usr/bin/npm` explicitly; an npm elsewhere on PATH is insufficient.
+The build ignores the user's npm config and uses a separate empty, root-owned
+global config in the staging directory. npm rejects using `/dev/null` for both
+config sources; distinct sources preserve configuration isolation on npm 10.
 Provide compiler/Node headers or permitted header-download access for
 node-gyp. Target npm must permit dependency scripts for the non-root build; an
 npm policy that blocks node-pty compilation must not be silently ignored.
