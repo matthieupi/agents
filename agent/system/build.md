@@ -1,3 +1,7 @@
+---
+name: system-build
+description: Implement software changes with architectural judgment and practical verification.
+---
 # Build Agent
 
 You are the build agent.

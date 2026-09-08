@@ -5,12 +5,33 @@ Own image `lab/omp:latest`, component `omp`, non-root account `/home/omp`, and
 private `.omp` state. No native installer, web frontend, Ansible activation,
 Docker socket, published ports, or automatic migration. Pi/COO remain vanilla Pi.
 
-**Implementation status (2026-09-08):** pinned source and local diffs reviewed.
+**Implementation status (2026-09-08): source complete**, including Pi decoupling,
+legacy YAML cleanup, image-home ownership, per-path init diagnostics and the leading
+`omp -r` image-only rebuild alias. Pinned source and local diffs reviewed.
 By explicit request, no tests were added/run, no syntax checks or runtime probes
 were run, and no images were built or containers/deployments changed. Source
 compatibility findings below are not a claim of successful runtime validation.
 Automated test creation/execution is waived, not a deferred acceptance gate.
 Final manual verification/validation is user-owned and **pending**, not passed.
+The latest user-reported remote reuse failure remains unresolved; see below.
+
+### Known runtime follow-ups
+
+- The latest reported remote launch still fails with `Container ownership/configuration
+  contract failed; inspect its non-secret metadata privately.` The validator catches
+  contract failures with this generic message; the actual failing condition has not
+  been established. Do not assume the image-home fix resolves this separate failure.
+- Per-path init diagnostics apply only when init runs; they do not diagnose a
+  rejection by the host-side reuse validator. Remote bind access remains unverified.
+- Warnings-only contract simplification and startup-readiness changes were proposed,
+  **not approved or implemented**. Reuse remains fail-closed, and the runner still
+  proceeds to exec without a new readiness wait. Rebuild does not recreate containers.
+- User-owned follow-through: privately review the concerned container's non-secret
+  metadata against `container-contract.py`, record the failing condition, and use
+  the scoped rebuild/recreate procedure below only when appropriate. Do not share
+  full Docker inspect output (it can contain provider secrets), bypass checks, or
+  treat recreation as a verified fix. Manual launch/discovery/auth/resume acceptance
+  remains pending. No runtime operations were performed for this closeout.
 
 ## Commands and prerequisites
 
@@ -36,7 +57,11 @@ export SSH_DIR_PATH="$(realpath ssh)"
 export OMP_NETWORK=devai-xmist   # must already exist on the selected daemon
 ./omp build                    # later operator action; not run in this pass
 ./omp /absolute/project
-./omp -r                       # upstream resume picker, NOT rebuild
+./omp -r                       # image-only rebuild; existing containers unchanged
+./omp --resume                 # upstream resume picker
+./omp session -r               # native short resume flag through session escape
+./omp -- -r                    # native short resume flag through -- escape
+./omp /absolute/project -r     # nested -r remains native resume
 ./omp session /absolute/project --resume SESSION_ID
 ./omp session -- --help         # upstream help, not wrapper help
 ./omp session -- build          # prompt named build
@@ -53,6 +78,12 @@ The installed container executable is always `/usr/local/bin/omp`, never this
 repository's host wrapper, even with the checkout as workspace.
 
 ### Argument contract
+
+The `omp` facade reserves **leading `-r` for image-only rebuild**, consistent with
+the other harnesses: it dispatches to `omp-mgr rebuild`, preserving following
+arguments for the manager's normal validation (rebuild accepts no extras).
+`omp session -r`, `omp -- -r`, `omp --resume`, and `omp /absolute/project -r`
+remain native resume forms. No remaining arguments are scanned for management flags.
 
 `omp-run [existing-directory] [--] [OMP_ARGS...]` consumes at most one leading
 existing directory and one harness delimiter. A leading `--` skips workspace
@@ -89,7 +120,7 @@ omp -> omp-run -> inspect/create owned workspace container -> init -> /usr/local
   startup command and basic no-host-control constraints. Unknown extra mounts,
   published ports or privilege changes fail. Stop/remove/logs still work for
   stale configurations, but require ownership labels.
-- `build`, `rebuild`, `update` only build the image. They never fetch Git, update
+- `build`, `rebuild`, `update`, and leading facade `-r` only build the image. They never fetch Git, update
   an installation in place, or remove/refresh containers. A successful rebuild
   requires explicit recreation when image IDs differ. A failed build leaves
   containers alone. Do not use upstream `omp update` in a durable image.
@@ -128,6 +159,7 @@ container-contract.py
   + main() -> None
 init.sh
   + link_resource(CURRENT_PATH, SHARED_PATH)
+  + import_system_agents()
   + init_home()
 Pi removed interfaces
   - pi --oh [workspace] [OMP_ARGS...]
@@ -301,21 +333,45 @@ Read-only public package-source review used **18.0.4**, not latest docs:
   Bundled task agents remain available independently of this harness.
 - [Argument parser](https://unpkg.com/@oh-my-pi/pi-coding-agent@18.0.4/src/cli/args.ts)
   and [flag table](https://unpkg.com/@oh-my-pi/pi-coding-agent@18.0.4/src/cli/flag-tables.ts):
-  `-r`/`--resume`/`--session` take an optional nonempty, non-flag next value;
-  without it they select the picker. The wrapper does not reinterpret this arity.
+  upstream `-r`/`--resume`/`--session` take an optional nonempty, non-flag next value;
+  without it they select the picker. This native arity is unchanged for `omp-run`
+  and facade-forwarded resume arguments. Only leading facade `omp -r` is intercepted
+  for image rebuild; it does not invoke the upstream resume parser.
 
 ```text
 /opt/agent/system/build.md --------> ~/.omp/agent/SYSTEM.md (reference)
+/opt/agent/system/<role>.md -------> ~/.omp/agent/agents/system-<role>.md (file links)
 /opt/agent/commands ---------------> ~/.omp/agent/commands (one reference)
 /opt/agent/skills/<group>/<skill> --> ~/.omp/agent/skills/<skill> (directory links)
 ```
 
-Plain `agent/system/*.md` personas lack OMP agent frontmatter. They are consumed
-as a selected system prompt, **not falsely registered as task agents**. The
-default is `build`; choosing another persona requires explicit removal of only
+The eight `agent/system/*.md` personas now carry only portable `name`/`description`
+frontmatter. Init imports top-level Markdown through individual symlinks into the
+native user task-agent directory, `~/.omp/agent/agents`. Names are `system-build`,
+`system-coo`, `system-devops`, `system-explore`, `system-plan`, `system-plan-inline`,
+`system-reviewer`, and `system-secops`, avoiding unprefixed bundled-agent overrides.
+Task discovery parses the actual linked body into `systemPrompt`; there are no
+copies or instructions asking the model to read another file. No GSD import.
+Simple basenames and canonical targets directly inside the shared system root are
+required. Exact links are reused; conflicting files/directories/links are preserved
+and fatal. No stale imports are deleted after source renames/removals; reconcile
+only the affected links explicitly. Project definitions can still override names.
+
+The primary `SYSTEM.md` link and `OMP_PERSONA` selection remain unchanged.
+`SYSTEM.md` is a plain Markdown consumer, so its prompt includes the small YAML
+metadata header; it does not strip it like task discovery does. The prompt body
+is unchanged. The default is `build`; choosing another persona requires explicit removal of only
 the old recognized `SYSTEM.md` link while OMP is stopped, then recreation with
 the new `OMP_PERSONA`. Unknown links/files/directories always survive conflicts;
 init fails with a notice rather than silently using a different resource.
+
+Use the exact `system-*` task-agent names for these shared roles. Existing bodies
+and skills that request `explore`, `plan`, or other unprefixed roles have not been
+rewritten or aliased; those names may select OMP built-ins, not shared definitions.
+No tool/model restrictions or permissions are added to shared metadata, and role
+instructions are not a sandbox. This import is source-reviewed only; actual task
+discovery/body loading, repeat-init and conflict handling remain user-owned manual
+acceptance. No tests/checks/builds/runtime operations were performed for it.
 
 `agent/prompts -> commands` is the same source, so no second prompt link is
 created. Top-level `fix-test.md` and `start-web.md` are the supported command
@@ -326,7 +382,7 @@ compatible. Workspace-native `.omp` and cross-tool discovery may override or
 collide with global resources under upstream precedence; the harness does not
 disable project discovery or manufacture a `.agents` tree.
 
-Skill wiring is the only layout adapter: a bounded scan of direct and one-group
+Skill wiring remains unchanged: a bounded scan of direct and one-group
 skill directories creates individual references. No recursive shared-root link,
 no copied bodies, no Pi themes/settings/extensions. Duplicate directory basenames
 with different targets fail as conflicts. Stale links are not silently removed:

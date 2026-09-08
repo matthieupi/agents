@@ -1,3 +1,7 @@
+---
+name: system-coo
+description: Coordinate priorities, delegation, and operational accountability.
+---
 # COO Agent
 
 ## Role

@@ -1,5 +1,36 @@
 # Oh My Pi Coexistence Plan
 
+**Historical / superseded (2026-09-08):** retained as source-design evidence, not
+renamed as a completed extraction artifact. [Standalone OMP](../../omp/README.md)
+now owns its image and private state; `pi --oh`, shared runtime selection, and the
+two tracked OMP YAML defaults in Pi were removed. Do not execute the old coexistence
+or migration instructions below against current state. Extraction source and its
+ownership/diagnostic/rebuild follow-ups are complete, but user-owned manual
+acceptance and the reported remote reuse-contract failure remain open. Automated
+tests are waived for extraction; legacy credential/history migration is out of scope.
+
+**Delivered follow-up (2026-09-08, source only):** shared system-agent import is now
+implemented for standalone OMP Docker and Pi Docker/native home initialization.
+Eight unchanged prompt bodies gained only portable `name: system-<role>` and
+`description` frontmatter. OMP links them into `~/.omp/agent/agents`; Pi links them
+into the existing `/system` extension's `~/.pi/agent/agents` discovery directory.
+Pi's recognized legacy root link is converted without modifying its target data;
+unknown links and entry conflicts are preserved and fatal. Import is bounded,
+canonical-target checked, idempotent, and performs no stale cleanup or GSD import.
+OMP primary persona/skills and Pi presets are unchanged. Pi's project-only team,
+chain and expert pools are not broadened; unprefixed delegation names are not aliases.
+No new framework, permissions metadata, reuse-validator or startup-readiness changes.
+
+Method signature additions:
+```text
+omp/init.sh: + import_system_agents()
+pi/init.sh:  + import_system_agents(SHARED_ROOT, DESTINATION, PREVIOUS_SHARED_ROOT?)
+```
+Existing initialization signatures are unchanged. Source/diff review only; no tests
+added/run, syntax/build checks or Docker/native/deployment operations. Manual discovery,
+conflicts/repeat-init/legacy-link conversion and native Pi extension compatibility
+remain pending. See current OMP/Pi READMEs; the historical plan below remains superseded.
+
 ## ✅ Recommendation
 
 Install a pinned Oh My Pi (OMP) release alongside upstream Pi, preserve `./pi` as the existing Pi launcher, and make `./pi --oh [args...]` select the `omp` executable. Keep the image/container naming and detached keep-alive lifecycle unchanged; select the actual agent only at the existing `docker exec` boundary.

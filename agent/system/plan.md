@@ -1,3 +1,7 @@
+---
+name: system-plan
+description: Explore systems and design executable implementation plans.
+---
 # Plan Agent
 
 You are the plan agent.

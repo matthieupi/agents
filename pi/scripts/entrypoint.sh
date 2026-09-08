@@ -57,9 +57,11 @@ initialize_home() (
         [[ "$PI_PREVIOUS_REPO" == /* && "$PI_PREVIOUS_REPO" != / && "$PI_PREVIOUS_REPO" == "$(realpath -m -- "$PI_PREVIOUS_REPO")" ]] || die 'invalid PI_PREVIOUS_REPO'
     fi
     mkdir -p -- "$PI_CODING_AGENT_DIR"
-    for name in agents prompts skills; do
+    # Reuse the container's resource importer, not its home/lifecycle setup.
+    source "$PI_ROOT/init.sh"
+    import_system_agents "$PI_REPO/agent" "$PI_CODING_AGENT_DIR/agents" "${PI_PREVIOUS_REPO:+$PI_PREVIOUS_REPO/agent}"
+    for name in prompts skills; do
         source="$PI_REPO/agent/$name"
-        [[ "$name" != agents ]] || source="$PI_REPO/agent"
         [[ -d "$source" ]] || die "missing shared resource: $source"
         destination="$PI_CODING_AGENT_DIR/$name"
         if [[ -e "$destination" || -L "$destination" ]]; then

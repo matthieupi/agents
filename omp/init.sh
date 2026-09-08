@@ -16,6 +16,27 @@ link_resource() {
     ln -sT -- "$shared" "$current"
 }
 
+import_system_agents() (
+    local root agents="$HOME/.omp/agent/agents" file name target
+    root="$(realpath -e -- /opt/agent/system)"
+    [[ -d "$root" && ! -L "$agents" ]] || {
+        printf '[omp] Missing system root or conflicting agents directory: %s\n' "$agents" >&2; return 1;
+    }
+    mkdir -p -- "$agents"
+    shopt -s nullglob
+    for file in "$root"/*.md; do
+        name="${file##*/}"
+        [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*\.md$ ]] || {
+            printf '[omp] Invalid system agent basename: %s\n' "$name" >&2; return 1;
+        }
+        target="$(realpath -e -- "$file")"
+        [[ -f "$target" && "${target%/*}" == "$root" && "${target##*/}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*\.md$ ]] || {
+            printf '[omp] Refusing system agent outside shared system root: %s\n' "$file" >&2; return 1;
+        }
+        link_resource "$agents/system-$name" "$target"
+    done
+)
+
 init_home() {
     local runtime_uid runtime_gid account account_name account_password account_uid account_gid account_rest
     runtime_uid="$(id -u)"
@@ -58,8 +79,9 @@ init_home() {
     [[ "$persona" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || {
         printf '[omp] OMP_PERSONA must be a simple shared system Markdown basename.\n' >&2; return 1;
     }
-    # SYSTEM.md reads plain Markdown; task agents require different frontmatter.
+    # SYSTEM.md reads plain Markdown, including the portable agent metadata.
     link_resource "$HOME/.omp/agent/SYSTEM.md" "/opt/agent/system/$persona.md"
+    import_system_agents
     # prompts is an alias of commands in the shared repository: expose once.
     link_resource "$HOME/.omp/agent/commands" /opt/agent/commands
     # Native OMP scans only skills/<name>/SKILL.md. Shared skills are grouped
