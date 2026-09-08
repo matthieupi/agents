@@ -1,164 +1,174 @@
 # OpenCode - Native and Container Workflows
 
-[OpenCode](https://opencode.ai/) for local and remote development workflows. Native lifecycle scripts are independent of the existing Docker wrappers and do not modify Docker configuration or state.
-
 ## Native lifecycle
 
-Native UI and CLI execute **locally** with the supplied account's permissions;
-they are not a sandbox or remote-only adapter. Remote-only DevAI deployment must
-remain disabled in Ansible until its adapter and containment are validated.
+Native OpenCode executes **locally as the supplied account**, not inside a sandbox
+or remote-only adapter. Docker workflows below remain independent and unchanged.
+Root must never execute editable checkout scripts or Git; infrastructure-owned
+wrappers must reject root before loading these scripts.
 
-The default native deployment is `/srv/opencode`. Use a **dedicated root-owned clone of the agents repository**, not an agent-editable workspace or a Git worktree/submodule checkout with a `.git` file. The scripts require an existing named non-root account and home; they never create accounts, grant sudo, install units, or write login hooks.
+### Environment and ownership contract
 
-```text
-Ansible (account, checkout, pins, unit, secrets, login hook, proxy/TLS/access)
-    |
-    +-- root: entrypoint.sh provision ----> pinned runtime + non-root home setup
-    +-- root: manage.sh -----------------> systemd / locked Git checkout update
-    |
-    +-- User=opencode: start.sh service --> exec opencode web (127.0.0.1)
-    +-- login user:    start.sh session --> exec opencode [CLI arguments]
+| Input | Contract |
+|---|---|
+| `OPENCODE_USER` | Existing named non-root account; both UID and EUID must match |
+| `OPENCODE_REPO` | Default `/srv/agents`; full user-owned Git clone, not a worktree/submodule |
+| `OPENCODE_ROOT` | Must equal `$OPENCODE_REPO/opencode` (default) |
+| `OPENCODE_PREFIX` | Must equal `$OPENCODE_ROOT/.runtime` (default) |
+| `OPENCODE_UNIT` | Default `opencode.service`; read-only status only |
+| `OPENCODE_VERSION` | **Install only:** required exact stable `X.Y.Z`; no default/latest |
+| `OPENCODE_BRANCH` | Update/update-check only: required assigned local branch |
+| `OPENCODE_PREVIOUS_REPO` | Optional initialize-home input: explicit known old checkout for link migration |
+| `OPENCODE_WORKSPACE` | Launch only: existing canonical absolute directory, including workspaces outside checkout |
+| `OPENCODE_PORT` | Service only: decimal `1024..65535`, no leading zeroes |
+| `OPENCODE_SERVER_PASSWORD` | Service only: mandatory nonempty secret, never argv |
+| `OPENCODE_SERVER_USERNAME` | Optional service username; upstream default otherwise |
+| Provider credentials | Service/session only, supplied securely or through user authentication |
 
-/srv/opencode/
-  repo/agent/{commands,skills,system,gsd}  shared resources, root-owned
-  repo/opencode/scripts/                 this native lifecycle
-  runtime/                               root-owned npm prefix
-  .lifecycle.lock                        shared provision/update lock
-<account home>/.config/opencode/          preserved user config + direct resource links
-<account home>/.local/share/opencode/     private sessions and authentication
-<account home>/.cache/opencode/           private runtime/plugin cache
-```
+HOME/UID/GID come from passwd. The account must own its existing home, checkout
+and component. Home and checkout cannot overlap; canonical paths outside `/opt`
+are required. No service environment file is sourced. Start sets HOME, USER,
+LOGNAME, all XDG config/data/cache/**state** paths beneath passwd HOME,
+`OPENCODE_CONFIG_DIR=$HOME/.config/opencode` and `OPENCODE_DISABLE_AUTOUPDATE=1`.
+It clears `OPENCODE_BIN_PATH`, `OPENCODE_TEST_HOME`, `NODE_OPTIONS`, `NODE_PATH`.
+Session arguments are passed unchanged and VERSION is not needed at launch.
 
-### Exact environment contract
-
-These are process environment variables, **not a shell file sourced by the scripts**. Ansible should pass provisioning/management inputs through its command environment. systemd reads its own protected `EnvironmentFile`; login hooks supply the session environment separately.
-
-| Variable | Required / default | Consumer |
-|---|---|---|
-| `OPENCODE_USER` | Required existing named account; UID must not be 0 | All scripts |
-| `OPENCODE_ROOT` | `/srv/opencode` | All scripts; lock and temporary installer files |
-| `OPENCODE_REPO` | `${OPENCODE_ROOT}/repo` | All scripts; agents repository root, not `opencode/` |
-| `OPENCODE_PREFIX` | `${OPENCODE_ROOT}/runtime` | All scripts; npm runtime prefix, disjoint from checkout |
-| `OPENCODE_UNIT` | `opencode.service`; simple name ending in `.service` | Provision and management |
-| `OPENCODE_VERSION` | Required exact stable `X.Y.Z`; example: `1.2.15` | Provision only |
-| `OPENCODE_APT_PACKAGES` | Required single-line whitespace-separated `package=version` pins | Provision only |
-| `OPENCODE_WORKSPACE` | Required existing absolute directory; supplied account needs access | Service/session |
-| `OPENCODE_PORT` | Required decimal `1024..65535`, without leading zeroes | Service only |
-| `OPENCODE_SERVER_PASSWORD` | Required nonempty secret; never placed in CLI arguments | Service only |
-| `OPENCODE_SERVER_USERNAME` | Optional upstream Basic Auth username (upstream default `opencode`) | Service |
-| Provider credentials, e.g. `OPENAI_API_KEY` | Supplied securely by Ansible or user authentication | Service/session |
-
-Account home/UID/GID come from `getent passwd`; HOME is not a deployment input. Start sets `HOME`, `USER`, `LOGNAME`, XDG home directories, `OPENCODE_CONFIG_DIR=<account home>/.config/opencode`, `OPENCODE_DISABLE_AUTOUPDATE=1`, and PATH beginning with the runtime prefix. It removes `OPENCODE_BIN_PATH` so an inherited value cannot redirect the executable. Paths must be canonical absolute paths; native paths under `/opt` are rejected. Use a dedicated native account/home, not Docker-mounted config/state.
-
-### Provisioning and installation pins
-
-Supported bootstrap host: Debian/Ubuntu with Bash, apt, coreutils (`timeout`, `realpath`, `stat`), findutils, util-linux (`flock`, `runuser`), Git, getent, and systemd already available. Ansible creates the account/home, root-owned deployment directories/clone, workspace, and **inactive unit first**. Checkout/runtime and their ancestors must not be group/world-writable. The runtime account must have read/traverse access to the checkout and write access only to its home/workspace, not deployment files.
-
-`OPENCODE_APT_PACKAGES` must include exact pins for each of:
+### Commands and integration order
 
 ```text
-ca-certificates git nodejs npm ripgrep python3 python3-venv openssh-client
+Ansible: account + OS pins/tools + full checkout + protected wrappers/unit/secrets
+    |
+    +-- OPENCODE_USER: entrypoint.sh install          -> opencode/.runtime ONLY
+    +-- OPENCODE_USER: entrypoint.sh initialize-home  -> missing defaults/known links
+    |                  (supply PREVIOUS_REPO here for first migration)
+    +-- OPENCODE_USER: start.sh service | session [CLI arguments...]
 ```
 
-Use versions available in the selected distribution/snapshot repository (inspect `apt-cache policy PACKAGE` on the target); there are deliberately no invented cross-distribution version defaults. Additional apt tools may be included, but every entry needs an exact version. These pins constrain requested packages, not every transitive OS dependency. Node/npm compatibility is the operator's responsibility. Terraform, Ansible, browser bundles, CUDA, and other optional coding tools are not implicitly installed; provision them separately with approved pins if the workload needs them.
+**Install never initializes the home.** The deployment role must call
+`initialize-home` separately after install, passing any migration input. This
+avoids duplicate setup and first-migration failures. Both operations share a
+nonblocking component lifecycle lock with explicit updates.
 
-Provisioning performs bounded apt operations and installs `opencode-ai@$OPENCODE_VERSION` into the root-owned prefix using npm's public HTTPS registry, optional platform packages, and **`--ignore-scripts`**. It uses an empty installer environment/private cache and does not load account/workspace `.npmrc` files. It then initializes the home and verifies the requested CLI version via `runuser`, never by running OpenCode as root. Installer network operations are bounded at 600 seconds each; failed installs may leave partially changed dependencies. No unit is automatically started.
+Ansible owns OS dependencies and their approved pins: Bash, coreutils, flock,
+getent, `/usr/bin/git`, `/usr/bin/node`, `/usr/bin/npm`, certificates and workload
+tools. NodeSource-bundled npm is acceptable; no standalone npm package or APT
+input is required here. Scripts create no accounts, units or login hooks and
+perform no privilege escalation or service control.
 
-The package must support installation with scripts disabled and resolution of its optional platform binary without a postinstall hook. See the example version's [published package metadata](https://registry.npmjs.org/opencode-ai/1.2.15), [web command](https://github.com/anomalyco/opencode/blob/v1.2.15/packages/opencode/src/cli/cmd/web.ts), and [network option precedence](https://github.com/anomalyco/opencode/blob/v1.2.15/packages/opencode/src/cli/network.ts). Validate real installation, `--version`, and loopback binding on the concerned host for the approved version; mocked tests do not establish upstream runtime compatibility.
-
-### Ansible-owned unit and login contract
-
-Concrete default-path unit shape (Ansible must render overrides consistently):
-
-```ini
-[Unit]
-Description=Native OpenCode web
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=opencode
-Group=opencode
-EnvironmentFile=/etc/opencode/service.env
-ExecStart=/bin/bash /srv/opencode/repo/opencode/scripts/start.sh service
-Restart=on-failure
-RestartSec=5
-KillMode=control-group
-UMask=0077
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/home/opencode /srv/workspaces/opencode
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Ansible-owned `/etc/opencode/service.env` (root:root `0600`, parent root-owned; values rendered directly, no variable expansion):
-
-```ini
-OPENCODE_USER=opencode
-OPENCODE_ROOT=/srv/opencode
-OPENCODE_REPO=/srv/opencode/repo
-OPENCODE_PREFIX=/srv/opencode/runtime
-OPENCODE_UNIT=opencode.service
-OPENCODE_WORKSPACE=/srv/workspaces/opencode
-OPENCODE_PORT=4096
-# Ansible securely renders OPENCODE_SERVER_PASSWORD and provider credentials here.
-```
-
-The password comment is not a usable secret: the unit intentionally fails until a password is supplied. Keep secrets out of Git, shell history, command arguments, and provisioning logs; use Ansible `no_log` where it handles them. Journal access is controlled by the host and can expose application output. This unit is a baseline, not an agent sandbox: review workspace access and additional hardening for the workload. No passwordless sudo is required or granted.
-
-The service changes to `OPENCODE_WORKSPACE` and foreground-execs:
+Service foreground-execs exactly:
 
 ```text
 opencode web --hostname 127.0.0.1 --port <supplied port> --mdns false
 ```
 
-No extra service CLI flags are accepted. Ansible owns TLS termination, WebSocket-capable proxying, authentication/access policy, and firewall rules. A proxy must reach the **host's** loopback (a bridge-networked container's `127.0.0.1` is not the host); do not solve that mismatch by exposing OpenCode publicly. Host-local users can reach this socket, hence the required upstream password as defense in depth.
+Extra service flags are rejected. Infrastructure owns TLS/WebSocket proxying,
+firewall/access policy and protected environment files outside the checkout.
+The proxy must reach the host's loopback; do not expose the backend publicly.
+Credentials remain environment-only and must never enter Git or deployment logs.
 
-Login hooks invoke `/bin/bash /srv/opencode/repo/opencode/scripts/start.sh session` **as the supplied account**, with its workspace/provider environment. There is no installation, privilege escalation, or implicit service attachment. CLI arguments are passed unchanged. An administrator can explicitly use `runuser -u opencode -- env OPENCODE_USER=opencode OPENCODE_WORKSPACE=/srv/workspaces/opencode /bin/bash /srv/opencode/repo/opencode/scripts/start.sh session`; provision credentials separately rather than adding secrets to that command line.
+### Installation, compatibility and failure handling
 
-### Home resources, plugins, and updates
+Install stages `opencode-ai@$OPENCODE_VERSION` under ignored `.build.*`, using
+`env -i`, isolated HOME/XDG/config/cache/state and distinct empty user/global
+npmrc files. Public HTTPS npm registry/config/cache variables also reach nested
+npm children. Standard npm lifecycle is explicitly **enabled**, as the exact
+non-root account, with optional platform packages. Install is bounded at 600
+seconds; verification at 30 seconds, with kill grace. No user auth/plugins are
+loaded for verification: only `--version` runs from the isolated HOME, with no
+inherited executable/test-home/Node overrides or provider/web credentials.
 
-Native home initialization runs only during provisioning, as the account. It directly links `commands`, `skills`, `system`, and `gsd` to the checkout's `agent/` tree. It creates no `~/.agents` discovery links and removes only existing links that resolve to the identical shared target. Conflicting real directories or unrelated links are preserved and cause a clear failure; reconcile them deliberately. Redirected config roots are refused rather than modifying Docker config. Shared markdown agent definitions remain harness-specific.
+The staged npm install is **local**, with `--no-save --package-lock=false`, not
+`--global`. Global npm exports `npm_config_global=true` to postinstall children;
+the vendor's fallback would then install under `temp/lib/node_modules` while
+reading `temp/node_modules`. Local mode preserves that expected fallback layout.
+Runtime metadata lives at `.runtime/node_modules/opencode-ai/package.json`;
+`.runtime/bin/opencode -> ../node_modules/.bin/opencode` keeps the public launch
+path unchanged and remains valid after promotion. An old global-layout runtime
+is rebuilt on reapply, preserving it if the replacement fails.
 
-The account must own its home. Workspace paths must also be canonical and outside `/opt`. Existing plugin-directory symlinks are never followed to seed missing files. If either `opencode.json` or `opencode.jsonc` exists, neither format is seeded, preventing defaults in the other format from overriding local settings. Existing credentials are not read, migrated, or rewritten.
+Published evidence reviewed for this conversion:
+- [`1.18.29` registry metadata](https://registry.npmjs.org/opencode-ai/1.18.29)
+  declares `bin/opencode.exe`, exact optional architecture packages and
+  `node ./postinstall.mjs`.
+- [Its postinstall](https://unpkg.com/opencode-ai@1.18.29/postinstall.mjs) selects
+  architecture/libc/AVX variants, copies the compiled binary, probes `--version`,
+  and may use nested npm to obtain a fallback platform package.
+- [Its CLI entrypoint](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/index.ts)
+  registers `--version` through yargs' version handler rather than launching a
+  session. Verification uses that path, not normal auth/plugin initialization.
+- The old documentation's `1.2.15` was an example, **not a deployment pin**.
+  Do not infer `--ignore-scripts` compatibility from its older launcher fallback.
 
-Only missing, tracked `opencode.json[ c ]` (specifically `opencode.json` / `opencode.jsonc`), `tui.json`, package manifests/lockfile, and files under `plugin/` or `plugins/` are seeded. Existing config/plugin files are **never overwritten**, including their plugin lists. Ignored auth/state and `node_modules`/`.cache` trees are not copied. Existing local configs/plugins therefore do not automatically acquire later repository edits: review and merge defaults manually. OpenCode itself may resolve plugins and write user-owned caches during normal startup; the lifecycle does not promise offline or fully reproducible plugin dependencies. Restart services/sessions after config changes.
+Neither version is selected by these scripts. The caller must supply an approved
+exact pin; metadata review and mocked tests do not establish real binary/platform
+compatibility. Validate that pin's installation, version, loopback web/auth and
+CLI behavior on the concerned host before wider rollout.
 
-Management commands (supply the same non-secret contract environment):
+Package name/version and actual binary `--version` must match before reuse or
+promotion. Matching runtime reuse and installation allow dirty checkouts. Failed
+build/verification preserves the previous runtime and retains the ignored stage
+and logs. Promotion is verified again; failure attempts to restore the previous
+runtime. The two renames are **not crash-atomic**: inspect `.build.*/previous`
+after interruption. Stop the concerned unit and drain sessions through protected
+administrator tools before replacing an in-use runtime. No private-state rollback
+is implied. Lifecycle scripts have the account's filesystem access: sanitized
+environment is not a sandbox, and a top-level pin is not a transitive lockfile.
+
+### Home resources and explicit updates
+
+`initialize-home` directly links only `commands`, `skills`, `system`, `gsd` to
+`$OPENCODE_REPO/agent/`; it does not use Pi's agents mapping. Only literal current
+or explicitly supplied previous targets are reused/retargeted. Known duplicate
+`~/.agents` resource links are removed; unknown links/real directories are
+preserved and fail clearly. Redirected private roots/plugin directories are
+refused, never followed to modify Docker or external state.
+
+Only missing committed defaults from `opencode/.opencode/config` are copied:
+`opencode.json`/`opencode.jsonc`, `tui.json`, package manifests/lockfile and
+`plugin/`/`plugins/` files, excluding caches/node_modules. Either existing config
+format prevents both formats being seeded; if neither exists, tracked JSON wins
+over JSONC. Complete temporary files are published exclusively, so existing or
+concurrently created files win. Existing plugin lists/config are never rewritten.
+Private auth, data, cache and state stay outside Git and unchanged. Copied defaults
+do not receive later repository edits automatically; review/merge deliberately.
 
 ```text
-manage.sh start | stop | restart    root only, delegates to the named unit
-manage.sh status                   systemctl status; preserves nonzero inactive status
-manage.sh logs                     last 100 journal entries, no pager/follow
-manage.sh version                  CLI version, always under the supplied non-root account
-manage.sh update-check FULL_SHA     root; fetch/compare without checking out
-manage.sh update FULL_SHA           root; clean checkout and stopped unit required
+manage.sh status                   read-only unit properties
+manage.sh version                  isolated --version; no VERSION input required
+manage.sh update-check FULL_SHA    fetch/validate without moving HEAD
+manage.sh update FULL_SHA          clean-tree, assigned-branch fast-forward only
 ```
 
-Service start/restart take the same nonblocking lifecycle lock as provisioning and updates. Emergency `stop` requires only root authorization and a valid `OPENCODE_UNIT` (default `opencode.service`): no account/home contract, recursive checkout/runtime audit or lifecycle lock. The lock prevents start/update races through these scripts, not direct systemctl calls or external deployment tools. Interactive sessions must be closed separately.
-
-`update-check` and `update` require a full lowercase 40-character commit SHA and serialize with provisioning using a nonblocking lock. Fetch uses the administrator-managed `origin`, disables interactive Git credential prompts, and has a 120-second timeout; errors omit remote URLs. Checking updates may write Git objects/FETCH_HEAD. A commit already present locally may be satisfied by Git without contacting the remote; SHA selection is administrator approval, **not signature verification**.
-
-Recommended sequence: `update-check SHA`, stop the unit and close interactive sessions, `update SHA`, run `entrypoint.sh provision` with approved pins, start, then verify the unit and authenticated proxy endpoint. Update refuses tracked/untracked changes, detaches at the exact commit, and uses `--no-overwrite-ignore` to protect ignored-file collisions. It does not copy the checkout or ignored state. It does not provision dependencies or restart automatically. **There is no automatic rollback**: apt/npm/plugin changes and OpenCode data migrations are not transactional. A failed provisioning leaves the unit stopped for operator recovery; Git checkout recovery alone does not restore runtime dependencies or state.
+Updates require a full lowercase SHA on the fetched assigned origin branch and
+a descendant of local HEAD. Tracked/untracked changes, detached/wrong branches,
+divergence and ignored-file collisions are refused. Ignored runtime/build state
+is allowed. Git fetch is bounded at 120 seconds and output suppressed to avoid
+credential-bearing URLs. `merge --ff-only --no-overwrite-ignore` preserves the
+branch; no reset, detach, clean, commits, pushes, hook skipping or config writes.
+No install/service action is implicit; infrastructure owns source approval and
+activation. The lock cannot coordinate arbitrary editor/Git/service operations.
 
 ### Verification
 
-Missing defaults are read into private temporary files before exclusive publication.
-A failed Git read leaves no partial destination; content created concurrently at
-the destination is preserved rather than overwritten.
+Run from the agents repository root:
 
 ```bash
-bash -n opencode/scripts/{entrypoint,start,manage}.sh
+bash -n opencode/scripts/entrypoint.sh opencode/scripts/start.sh opencode/scripts/manage.sh
 python3 -B -m unittest discover -s opencode/tests -v
 # If installed:
 shellcheck -x -P opencode/scripts opencode/scripts/{entrypoint,start,manage}.sh
 ```
 
-Run from the agents repository root as a non-root user. Tests mock host/system commands and account lookup, and use real temporary Git repositories/locks. They never install host packages, create accounts, or start services. Real systemd, apt provisioning, TLS/proxy, provider authentication, and plugin initialization require a separate targeted integration run on the concerned host before wider deployment.
+Tests run as a real non-root user with temporary Git repositories and fake package
+fixtures; account lookup and normal package installation are mocked. When npm and
+Node are available, an **offline real-npm** test installs two local fixture
+tarballs only: a parent's postinstall invokes a child install and checks the
+vendor-expected `node_modules` path. It proves old global mode fails and local
+production installation succeeds through verification/promotion. Real npm config
+parsing is also checked when available. This validates npm fallback geometry,
+**not live OpenCode/VM compatibility**. Root execution is tested when the runner
+is root; non-root runs check root-guard ordering. No network packages, host-global
+dependencies, accounts, services or VM operations are installed/run by the suite.
 
 ## Docker workflow (existing)
 
@@ -397,7 +407,7 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-5.6-sol",
+  "model": "openai/gpt-6",
   "small_model": "openai/gpt-5-mini",
   "permission": "allow",
   "provider": {
@@ -407,6 +417,11 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
   }
 }
 ```
+
+System agents inherit the global `openai/gpt-6` model unless overridden. The
+default TUI theme is `opencode`, set in `.opencode/config/tui.json`.
+Quit and restart OpenCode after changing these settings; running sessions retain
+their loaded configuration.
 
 ### Supported Providers
 

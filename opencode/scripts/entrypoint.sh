@@ -3,81 +3,76 @@ set -euo pipefail
 
 die() { printf 'opencode: %s\n' "$*" >&2; exit 1; }
 
+require_opencode_user() {
+    [[ $EUID != 0 && $UID != 0 ]] || die 'never root; run explicitly as OPENCODE_USER'
+    [[ $EUID == "${OPENCODE_UID:-}" && $UID == "$EUID" ]] || die 'run explicitly as OPENCODE_USER (exact account UID required)'
+}
+
 load_contract() {
-    export OPENCODE_ROOT="${OPENCODE_ROOT:-/srv/opencode}"
-    export OPENCODE_REPO="${OPENCODE_REPO:-$OPENCODE_ROOT/repo}"
-    export OPENCODE_PREFIX="${OPENCODE_PREFIX:-$OPENCODE_ROOT/runtime}"
+    [[ $EUID != 0 && $UID != 0 ]] || die 'never root; run explicitly as OPENCODE_USER'
+    export OPENCODE_REPO="${OPENCODE_REPO:-/srv/agents}"
+    export OPENCODE_ROOT="${OPENCODE_ROOT:-$OPENCODE_REPO/opencode}"
+    export OPENCODE_PREFIX="${OPENCODE_PREFIX:-$OPENCODE_ROOT/.runtime}"
     : "${OPENCODE_USER:?supply an existing non-root account}"
     local record password gecos shell
     record=$(getent passwd "$OPENCODE_USER") || die 'account does not exist'
     IFS=: read -r OPENCODE_ACCOUNT password OPENCODE_UID OPENCODE_GID gecos OPENCODE_HOME shell <<< "$record"
-    [[ "$OPENCODE_UID" != 0 && "$OPENCODE_ACCOUNT" == "$OPENCODE_USER" ]] || die 'named non-root account required'
+    [[ "$OPENCODE_UID" =~ ^[0-9]+$ && "$OPENCODE_UID" != 0 && "$OPENCODE_ACCOUNT" == "$OPENCODE_USER" ]] || die 'named non-root account required'
+    require_opencode_user
     local path
     for path in "$OPENCODE_ROOT" "$OPENCODE_REPO" "$OPENCODE_PREFIX" "$OPENCODE_HOME"; do
         [[ "$path" == /* && "$path" != / && "$path" != /opt && "$path" != /opt/* && "$path" == "$(realpath -m -- "$path")" ]] || die 'paths must be canonical absolute paths outside /opt'
     done
-    [[ "$OPENCODE_PREFIX/" != "$OPENCODE_REPO/"* && "$OPENCODE_REPO/" != "$OPENCODE_PREFIX/"* ]] || die 'checkout and runtime must not overlap'
-    [[ -d "$OPENCODE_HOME" ]] || die 'account home must already exist'
-    [[ "$(stat -c %u -- "$OPENCODE_HOME")" == "$OPENCODE_UID" ]] || die 'account must own its home'
+    [[ "$OPENCODE_ROOT" == "$OPENCODE_REPO/opencode" && "$OPENCODE_PREFIX" == "$OPENCODE_ROOT/.runtime" ]] || die 'require OPENCODE_ROOT=OPENCODE_REPO/opencode and OPENCODE_PREFIX=OPENCODE_ROOT/.runtime'
+    [[ "$OPENCODE_HOME/" != "$OPENCODE_REPO/"* && "$OPENCODE_REPO/" != "$OPENCODE_HOME/"* ]] || die 'private home and checkout must not overlap'
+    for path in "$OPENCODE_HOME" "$OPENCODE_REPO" "$OPENCODE_ROOT"; do
+        [[ -d "$path" && "$(stat -c %u -- "$path")" == "$OPENCODE_UID" ]] || die 'OPENCODE_USER must own its existing home, checkout and component'
+    done
     export OPENCODE_CONFIG_DIR="$OPENCODE_HOME/.config/opencode"
     export OPENCODE_DISABLE_AUTOUPDATE=1
     export OPENCODE_UNIT="${OPENCODE_UNIT:-opencode.service}"
     [[ "$OPENCODE_UNIT" =~ ^[a-zA-Z0-9_-]+\.service$ ]] || die 'invalid unit name'
+    [[ -d "$OPENCODE_REPO/.git" && ! -L "$OPENCODE_REPO/.git" && "$(opencode_git rev-parse --show-toplevel)" == "$OPENCODE_REPO" ]] || die 'OPENCODE_REPO must be the whole agents Git checkout'
 }
 
-require_root() { [[ $EUID == 0 ]] || die 'administrator/root execution required; no automatic sudo'; }
-
-# Check ancestors too: an unprivileged user must not be able to replace a deployment.
-trusted_path() {
-    local path="$1" owner mode
-    while :; do
-        [[ ! -L "$path" ]] || die "symlink in deployment path: $path"
-        if [[ -e "$path" ]]; then
-            read -r owner mode < <(stat -c '%u %a' -- "$path")
-            [[ "$owner" == 0 ]] && (( (8#$mode & 8#022) == 0 )) || die "deployment path is not root-owned/private: $path"
-        fi
-        [[ "$path" != / ]] || break
-        path=$(dirname -- "$path")
-    done
+opencode_git() {
+    require_opencode_user
+    env -i HOME="$OPENCODE_HOME" PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 \
+        timeout --kill-after=10 120 /usr/bin/git -C "$OPENCODE_REPO" "$@"
 }
 
 deployment_lock() {
-    require_root
-    trusted_path "$OPENCODE_ROOT"
-    trusted_path "$OPENCODE_REPO"
-    trusted_path "$OPENCODE_PREFIX"
-    [[ -d "$OPENCODE_ROOT" && -d "$OPENCODE_REPO/.git" ]] || die 'provision a dedicated root-owned Git checkout first'
-    local unsafe
-    unsafe=$(find "$OPENCODE_REPO" -xdev \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit)
-    [[ -z "$unsafe" ]] || die 'checkout contains non-root-owned or group/world-writable entries'
-    if [[ -d "$OPENCODE_PREFIX" ]]; then
-        unsafe=$(find "$OPENCODE_PREFIX" -xdev \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit)
-        [[ -z "$unsafe" ]] || die 'runtime contains non-root-owned or group/world-writable entries'
-    fi
-    trusted_path "$OPENCODE_ROOT/.lifecycle.lock"
+    require_opencode_user
+    [[ ! -L "$OPENCODE_ROOT/.lifecycle.lock" ]] || die 'preserved redirected lifecycle lock'
     exec 9>"$OPENCODE_ROOT/.lifecycle.lock"
     flock -n 9 || die 'another lifecycle operation is running'
 }
 
 initialize_home() (
-    [[ $EUID == "$OPENCODE_UID" && $EUID != 0 ]] || die 'home initialization must run as the supplied account'
+    require_opencode_user
     export HOME="$OPENCODE_HOME"
     umask 077
-    [[ ! -L "$HOME/.config" && ! -L "$OPENCODE_CONFIG_DIR" ]] || die 'native config must not redirect to Docker or another config tree'
-    git -c safe.directory="$OPENCODE_REPO" -C "$OPENCODE_REPO" rev-parse --verify HEAD >/dev/null
-    mkdir -p "$OPENCODE_CONFIG_DIR" "$HOME/.local/share/opencode" "$HOME/.cache/opencode"
-    local name destination source legacy file relative parent tracked pending=''
+    local name destination source legacy file relative parent tracked pending='' path old
+    for path in "$OPENCODE_CONFIG_DIR" "$HOME/.local/share/opencode" "$HOME/.cache/opencode" "$HOME/.local/state/opencode" "$HOME/.agents"; do
+        [[ "$path" == "$(realpath -m -- "$path")" ]] || die 'preserved redirected private state; reconcile manually'
+    done
+    if [[ -n ${OPENCODE_PREVIOUS_REPO:-} ]]; then
+        [[ "$OPENCODE_PREVIOUS_REPO" == /* && "$OPENCODE_PREVIOUS_REPO" != / && "$OPENCODE_PREVIOUS_REPO" == "$(realpath -m -- "$OPENCODE_PREVIOUS_REPO")" ]] || die 'invalid OPENCODE_PREVIOUS_REPO'
+    fi
+    mkdir -p "$OPENCODE_CONFIG_DIR" "$HOME/.local/share/opencode" "$HOME/.cache/opencode" "$HOME/.local/state/opencode"
     for name in commands skills system gsd; do
         source="$OPENCODE_REPO/agent/$name"
         destination="$OPENCODE_CONFIG_DIR/$name"
+        old="${OPENCODE_PREVIOUS_REPO:-$OPENCODE_REPO}/agent/$name"
         [[ -d "$source" ]] || die "missing shared resource: $name"
         if [[ -e "$destination" || -L "$destination" ]]; then
-            [[ -L "$destination" && "$(readlink -- "$destination")" == "$source" ]] || die "preserved conflicting resource; reconcile manually: $destination"
+            [[ -L "$destination" && ( "$(readlink -- "$destination")" == "$source" || "$(readlink -- "$destination")" == "$old" ) ]] || die "preserved conflicting resource; reconcile manually: $destination"
+            [[ "$(readlink -- "$destination")" == "$source" ]] || ln -sfnT -- "$source" "$destination"
         else
             ln -s -- "$source" "$destination"
         fi
         legacy="$HOME/.agents/$name"
-        if [[ -L "$legacy" && "$(realpath -m -- "$legacy")" == "$source" ]]; then
+        if [[ -L "$legacy" && ( "$(readlink -- "$legacy")" == "$source" || "$(readlink -- "$legacy")" == "$old" ) ]]; then
             rm -- "$legacy"
         elif [[ -e "$legacy" || -L "$legacy" ]]; then
             die "preserved external discovery tree; reconcile duplicate resources manually: $legacy"
@@ -86,7 +81,7 @@ initialize_home() (
     # Capture first: process-substitution failures would otherwise be silently ignored.
     tracked=$(mktemp)
     trap 'rm -f -- "$tracked" "$pending"' EXIT
-    git -c safe.directory="$OPENCODE_REPO" -C "$OPENCODE_REPO" ls-files -z -- opencode/.opencode/config > "$tracked" || die 'cannot list tracked defaults'
+    opencode_git ls-files -z -- opencode/.opencode/config > "$tracked" || die 'cannot list tracked defaults'
     # Only tracked, explicitly allowed config files; never state, auth, caches or node_modules.
     while IFS= read -r -d '' file; do
         relative=${file#opencode/.opencode/config/}
@@ -109,7 +104,7 @@ initialize_home() (
         [[ "$(realpath -m -- "$parent")" == "$parent" ]] || die "preserved redirected plugin directory: $parent"
         mkdir -p -- "$(dirname -- "$destination")"
         pending=$(mktemp "$parent/.opencode-default.XXXXXXXX")
-        git -c safe.directory="$OPENCODE_REPO" -C "$OPENCODE_REPO" show "HEAD:$file" > "$pending"
+        opencode_git show "HEAD:$file" > "$pending"
         # Publish a complete file exclusively; never replace concurrent user content.
         if ! ln -T -- "$pending" "$destination"; then
             [[ -e "$destination" || -L "$destination" ]] || die "cannot publish default: $destination"
@@ -118,58 +113,86 @@ initialize_home() (
     done < "$tracked"
 )
 
-provision() (
+isolated_runtime() (
+    require_opencode_user
+    local prefix="$1" home="$2"
+    shift 2
+    cd -- "$home"
+    env -i HOME="$home" USER="$OPENCODE_USER" LOGNAME="$OPENCODE_USER" \
+        PATH="$prefix/bin:/usr/bin:/bin" XDG_CONFIG_HOME="$home/.config" \
+        XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" XDG_STATE_HOME="$home/.local/state" \
+        OPENCODE_CONFIG_DIR="$home/.config/opencode" OPENCODE_DISABLE_AUTOUPDATE=1 \
+        timeout --kill-after=10 30 "$prefix/bin/opencode" "$@"
+)
+
+verify_runtime() (
+    require_opencode_user
+    local prefix="$1" home="$2" version
+    [[ -x "$prefix/bin/opencode" ]] || return 1
+    env -i HOME="$home" PATH=/usr/bin:/bin timeout --kill-after=10 30 /usr/bin/node -e '
+        const p=require(process.argv[1]+"/node_modules/opencode-ai/package.json");
+        if(p.name!=="opencode-ai" || p.version!==process.argv[2]) process.exit(1);
+        ' "$prefix" "$OPENCODE_VERSION" || return 1
+    version=$(isolated_runtime "$prefix" "$home" --version) || return 1
+    [[ "$version" == "$OPENCODE_VERSION" ]]
+)
+
+install_runtime() (
+    : "${OPENCODE_VERSION:?supply an exact stable OpenCode X.Y.Z version}"
+    [[ "$OPENCODE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die 'OpenCode version must be an exact stable version'
     deployment_lock
-    umask 022
-    : "${OPENCODE_APT_PACKAGES:?supply whitespace-separated package=version pins}"
-    : "${OPENCODE_VERSION:?supply an exact OpenCode version, e.g. 1.2.15}"
-    [[ "$OPENCODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die 'OpenCode version must be an exact stable version'
-    local -a packages
-    local package required state installed_version
-    [[ "$OPENCODE_APT_PACKAGES" != *$'\n'* ]] || die 'apt pins must be a single line'
-    read -r -a packages <<< "$OPENCODE_APT_PACKAGES"
-    for package in "${packages[@]}"; do
-        [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*=[a-zA-Z0-9.+:~_-]+$ ]] || die 'every apt package must have an exact version'
-    done
-    for required in ca-certificates git nodejs npm ripgrep python3 python3-venv openssh-client; do
-        [[ " ${packages[*]} " == *" $required="* ]] || die "missing required apt pin: $required"
-    done
-    state=$(systemctl show --property=ActiveState --value "$OPENCODE_UNIT")
-    [[ "$state" == inactive || "$state" == failed ]] || die 'unit must be inactive before provisioning (install the unit first)'
-    export DEBIAN_FRONTEND=noninteractive
-    timeout 600 apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-    timeout 600 apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-        install -y --no-install-recommends -- "${packages[@]}"
-    install -d -o root -g root -m 0755 "$OPENCODE_PREFIX"
-    # Use a root-only npm environment; do not load a workspace or account .npmrc.
-    local cache
-    cache=$(mktemp -d "$OPENCODE_ROOT/.npm.XXXXXXXX")
-    trap 'rm -rf -- "$cache"' EXIT
-    (
-        cd "$cache"
-        timeout 600 env -i HOME="$cache" PATH=/usr/bin:/bin npm install --global \
-            --prefix "$OPENCODE_PREFIX" --cache "$cache/cache" \
-            --registry=https://registry.npmjs.org --userconfig=/dev/null --globalconfig=/dev/null \
-            --ignore-scripts --no-audit --no-fund --include=optional \
-            --fetch-retries=2 --fetch-timeout=60000 "opencode-ai@$OPENCODE_VERSION"
-    )
-    rm -rf -- "$cache"
+    umask 077
+    local stage
+    stage=$(mktemp -d "$OPENCODE_ROOT/.build.XXXXXXXX")
+    trap 'printf "Install failed; inspect retained stage: %s\n" "$stage" >&2' EXIT
+    mkdir -- "$stage/home"
+    : > "$stage/npm-userrc"
+    : > "$stage/npm-globalrc"
+    if ! verify_runtime "$OPENCODE_PREFIX" "$stage/home" > "$stage/reuse.log" 2>&1; then
+        mkdir -- "$stage/runtime"
+        (
+            cd -- "$stage/home"
+            # Standard lifecycle is required by recent compiled-binary packages.
+            # This isolates configuration/secrets, not the user's filesystem access.
+            env -i HOME="$stage/home" PATH=/usr/bin:/bin TMPDIR="$stage/home" \
+                XDG_CONFIG_HOME="$stage/home/.config" XDG_DATA_HOME="$stage/home/.local/share" \
+                XDG_CACHE_HOME="$stage/home/.cache" XDG_STATE_HOME="$stage/home/.local/state" \
+                OPENCODE_CONFIG_DIR="$stage/home/.config/opencode" OPENCODE_DISABLE_AUTOUPDATE=1 \
+                NPM_CONFIG_USERCONFIG="$stage/npm-userrc" NPM_CONFIG_GLOBALCONFIG="$stage/npm-globalrc" \
+                NPM_CONFIG_REGISTRY=https://registry.npmjs.org NPM_CONFIG_CACHE="$stage/home/.cache/npm" \
+                timeout --kill-after=10 600 /usr/bin/npm install --no-save --package-lock=false --prefix "$stage/runtime" \
+                --cache "$stage/home/.cache/npm" --registry=https://registry.npmjs.org \
+                --userconfig="$stage/npm-userrc" --globalconfig="$stage/npm-globalrc" \
+                --ignore-scripts=false --no-audit --no-fund --include=optional \
+                --fetch-retries=2 --fetch-timeout=60000 "opencode-ai@$OPENCODE_VERSION" \
+                > "$stage/npm.log" 2>&1
+        ) || die 'npm install failed or timed out; existing runtime preserved'
+        # Local npm mode keeps vendor fallback children local too. Preserve the
+        # public bin path with a relative link that survives runtime promotion.
+        mkdir -- "$stage/runtime/bin"
+        ln -s -- ../node_modules/.bin/opencode "$stage/runtime/bin/opencode"
+        verify_runtime "$stage/runtime" "$stage/home" > "$stage/verify.log" 2>&1 || die 'staged runtime verification failed; existing runtime preserved'
+        [[ ! -e "$OPENCODE_PREFIX" ]] || mv -- "$OPENCODE_PREFIX" "$stage/previous"
+        if ! mv -- "$stage/runtime" "$OPENCODE_PREFIX"; then
+            [[ ! -e "$stage/previous" ]] || mv -- "$stage/previous" "$OPENCODE_PREFIX"
+            die 'runtime promotion failed; inspect stage before retry'
+        fi
+        if ! verify_runtime "$OPENCODE_PREFIX" "$stage/home" >> "$stage/verify.log" 2>&1; then
+            mv -- "$OPENCODE_PREFIX" "$stage/failed-runtime"
+            [[ ! -e "$stage/previous" ]] || mv -- "$stage/previous" "$OPENCODE_PREFIX"
+            die 'promoted runtime verification failed; previous runtime restored if present'
+        fi
+    fi
     trap - EXIT
-    runuser -u "$OPENCODE_USER" -- env -i HOME="$OPENCODE_HOME" USER="$OPENCODE_USER" \
-        PATH="$OPENCODE_PREFIX/bin:/usr/bin:/bin" OPENCODE_USER="$OPENCODE_USER" \
-        OPENCODE_ROOT="$OPENCODE_ROOT" OPENCODE_REPO="$OPENCODE_REPO" OPENCODE_PREFIX="$OPENCODE_PREFIX" \
-        /bin/bash "$OPENCODE_REPO/opencode/scripts/entrypoint.sh" initialize-home
-    installed_version=$(runuser -u "$OPENCODE_USER" -- env -i HOME="$OPENCODE_HOME" PATH="$OPENCODE_PREFIX/bin:/usr/bin:/bin" \
-        OPENCODE_DISABLE_AUTOUPDATE=1 "$OPENCODE_PREFIX/bin/opencode" --version)
-    [[ "$installed_version" == "$OPENCODE_VERSION" ]] || die 'installed CLI does not match the requested version'
-    printf 'OpenCode %s provisioned; unit remains stopped.\n' "$installed_version"
+    rm -rf -- "$stage" || printf 'Installed; staging cleanup incomplete: %s\n' "$stage" >&2
+    printf 'OpenCode %s installed or reused; run initialize-home separately. No service action.\n' "$OPENCODE_VERSION"
 )
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     load_contract
     case "${1:-}" in
-        provision) [[ $# == 1 ]] || die 'usage: entrypoint.sh provision'; provision ;;
-        initialize-home) [[ $# == 1 ]] || die 'unexpected arguments'; initialize_home ;;
-        *) die 'usage: entrypoint.sh provision' ;;
+        install) [[ $# == 1 ]] || die 'unexpected arguments'; install_runtime ;;
+        initialize-home) [[ $# == 1 ]] || die 'unexpected arguments'; deployment_lock; initialize_home ;;
+        *) die 'usage: entrypoint.sh install | initialize-home' ;;
     esac
 fi

@@ -3,13 +3,14 @@ set -euo pipefail
 # shellcheck source=entrypoint.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/entrypoint.sh"
 load_contract
-[[ $EUID != 0 && $EUID == "$OPENCODE_UID" ]] || die 'run explicitly as OPENCODE_USER (systemd User= or runuser); never root'
+require_opencode_user
 export HOME="$OPENCODE_HOME" USER="$OPENCODE_USER" LOGNAME="$OPENCODE_USER"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$HOME/.cache"
+export XDG_STATE_HOME="$HOME/.local/state"
 export PATH="$OPENCODE_PREFIX/bin:/usr/local/bin:/usr/bin:/bin"
-unset OPENCODE_BIN_PATH
+unset OPENCODE_BIN_PATH OPENCODE_TEST_HOME NODE_OPTIONS NODE_PATH
 umask 077
-[[ -x "$OPENCODE_PREFIX/bin/opencode" ]] || die 'runtime missing; administrator must provision first'
+[[ -x "$OPENCODE_PREFIX/bin/opencode" ]] || die 'runtime missing; run install first as OPENCODE_USER'
 : "${OPENCODE_WORKSPACE:?supply an existing absolute workspace}"
 [[ "$OPENCODE_WORKSPACE" == /* && -d "$OPENCODE_WORKSPACE" ]] || die 'workspace must be an existing absolute directory'
 [[ "$OPENCODE_WORKSPACE" != /opt && "$OPENCODE_WORKSPACE" != /opt/* && "$OPENCODE_WORKSPACE" == "$(realpath -m -- "$OPENCODE_WORKSPACE")" ]] || die 'workspace must be canonical and outside /opt'

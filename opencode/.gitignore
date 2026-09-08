@@ -15,3 +15,8 @@ docker-compose.override.yml
 
 # Logs
 *.log
+
+# Native generated runtime and lifecycle state
+/.runtime/
+/.build.*/
+/.lifecycle.lock

@@ -1,342 +1,494 @@
-"""Focused lifecycle tests. No host installs, units, accounts or network changes."""
+"""Real non-root shell/Git/env tests; fake packages only, no network or host changes."""
+import json
 import os
 from pathlib import Path
 import pwd
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
+COMPONENT = Path(__file__).resolve().parents[1]
+SCRIPTS = COMPONENT / "scripts"
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
-
+@unittest.skipIf(os.getuid() == 0, "run the suite as a real non-root user")
 class NativeLifecycle(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="opencode-test-")
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.bin = self.root / "bin"
-        self.bin.mkdir()
-        self.home = self.root / "home"
+        self.base = Path(self.tmp.name)
+        self.home = self.base / "home"
         self.home.mkdir()
-        self.repo = self.root / "repo"
-        self.repo.mkdir()
-        self.runtime = self.root / "runtime"
-        (self.runtime / "bin").mkdir(parents=True)
-        self.workspace = self.root / "project with spaces"
+        self.repo = self.base / "repo"
+        self.root = self.repo / "opencode"
+        self.root.mkdir(parents=True)
+        self.prefix = self.root / ".runtime"
+        self.workspace = self.base / "project with spaces"
         self.workspace.mkdir()
-        self.log = self.root / "calls"
-        self.uid = os.getuid()
-        self.user = pwd.getpwuid(self.uid).pw_name
-        self.env = dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin",
-                        OPENCODE_USER=self.user, OPENCODE_ROOT=str(self.root),
-                        OPENCODE_REPO=str(self.repo), OPENCODE_PREFIX=str(self.runtime),
-                        OPENCODE_WORKSPACE=str(self.workspace), OPENCODE_PORT="4096",
-                        OPENCODE_SERVER_PASSWORD="test-secret-not-in-output", CALL_LOG=str(self.log))
-        # Account lookup is mocked so no real home is modified.
-        self.mock("getent", f"printf '%s\\n' '{self.user}:x:{self.uid}:1000::'{self.home}':/bin/bash'")
-        self.mock("systemctl", 'printf "%s\\n" "$*" >> "$CALL_LOG"; '
-                  'case "$1" in show) printf "%s\\n" "${TEST_UNIT_STATE:-inactive}";; esac')
-        self.mock("journalctl", 'printf "%s\\n" "$*" >> "$CALL_LOG"')
-        binary = self.runtime / "bin/opencode"
-        binary.write_text('#!/bin/bash\nprintf "cwd=%s\\nhome=%s\\nauto=%s\\n" "$PWD" "$HOME" "$OPENCODE_DISABLE_AUTOUPDATE"\nprintf "arg=%s\\n" "$@"\n')
-        binary.chmod(0o755)
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+        self.user = pwd.getpwuid(os.getuid()).pw_name
+        self.env = dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin", OPENCODE_USER=self.user,
+                        OPENCODE_REPO=str(self.repo), OPENCODE_ROOT=str(self.root),
+                        OPENCODE_PREFIX=str(self.prefix), OPENCODE_WORKSPACE=str(self.workspace),
+                        OPENCODE_PORT="4096", OPENCODE_SERVER_PASSWORD="fake-service-fixture",
+                        OPENCODE_BRANCH="assigned", OPENCODE_VERSION="2.3.4")
+        self.mock("getent", f"printf '%s\\n' '{self.user}:x:{os.getuid()}:{os.getgid()}::{self.home}:/bin/bash'")
+        shutil.copyfile(COMPONENT / ".gitignore", self.root / ".gitignore")
+        for name in ("commands", "skills", "system", "gsd"):
+            path = self.repo / "agent" / name
+            path.mkdir(parents=True)
+            (path / "default.md").write_text("shared")
+        defaults = self.root / ".opencode/config"
+        (defaults / "plugins").mkdir(parents=True)
+        for name in ("opencode.json", "opencode.jsonc", "tui.json", "plugins/example.ts"):
+            (defaults / name).write_text("{}")
+        self.git("init", "-q", "-b", "assigned")
+        self.commit("initial")
+        self.first = self.git("rev-parse", "HEAD")
 
     def mock(self, name, body):
-        target = self.bin / name
-        target.write_text("#!/bin/bash\nset -eu\n" + body + "\n")
-        target.chmod(0o755)
-
-    def run_script(self, name, *args, **env):
-        return subprocess.run(["bash", str(SCRIPTS / name), *args], env=dict(self.env, **env),
-                              text=True, capture_output=True)
-
-    def shell(self, body, **env):
-        return subprocess.run(["bash", "-c", body], env=dict(self.env, **env), text=True, capture_output=True)
+        path = self.bin / name
+        path.write_text("#!/bin/bash\nset -euo pipefail\n" + body + "\n")
+        path.chmod(0o755)
 
     def git(self, *args):
-        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True).strip()
-
-    def make_repo(self):
-        self.git("init", "-q")
-        (self.repo / "tracked").write_text("one")
-        self.git("add", "tracked")
-        self.commit("first")
-        first = self.git("rev-parse", "HEAD")
-        (self.repo / "tracked").write_text("two")
-        self.git("add", "tracked")
-        self.commit("second")
-        second = self.git("rev-parse", "HEAD")
-        self.git("remote", "add", "origin", str(self.repo))
-        self.git("checkout", "-q", "--detach", first)
-        return first, second
+        return subprocess.check_output(["/usr/bin/git", "-C", str(self.repo), *args], text=True).strip()
 
     def commit(self, message):
-        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                  "-c", "commit.gpgsign=false", "commit", "-qm", message)
 
-    def update(self, action, revision, **env):
-        # Simulate administrator authorization only. Git, clean-tree checks,
-        # lock, revision resolution, and checkout are real local operations.
-        self.mock("find", "exit 0")
-        return self.shell(f'source "{SCRIPTS / "manage.sh"}"; '
-                          'require_root() { :; }; trusted_path() { :; }; '
-                          f'manage_main {action} "{revision}"', **env)
+    def run_script(self, name, *args, **env):
+        return subprocess.run(["/bin/bash", str(SCRIPTS / name), *args],
+                              env=dict(self.env, **env), text=True, capture_output=True)
 
-    @unittest.skipIf(os.getuid() == 0, "runtime tests require a real non-root test runner")
-    def test_service_exec_contract(self):
-        result = self.run_script("start.sh", "service")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"cwd={self.workspace}", result.stdout)
-        self.assertIn(f"home={self.home}", result.stdout)
-        self.assertIn("auto=1", result.stdout)
-        self.assertIn("arg=web\narg=--hostname\narg=127.0.0.1\narg=--port\narg=4096\narg=--mdns\narg=false", result.stdout)
-        self.assertNotIn(self.env["OPENCODE_SERVER_PASSWORD"], result.stdout + result.stderr)
+    def shell(self, body, **env):
+        return subprocess.run(["/bin/bash", "-c", body], env=dict(self.env, **env),
+                              text=True, capture_output=True)
 
-    @unittest.skipIf(os.getuid() == 0, "requires non-root test runner")
-    def test_service_rejects_bad_inputs_and_extra_flags(self):
-        for port in ("0", "80", "65536", "04096", "1;id"):
-            self.assertNotEqual(self.run_script("start.sh", "service", OPENCODE_PORT=port).returncode, 0)
-        self.assertNotEqual(self.run_script("start.sh", "service", OPENCODE_SERVER_PASSWORD="").returncode, 0)
-        self.assertNotEqual(self.run_script("start.sh", "service", "--hostname", "0.0.0.0").returncode, 0)
-        self.assertNotEqual(self.run_script("start.sh", "service", OPENCODE_WORKSPACE="relative").returncode, 0)
+    def ok(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout
 
-    @unittest.skipIf(os.getuid() == 0, "requires non-root test runner")
-    def test_session_passes_arguments_without_installing(self):
-        result = self.run_script("start.sh", "session", "--agent", "plan", "--prompt", "two words")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("arg=--prompt\narg=two words", result.stdout)
-        self.assertIn(f"cwd={self.workspace}", result.stdout)
-        self.assertFalse(self.log.exists())
+    def package(self, version="2.3.4", body=None):
+        (self.prefix / "bin").mkdir(parents=True, exist_ok=True)
+        package = self.prefix / "node_modules/opencode-ai"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text(json.dumps(dict(name="opencode-ai", version=version)))
+        binary = package / "opencode"
+        binary.write_text("#!/bin/bash\nset -eu\n" + (body or f"printf '%s\\n' '{version}'") + "\n")
+        binary.chmod(0o755)
+        (self.prefix / "node_modules/.bin").mkdir(exist_ok=True)
+        for link, target in ((self.prefix / "node_modules/.bin/opencode", "../opencode-ai/opencode"),
+                             (self.prefix / "bin/opencode", "../node_modules/.bin/opencode")):
+            if not link.is_symlink():
+                link.symlink_to(target)
 
-    def test_root_account_and_opt_paths_rejected(self):
-        self.assertNotEqual(self.run_script("start.sh", "session", OPENCODE_ROOT="/opt/opencode").returncode, 0)
-        self.mock("getent", "printf 'root:x:0:0::/root:/bin/bash\\n'")
-        result = self.run_script("start.sh", "session", OPENCODE_USER="root")
-        self.assertIn("non-root account", result.stderr)
+    def install(self, mode="good", **env):
+        # Intercept env only to substitute npm's executable AFTER production has
+        # constructed its actual env -i arguments. Node, env, Git and shell are real.
+        self.mock("npm-fixture", r'''
+[[ $EUID != 0 && $HOME == "$PWD" && $HOME == */.build.*/home ]]
+[[ ${OPENCODE_SERVER_PASSWORD-unset} == unset && ${NODE_OPTIONS-unset} == unset ]]
+[[ ${OPENCODE_TEST_HOME-unset} == unset && ${OPENAI_API_KEY-unset} == unset ]]
+[[ $XDG_STATE_HOME == "$HOME/.local/state" && $XDG_CACHE_HOME == "$HOME/.cache" ]]
+[[ $NPM_CONFIG_REGISTRY == https://registry.npmjs.org ]]
+[[ $NPM_CONFIG_USERCONFIG != "$NPM_CONFIG_GLOBALCONFIG" ]]
+[[ -f $NPM_CONFIG_USERCONFIG && ! -s $NPM_CONFIG_USERCONFIG && -f $NPM_CONFIG_GLOBALCONFIG && ! -s $NPM_CONFIG_GLOBALCONFIG ]]
+[[ " $* " == *" --ignore-scripts=false "* && " $* " == *" --include=optional "* ]]
+[[ " $* " != *" --global "* && " $* " == *" --no-save "* && " $* " == *" --package-lock=false "* ]]
+[[ ${!#} == opencode-ai@2.3.4 ]]
+prefix=''
+while (($#)); do if [[ $1 == --prefix ]]; then prefix=$2; shift; fi; shift; done
+mkdir -p "$prefix/node_modules/.bin" "$prefix/node_modules/opencode-ai"
+printf '{"name":"opencode-ai","version":"2.3.4"}' > "$prefix/node_modules/opencode-ai/package.json"
+binary="$prefix/node_modules/opencode-ai/opencode"
+printf '#!/bin/bash\nprintf "2.3.4\\n"\n' > "$binary"
+chmod +x "$binary"
+ln -s ../opencode-ai/opencode "$prefix/node_modules/.bin/opencode"
+''' + ({"good": "", "fail": "exit 42", "wrong": "printf '{}' > \"$prefix/node_modules/opencode-ai/package.json\"",
+        "binary": "printf '#!/bin/bash\\nprintf wrong\\n' > \"$binary\"",
+        "relocation": "printf '#!/bin/bash\\n[[ $0 == */.build.* ]] || exit 23\\nprintf \"2.3.4\\\\n\"\\n' > \"$binary\""}[mode]))
+        return self.shell(f'''source "{SCRIPTS / 'entrypoint.sh'}"
+env() {{
+    local -a args=(); local arg
+    for arg in "$@"; do
+        [[ $arg != /usr/bin/npm ]] || arg="{self.bin / 'npm-fixture'}"
+        [[ $arg != /usr/bin/node ]] || arg="{shutil.which('node')}"
+        args+=("$arg")
+    done
+    /usr/bin/env "${{args[@]}}"
+}}
+load_contract
+install_runtime
+''', OPENAI_API_KEY="fake-provider-fixture", NODE_OPTIONS="--invalid-fixture",
+                          OPENCODE_TEST_HOME="/fake", **env)
 
-    def test_status_and_bounded_logs(self):
-        for command in ("status", "logs"):
-            result = self.run_script("manage.sh", command)
-            self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--no-pager --full status opencode.service", self.log.read_text())
-        self.assertIn("--no-pager -u opencode.service -n 100", self.log.read_text())
+    def test_install_only_dirty_reapply_and_isolation(self):
+        (self.repo / "user-edit").write_text("preserve")
+        self.ok(self.install())
+        self.assertEqual(os.readlink(self.prefix / "bin/opencode"), "../node_modules/.bin/opencode")
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual((self.repo / "user-edit").read_text(), "preserve")
+        self.ok(self.install("fail"))  # matching runtime reused; npm must not run
+        self.assertEqual(list(self.root.glob(".build.*")), [])
+        self.assertNotIn(".runtime", self.git("status", "--porcelain"))
 
-    def test_systemctl_failures_are_preserved(self):
-        self.mock("systemctl", "exit 3")
-        self.assertEqual(self.run_script("manage.sh", "status").returncode, 3)
-        result = self.shell(f'source "{SCRIPTS / "manage.sh"}"; '
-                            'require_root() { :; }; deployment_lock() { :; }; manage_main restart')
-        self.assertEqual(result.returncode, 3)
+    def test_bad_pins_fail_before_staging(self):
+        for version in ("", "latest", "1.2", "1.2.3-beta", "01.2.3", "1.2.3;id"):
+            self.assertNotEqual(self.run_script("entrypoint.sh", "install", OPENCODE_VERSION=version).returncode, 0)
+        self.assertEqual(list(self.root.glob(".build.*")), [])
 
-    def test_service_control_takes_lifecycle_lock(self):
-        result = self.shell(f'source "{SCRIPTS / "manage.sh"}"; '
-                            'require_root() { :; }; deployment_lock() { die "lock busy"; }; manage_main start')
-        self.assertIn("lock busy", result.stderr)
-        self.assertFalse(self.log.exists())
+    def test_failed_install_metadata_binary_and_relocation_restore(self):
+        for mode in ("fail", "wrong", "binary", "relocation"):
+            with self.subTest(mode=mode):
+                self.package("1.0.0")
+                result = self.install(mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                expected = {"fail": "npm install failed", "wrong": "staged runtime verification failed",
+                            "binary": "staged runtime verification failed", "relocation": "previous runtime restored"}[mode]
+                self.assertIn(expected, result.stderr)
+                self.assertIn("1.0.0", (self.prefix / "node_modules/opencode-ai/package.json").read_text())
+                self.assertTrue(list(self.root.glob(".build.*")))
 
-    def test_stop_bypasses_contract_audit_and_lock_and_preserves_exit(self):
-        self.mock("systemctl", 'printf "%s\n" "$*"; exit 23')
-        result = self.shell(f'source "{SCRIPTS / "manage.sh"}"; '
-                            'require_root() { :; }; load_contract() { die "broken deployment"; }; '
-                            'deployment_lock() { die "lock busy"; }; manage_main stop')
-        self.assertEqual(result.returncode, 23, result.stderr)
-        self.assertEqual(result.stdout.strip(), "stop opencode.service")
+    def test_verification_uses_private_empty_home_and_all_xdg(self):
+        self.package(body='''[[ $HOME != "''' + str(self.home) + '''" && $PWD == "$HOME" ]]
+[[ $XDG_CONFIG_HOME == "$HOME/.config" && $XDG_DATA_HOME == "$HOME/.local/share" ]]
+[[ $XDG_CACHE_HOME == "$HOME/.cache" && $XDG_STATE_HOME == "$HOME/.local/state" ]]
+[[ ${OPENCODE_BIN_PATH-unset} == unset && ${OPENCODE_TEST_HOME-unset} == unset ]]
+[[ ${NODE_OPTIONS-unset} == unset && ${NODE_PATH-unset} == unset ]]
+[[ $OPENCODE_DISABLE_AUTOUPDATE == 1 && $1 == --version ]]
+printf '2.3.4\\n' ''')
+        self.ok(self.install("fail"))
+        self.ok(self.run_script("manage.sh", "version", OPENCODE_VERSION=""))
 
-    def test_stop_rejects_invalid_unit_and_extra_arguments(self):
-        for unit, args in [("--all", "stop"), ("other.service extra", "stop"), ("opencode.service", "stop extra")]:
-            result = self.shell(f'source "{SCRIPTS / "manage.sh"}"; '
-                                'require_root() { :; }; manage_main ' + args, OPENCODE_UNIT=unit)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(self.log.exists())
-
-    @unittest.skipIf(os.getuid() == 0, "requires non-root test runner")
-    def test_seed_failure_and_concurrent_user_content_are_preserved(self):
-        for name in ("commands", "skills", "system", "gsd"):
-            (self.repo / "agent" / name).mkdir(parents=True)
-        config = self.home / ".config/opencode"
-        body = f'''source "{SCRIPTS / 'entrypoint.sh'}"; load_contract
-        git() {{
-            case " $* " in
-                *" ls-files "*) printf '%s\\0' opencode/.opencode/config/tui.json ;;
-                *" show "*)
-                    printf partial
-                    if [[ $SEED_CASE == failure ]]; then return 42; fi
-                    printf user-content > "$OPENCODE_CONFIG_DIR/tui.json" ;;
-            esac
-        }}
-        initialize_home
-        '''
-        result = self.shell(body, SEED_CASE="failure")
-        self.assertEqual(result.returncode, 42, result.stderr)
-        self.assertFalse((config / "tui.json").exists())
-        self.assertEqual(list(config.glob(".opencode-default.*")), [])
-        result = self.shell(body, SEED_CASE="concurrent")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((config / "tui.json").read_text(), "user-content")
-        self.assertEqual(list(config.glob(".opencode-default.*")), [])
-
-    def test_wrong_home_owner_rejected(self):
-        self.mock("stat", "printf '999999\\n'")
-        result = self.run_script("start.sh", "session")
-        self.assertIn("account must own its home", result.stderr)
-
-    @unittest.skipIf(os.getuid() == 0, "requires non-root test runner")
-    def test_admin_operations_never_escalate(self):
-        for command in ("start", "stop", "restart"):
-            result = self.run_script("manage.sh", command)
-            self.assertIn("no automatic sudo", result.stderr)
-        result = self.run_script("entrypoint.sh", "provision")
-        self.assertIn("no automatic sudo", result.stderr)
-        self.assertFalse(self.log.exists())
-
-    def test_trusted_path_rejects_writable_ancestors_and_symlinks(self):
-        result = self.shell(f'source "{SCRIPTS / "entrypoint.sh"}"; trusted_path "$OPENCODE_ROOT"')
-        self.assertNotEqual(result.returncode, 0)
-        (self.root / "link").symlink_to(self.repo)
-        result = self.shell(f'source "{SCRIPTS / "entrypoint.sh"}"; trusted_path "$OPENCODE_ROOT/link"')
-        self.assertIn("symlink", result.stderr)
-
-    def test_update_check_and_explicit_checkout(self):
-        first, second = self.make_repo()
-        result = self.update("update-check", second)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git("rev-parse", "HEAD"), first)
-        result = self.update("update", second)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git("rev-parse", "HEAD"), second)
-        self.assertIn("No automatic rollback", result.stdout)
-
-    def test_update_refuses_dirty_tree_branch_and_active_service(self):
-        first, second = self.make_repo()
-        self.assertIn("full lowercase commit", self.update("update", "main").stderr)
-        self.assertIn("stop the unit", self.update("update", second, TEST_UNIT_STATE="active").stderr)
-        (self.repo / "untracked").write_text("keep me")
-        self.assertIn("dirty", self.update("update", second).stderr)
-        self.assertEqual(self.git("rev-parse", "HEAD"), first)
-        self.assertEqual((self.repo / "untracked").read_text(), "keep me")
-
-    def test_update_lock_and_fetch_failure(self):
-        import fcntl
-        first, second = self.make_repo()
-        with (self.root / ".lifecycle.lock").open("w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.assertIn("another lifecycle", self.update("update", second).stderr)
-        self.git("remote", "set-url", "origin", "file:///nonexistent/secret-value")
-        result = self.update("update", "f" * 40)
-        self.assertIn("fetch failed", result.stderr)
-        self.assertNotIn("secret-value", result.stdout + result.stderr)
-        self.assertEqual(self.git("rev-parse", "HEAD"), first)
-
-    @unittest.skipIf(os.getuid() == 0, "requires non-root test runner")
-    def test_initialize_preserves_config_plugins_and_skips_ignored_cache(self):
-        self.git("init", "-q")
-        source = self.repo / "opencode/.opencode/config"
-        (source / "plugins").mkdir(parents=True)
-        (source / "opencode.json").write_text('{"plugin":["existing@1.0.0"]}')
-        (source / "plugins/test.js").write_text("export default () => ({})")
-        (self.repo / ".gitignore").write_text("node_modules/\nauth.json\n")
-        (source / "node_modules").mkdir()
-        (source / "node_modules/huge-cache").write_text("do not copy")
-        (source / "auth.json").write_text("do not copy credential")
-        for name in ("commands", "skills", "system", "gsd"):
-            folder = self.repo / "agent" / name
-            folder.mkdir(parents=True)
-            (folder / ".keep").touch()
-        self.git("add", ".")
-        self.commit("defaults")
+    def test_home_copy_once_formats_private_state_and_migration(self):
         config = self.home / ".config/opencode"
         config.mkdir(parents=True)
-        (config / "opencode.json").write_text("existing user config")
-        (self.home / ".agents").mkdir()
-        (self.home / ".agents/skills").symlink_to(self.repo / "agent/skills")
-        result = self.run_script("entrypoint.sh", "initialize-home")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((config / "opencode.json").read_text(), "existing user config")
-        self.assertTrue((config / "plugins/test.js").is_file())
-        self.assertFalse((config / "node_modules").exists())
-        self.assertFalse((config / "auth.json").exists())
-        self.assertFalse((self.home / ".agents/skills").is_symlink())
-        for name in ("commands", "skills", "system", "gsd"):
-            self.assertEqual((config / name).resolve(), self.repo / "agent" / name)
-        self.assertEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
-        # Existing JSONC is equally authoritative; don't introduce JSON beside it.
-        (config / "opencode.json").rename(config / "opencode.jsonc")
-        self.assertEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
+        (config / "opencode.jsonc").write_text("private-config")
+        for rel in (".local/share/opencode/auth.json", ".cache/opencode/private", ".local/state/opencode/state"):
+            path = self.home / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fake-private-fixture")
+        previous = self.base / "old-checkout"
+        (config / "commands").symlink_to(previous / "agent/commands")
+        self.ok(self.install())  # must not initialize before migration input arrives
+        self.assertNotEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
+        self.ok(self.run_script("entrypoint.sh", "initialize-home", OPENCODE_PREVIOUS_REPO=str(previous)))
+        self.assertEqual(os.readlink(config / "commands"), str(self.repo / "agent/commands"))
         self.assertFalse((config / "opencode.json").exists())
-        self.assertEqual((config / "opencode.jsonc").read_text(), "existing user config")
-        (config / "plugins/test.js").unlink()
-        (config / "plugins").rmdir()
-        external = self.root / "external-plugins"
-        external.mkdir()
-        (config / "plugins").symlink_to(external)
-        result = self.run_script("entrypoint.sh", "initialize-home")
-        self.assertIn("preserved redirected plugin directory", result.stderr)
-        self.assertEqual(list(external.iterdir()), [])
-        (config / "plugins").unlink()
+        self.assertEqual((config / "opencode.jsonc").read_text(), "private-config")
+        self.ok(self.run_script("entrypoint.sh", "initialize-home"))
+        self.assertEqual((self.home / ".local/share/opencode/auth.json").read_text(), "fake-private-fixture")
+        self.assertEqual((self.home / ".local/state/opencode/state").read_text(), "fake-private-fixture")
+        self.assertEqual((self.home / ".cache/opencode/private").read_text(), "fake-private-fixture")
+
+    def test_unknown_resources_and_redirected_plugins_preserved(self):
+        config = self.home / ".config/opencode"
+        (config / "commands").mkdir(parents=True)
+        self.assertNotEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
+        self.assertTrue((config / "commands").is_dir())
+        (config / "commands").rmdir()
+        (config / "skills").symlink_to(self.workspace)
+        self.assertNotEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
+        self.assertEqual(os.readlink(config / "skills"), str(self.workspace))
         (config / "skills").unlink()
-        (config / "skills").mkdir()
-        self.assertIn("preserved conflicting resource", self.run_script("entrypoint.sh", "initialize-home").stderr)
+        (config / "plugins").symlink_to(self.workspace)
+        self.assertNotEqual(self.run_script("entrypoint.sh", "initialize-home").returncode, 0)
+        self.assertFalse((self.workspace / "example.ts").exists())
 
-    def test_provision_validates_pins_before_install(self):
-        body = (f'source "{SCRIPTS / "entrypoint.sh"}"; load_contract; '
-                'deployment_lock() { :; }; provision')
-        result = self.shell(body, OPENCODE_VERSION="latest", OPENCODE_APT_PACKAGES="git=1")
-        self.assertIn("exact stable version", result.stderr)
-        result = self.shell(body, OPENCODE_VERSION="1.2.15", OPENCODE_APT_PACKAGES="git")
-        self.assertIn("exact version", result.stderr)
-        result = self.shell(body, OPENCODE_VERSION="1.2.15", OPENCODE_APT_PACKAGES="git=1")
-        self.assertIn("missing required apt pin", result.stderr)
+    def test_default_format_and_known_legacy_links(self):
+        legacy = self.home / ".agents"
+        legacy.mkdir()
+        (legacy / "commands").symlink_to(self.repo / "agent/commands")
+        self.ok(self.run_script("entrypoint.sh", "initialize-home"))
+        config = self.home / ".config/opencode"
+        self.assertTrue((config / "opencode.json").exists())
+        self.assertFalse((config / "opencode.jsonc").exists())
+        self.assertFalse((legacy / "commands").is_symlink())
 
-    def test_provision_install_contract_mocked(self):
-        pins = " ".join(f"{name}=1.0" for name in (
-            "ca-certificates", "git", "nodejs", "npm", "ripgrep", "python3", "python3-venv", "openssh-client"))
-        body = (f'source "{SCRIPTS / "entrypoint.sh"}"; load_contract; '
-                'deployment_lock() { :; }; '
-                'timeout() { shift; "$@"; }; '
-                'apt-get() { printf "apt %s\\n" "$*" >> "$CALL_LOG"; }; '
-                'install() { :; }; '
-                'env() { printf "env %s\\n" "$*" >> "$CALL_LOG"; }; '
-                'runuser() { printf "runuser %s\\n" "$*" >> "$CALL_LOG"; '
-                'if [[ "$*" == *--version ]]; then printf "1.2.15\\n"; fi; }; provision')
-        result = self.shell(body, OPENCODE_VERSION="1.2.15", OPENCODE_APT_PACKAGES=pins)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.log.read_text()
-        self.assertIn("--no-install-recommends -- ca-certificates=1.0", calls)
-        self.assertIn("--ignore-scripts --no-audit --no-fund --include=optional", calls)
-        self.assertIn("opencode-ai@1.2.15", calls)
-        self.assertIn(f"runuser -u {self.user} -- env -i", calls)
-        self.assertIn("initialize-home", calls)
-        self.assertNotIn(self.env["OPENCODE_SERVER_PASSWORD"], calls)
-        self.assertIn("unit remains stopped", result.stdout)
+    def test_service_session_argv_and_overrides_without_version(self):
+        self.package(body='''printf 'cwd=%s\\nhome=%s\\nstate=%s\\nauto=%s\\n' "$PWD" "$HOME" "$XDG_STATE_HOME" "$OPENCODE_DISABLE_AUTOUPDATE"
+[[ ${OPENCODE_BIN_PATH-unset} == unset && ${OPENCODE_TEST_HOME-unset} == unset && ${NODE_OPTIONS-unset} == unset && ${NODE_PATH-unset} == unset ]]
+printf 'arg=%s\\n' "$@"''')
+        env = dict(OPENCODE_VERSION="", OPENCODE_BIN_PATH="/fake", OPENCODE_TEST_HOME="/fake",
+                   NODE_OPTIONS="--fake", NODE_PATH="/fake")
+        out = self.ok(self.run_script("start.sh", "service", **env))
+        self.assertIn("arg=web\narg=--hostname\narg=127.0.0.1\narg=--port\narg=4096\narg=--mdns\narg=false", out)
+        self.assertIn(f"cwd={self.workspace}", out)
+        self.assertIn(f"state={self.home}/.local/state", out)
+        self.assertNotIn("fake-service-fixture", out)
+        out = self.ok(self.run_script("start.sh", "session", "--prompt", "two words", "", **env))
+        self.assertIn("arg=--prompt\narg=two words\narg=\n", out)
+        for port in ("80", "04096", "65536", "1;id"):
+            self.assertNotEqual(self.run_script("start.sh", "service", OPENCODE_PORT=port).returncode, 0)
+        self.assertNotEqual(self.run_script("start.sh", "service", OPENCODE_SERVER_PASSWORD="").returncode, 0)
+        self.assertNotEqual(self.run_script("start.sh", "service", "extra").returncode, 0)
 
-    def test_failed_install_cleans_cache_and_never_initializes_or_starts(self):
-        pins = " ".join(f"{name}=1.0" for name in (
-            "ca-certificates", "git", "nodejs", "npm", "ripgrep", "python3", "python3-venv", "openssh-client"))
-        body = (f'source "{SCRIPTS / "entrypoint.sh"}"; load_contract; '
-                'deployment_lock() { :; }; timeout() { shift; "$@"; }; '
-                'apt-get() { return "${TEST_APT_EXIT:-0}"; }; install() { :; }; '
-                'env() { return 42; }; '
-                'runuser() { printf "unexpected runtime launch\\n" >> "$CALL_LOG"; }; provision')
-        for apt_exit, expected in (("0", 42), ("23", 23)):
-            with self.subTest(apt_exit=apt_exit):
-                result = self.shell(body, OPENCODE_VERSION="1.2.15", OPENCODE_APT_PACKAGES=pins,
-                                    TEST_APT_EXIT=apt_exit)
-                self.assertEqual(result.returncode, expected, result.stderr)
-                self.assertEqual(list(self.root.glob(".npm.*")), [])
-                self.assertNotIn("unbound variable", result.stderr)
-                self.assertNotIn("provisioned", result.stdout)
-                self.assertNotIn("unexpected runtime launch", self.log.read_text())
+    def prepare_update(self, collision=False):
+        self.git("branch", "incoming")
+        self.git("checkout", "-q", "incoming")
+        if collision:
+            self.package()
+            self.git("add", "-f", "opencode/.runtime")
+        else:
+            (self.repo / "new-file").write_text("new")
+        self.commit("incoming")
+        target = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "assigned")
+        # Separate local bare remote with assigned branch; no network involved.
+        remote = self.base / "remote.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(self.repo), str(remote)], check=True)
+        subprocess.run(["git", "--git-dir", str(remote), "update-ref", "refs/heads/assigned", target], check=True)
+        self.git("remote", "add", "origin", str(remote))
+        return target
 
-    def test_initialize_rejects_redirected_docker_config(self):
-        config = self.home / ".config"
-        config.mkdir()
-        (config / "opencode").symlink_to(self.repo)
-        result = self.run_script("entrypoint.sh", "initialize-home")
+    def test_updates_real_git_ff_clean_branch_and_ignored_collision(self):
+        target = self.prepare_update()
+        self.package()
+        self.ok(self.run_script("manage.sh", "update-check", target))
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.first)
+        self.ok(self.run_script("manage.sh", "update", target))
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "assigned")
+        self.assertEqual(self.git("rev-parse", "HEAD"), target)
+        (self.repo / "dirty").write_text("local")
+        self.assertNotEqual(self.run_script("manage.sh", "update", target).returncode, 0)
+        self.assertNotEqual(self.run_script("manage.sh", "update-check", target, OPENCODE_BRANCH="wrong").returncode, 0)
+
+    def test_ignored_collision_refused(self):
+        target = self.prepare_update(collision=True)
+        self.package("1.0.0")
+        result = self.run_script("manage.sh", "update", target)
         self.assertNotEqual(result.returncode, 0)
-        self.assertTrue((config / "opencode").is_symlink())
-        self.assertEqual(list(self.repo.iterdir()), [])
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.first)
+        self.assertIn("1.0.0", (self.prefix / "node_modules/opencode-ai/package.json").read_text())
+
+    def test_divergence_and_detached_refused(self):
+        target = self.prepare_update()
+        (self.repo / "local").write_text("local")
+        self.commit("local")
+        local = self.git("rev-parse", "HEAD")
+        self.assertNotEqual(self.run_script("manage.sh", "update", target).returncode, 0)
+        self.assertEqual(self.git("rev-parse", "HEAD"), local)
+        self.git("checkout", "-q", "--detach")
+        self.assertNotEqual(self.run_script("manage.sh", "update-check", target).returncode, 0)
+
+    def test_identity_home_layout_and_service_control_rejected(self):
+        self.mock("stat", "printf '999999\\n'")
+        self.assertIn("must own", self.run_script("entrypoint.sh", "initialize-home").stderr)
+        (self.bin / "stat").unlink()
+        self.assertNotEqual(self.run_script("entrypoint.sh", "install", OPENCODE_ROOT=str(self.base)).returncode, 0)
+        self.assertNotEqual(self.run_script("start.sh", "session", OPENCODE_REPO=str(self.root)).returncode, 0)
+        for command in ("start", "stop", "restart", "logs"):
+            self.assertNotEqual(self.run_script("manage.sh", command).returncode, 0)
+        self.mock("getent", f"printf '{self.user}:x:999999:999999::{self.home}:/bin/bash\\n'")
+        self.assertIn("exact account UID", self.run_script("entrypoint.sh", "install").stderr)
+        self.mock("getent", "printf 'root:x:0:0::/root:/bin/bash\\n'")
+        self.assertIn("non-root account", self.run_script("entrypoint.sh", "install", OPENCODE_USER="root").stderr)
+
+    def test_seed_failure_and_concurrent_file_preserved(self):
+        config = self.home / ".config/opencode"
+        for mode in ("failure", "concurrent"):
+            body = f'''source "{SCRIPTS / 'entrypoint.sh'}"
+load_contract
+opencode_git() {{
+    case "$1" in
+        ls-files) printf '%s\\0' opencode/.opencode/config/tui.json ;;
+        show)
+            printf partial
+            [[ {mode} != failure ]] || return 42
+            printf user-content > "$OPENCODE_CONFIG_DIR/tui.json" ;;
+    esac
+}}
+initialize_home
+'''
+            result = self.shell(body)
+            if mode == "failure":
+                self.assertEqual(result.returncode, 42, result.stderr)
+                self.assertFalse((config / "tui.json").exists())
+            else:
+                self.ok(result)
+                self.assertEqual((config / "tui.json").read_text(), "user-content")
+            self.assertEqual(list(config.glob(".opencode-default.*")), [])
+
+    def test_status_is_read_only_and_preserves_failure(self):
+        self.mock("systemctl-fixture", '''[[ $* == '--no-pager show --property=Id,LoadState,ActiveState,SubState opencode.service' ]]
+[[ ${OPENCODE_SERVER_PASSWORD-unset} == unset ]]
+printf 'ActiveState=inactive\\n'
+exit 3''')
+        # exec requires an executable env adapter, rather than a shell function.
+        self.mock("env", f'''args=()
+for arg in "$@"; do
+    [[ $arg != /usr/bin/systemctl ]] || arg="{self.bin / 'systemctl-fixture'}"
+    args+=("$arg")
+done
+exec /usr/bin/env "${{args[@]}}"''')
+        result = self.run_script("manage.sh", "status")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(result.stdout, "ActiveState=inactive\n")
+
+    def test_busy_lock_and_redirected_state_refused(self):
+        body = f'''source "{SCRIPTS / 'entrypoint.sh'}"
+load_contract
+deployment_lock
+if /bin/bash "{SCRIPTS / 'entrypoint.sh'}" initialize-home; then exit 0; else exit $?; fi
+'''
+        self.assertIn("another lifecycle operation", self.shell(body).stderr)
+        (self.home / ".local").mkdir()
+        (self.home / ".local/state").symlink_to(self.workspace)
+        result = self.run_script("entrypoint.sh", "initialize-home")
+        self.assertIn("redirected private state", result.stderr)
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_promotion_rename_failure_restores_runtime(self):
+        self.package("1.0.0")
+        self.mock("mv", '''if [[ $2 == */runtime && $3 == */.runtime ]]; then exit 17; fi
+exec /usr/bin/mv "$@"''')
+        result = self.install()
+        self.assertIn("runtime promotion failed", result.stderr)
+        self.assertIn("1.0.0", (self.prefix / "node_modules/opencode-ai/package.json").read_text())
+
+    def test_global_layout_reapply_preserves_failure_then_rebuilds(self):
+        self.package()
+        (self.prefix / "lib").mkdir()
+        (self.prefix / "node_modules").rename(self.prefix / "lib/node_modules")
+        binary = self.prefix / "bin/opencode"
+        binary.unlink()
+        binary.symlink_to("../lib/node_modules/.bin/opencode")
+        self.assertNotEqual(self.install("fail").returncode, 0)
+        self.assertEqual(os.readlink(binary), "../lib/node_modules/.bin/opencode")
+        self.assertEqual(self.ok(self.run_script("manage.sh", "version")).strip(), "2.3.4")
+        self.ok(self.install())
+        self.assertFalse((self.prefix / "lib").exists())
+        self.assertEqual(os.readlink(binary), "../node_modules/.bin/opencode")
+        self.ok(self.install("fail"))  # local layout is now reusable
+
+    @unittest.skipUnless(shutil.which("npm") and shutil.which("node"), "requires real npm and Node")
+    def test_real_npm_nested_fallback_global_fails_local_install_passes(self):
+        # Two tiny tarballs, no registry dependencies. Real parent npm runs a
+        # postinstall whose child install/read sequence mirrors the vendor's.
+        fixture = self.base / "npm-fixture"
+        fixture.mkdir()
+        child = fixture / "child"
+        child.mkdir()
+        (child / "package.json").write_text(json.dumps(dict(name="fixture-platform", version="2.3.4")))
+        (child / "opencode").write_text("#!/bin/bash\nprintf '2.3.4\\n'\n")
+        (child / "opencode").chmod(0o755)
+        child_tar = fixture / "child.tgz"
+        with tarfile.open(child_tar, "w:gz") as archive:
+            archive.add(child, arcname="package")
+        parent = fixture / "parent"
+        parent.mkdir()
+        (parent / "package.json").write_text(json.dumps(dict(
+            name="opencode-ai", version="2.3.4", bin=dict(opencode="bin/opencode"),
+            scripts=dict(postinstall="node postinstall.cjs"))))
+        # npm links declared bins before postinstall. Like the published parent,
+        # include the bin file that postinstall will replace with the child binary.
+        (parent / "bin").mkdir()
+        (parent / "bin/opencode").write_text("#!/bin/bash\nexit 99\n")
+        (parent / "bin/opencode").chmod(0o755)
+        report = fixture / "report.json"
+        (parent / "postinstall.cjs").write_text('''
+const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
+const {spawnSync} = require("node:child_process");
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "fallback-"));
+try {
+    const child = spawnSync("npm", ["install", "--ignore-scripts", "--no-save",
+        "--loglevel=error", "--prefix", temp, CHILD_TAR], {encoding: "utf8"});
+    const expected = path.join(temp, "node_modules/fixture-platform/opencode");
+    const globalPath = path.join(temp, "lib/node_modules/fixture-platform/opencode");
+    fs.writeFileSync(REPORT, JSON.stringify({global: process.env.npm_config_global || "unset",
+        childStatus: child.status, expected: fs.existsSync(expected),
+        globalPath: fs.existsSync(globalPath), uid: process.getuid()}));
+    if (child.status !== 0) throw Error(child.stderr);
+    if (!fs.existsSync(expected)) throw Error("vendor-expected node_modules binary missing");
+    fs.mkdirSync(path.join(__dirname, "bin"), {recursive: true});
+    fs.copyFileSync(expected, path.join(__dirname, "bin/opencode"));
+    fs.chmodSync(path.join(__dirname, "bin/opencode"), 0o755);
+} finally { fs.rmSync(temp, {recursive: true, force: true}); }
+'''.replace("CHILD_TAR", json.dumps(str(child_tar))).replace("REPORT", json.dumps(str(report))))
+        parent_tar = fixture / "parent.tgz"
+        with tarfile.open(parent_tar, "w:gz") as archive:
+            archive.add(parent, arcname="package")
+
+        npm, node = shutil.which("npm"), shutil.which("node")
+        toolpath = f"{Path(npm).parent}:{Path(node).parent}:/usr/bin:/bin"
+        userrc, globalrc = fixture / "userrc", fixture / "globalrc"
+        userrc.touch()
+        globalrc.touch()
+        clean = dict(HOME=str(fixture), TMPDIR=str(fixture), PATH=toolpath,
+                     NPM_CONFIG_USERCONFIG=str(userrc), NPM_CONFIG_GLOBALCONFIG=str(globalrc),
+                     NPM_CONFIG_CACHE=str(fixture / "cache"), NPM_CONFIG_OFFLINE="true",
+                     NPM_CONFIG_UPDATE_NOTIFIER="false",
+                     NPM_CONFIG_AUDIT="false", NPM_CONFIG_FUND="false",
+                     NPM_CONFIG_REGISTRY="https://registry.npmjs.org")
+        # Negative control: global only inside this temporary prefix, never the
+        # controller's global package store. No config files are modified.
+        old = subprocess.run([npm, "install", "--global", "--prefix", str(fixture / "old"),
+                              "--ignore-scripts=false", str(parent_tar)], cwd=fixture,
+                             env=clean, text=True, capture_output=True, timeout=60)
+        self.assertNotEqual(old.returncode, 0)
+        self.assertIn("vendor-expected node_modules binary missing", old.stderr)
+        self.assertEqual(json.loads(report.read_text()), dict(
+            globalPath=True, expected=False, childStatus=0, uid=os.getuid(), **{"global": "true"}))
+
+        # Exercise production install/verification/promotion. Adapt only the
+        # runner's tool locations and the exact package spec to a local fixture;
+        # keep npm mode, lifecycle, config and prefix flags from production.
+        result = self.shell(f'''source "{SCRIPTS / 'entrypoint.sh'}"
+env() {{
+    local -a args=(); local arg
+    for arg in "$@"; do
+        case "$arg" in
+            /usr/bin/npm) arg="{npm}" ;;
+            /usr/bin/node) arg="{node}" ;;
+            opencode-ai@2.3.4) arg="{parent_tar}" ;;
+            PATH=/usr/bin:/bin) arg="PATH={toolpath}" ;;
+        esac
+        args+=("$arg")
+        [[ $arg != -i ]] || args+=(NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false)
+    done
+    /usr/bin/env "${{args[@]}}"
+}}
+load_contract
+install_runtime
+''')
+        logs = "\n".join(p.read_text() for p in self.root.glob(".build.*/*.log"))
+        self.assertEqual(result.returncode, 0, result.stderr + logs)
+        observed = json.loads(report.read_text())
+        self.assertNotEqual(observed["global"], "true")
+        self.assertEqual((observed["childStatus"], observed["expected"], observed["globalPath"]), (0, True, False))
+        self.assertEqual(observed["uid"], os.getuid())
+        self.assertEqual(os.readlink(self.prefix / "bin/opencode"), "../node_modules/.bin/opencode")
+        self.assertEqual(self.ok(self.run_script("manage.sh", "version")).strip(), "2.3.4")
+
+    @unittest.skipUnless(shutil.which("npm"), "requires npm; no install performed")
+    def test_real_npm_distinct_empty_configs(self):
+        userrc, globalrc = self.base / "userrc", self.base / "globalrc"
+        userrc.touch()
+        globalrc.touch()
+        result = subprocess.run([shutil.which("npm"), "config", "get", "registry",
+                                 f"--userconfig={userrc}", f"--globalconfig={globalrc}",
+                                 "--registry=https://registry.npmjs.org"], cwd=self.home,
+                                env=dict(HOME=str(self.home), PATH=f"{Path(shutil.which('node')).parent}:/usr/bin:/bin"), capture_output=True, text=True)
+        self.assertEqual(self.ok(result).strip().rstrip("/"), "https://registry.npmjs.org")
+
+
+class RootGuard(unittest.TestCase):
+    def test_root_guard_precedes_account_lookup(self):
+        source = (SCRIPTS / "entrypoint.sh").read_text().split("load_contract() {", 1)[1]
+        self.assertLess(source.index("$EUID != 0"), source.index("getent passwd"))
+        if os.getuid() == 0:
+            for script, command in (("entrypoint.sh", "install"), ("entrypoint.sh", "initialize-home"),
+                                    ("start.sh", "session"), ("manage.sh", "status")):
+                result = subprocess.run(["bash", str(SCRIPTS / script), command], env={"PATH": "/usr/bin:/bin"},
+                                        capture_output=True, text=True)
+                self.assertIn("never root", result.stderr)
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
