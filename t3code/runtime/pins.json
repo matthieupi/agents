@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "build_args": {
+    "NODE_IMAGE": "node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e",
+    "DEBIAN_SNAPSHOT": "20260908T000000Z"
+  },
+  "node_version": "24.20.0",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "t3_version": "0.0.40",
+  "t3_integrity": "sha512-lvyH1fexahy7lVXNNWP9FUE/IRlYFKEt5DksoscftVY0VBDQ3LBVrKbyYd5iiHWXr1Qun3Fcbf+kXsIP+75wjg==",
+  "package_lock_sha256": "12a95eb87b99475c0564e9277eebdcf99ec55efb1e2f41048d68a4e01832fdbc",
+  "install_hooks": {
+    "node_modules/msgpackr-extract": {
+      "install": "node-gyp-build-optional-packages"
+    },
+    "node_modules/node-pty": {
+      "install": "node scripts/prebuild.js || node-gyp rebuild",
+      "postinstall": "node scripts/post-install.js"
+    }
+  },
+  "evidence": {
+    "checked": "2026-09-08",
+    "npm_version_for_lock": "10.9.8",
+    "node_version_for_lock_only": "22.23.2",
+    "metadata": "https://registry.npmjs.org/t3/0.0.40",
+    "provenance": "https://registry.npmjs.org/-/npm/v1/attestations/t3@0.0.40",
+    "publishing_commit": "ea2983afbbcd5ad6ee2e7db80c2a9270ff4964a9",
+    "workflow": "https://github.com/pingdotgg/t3code/actions/runs/34171449177/attempts/1",
+    "verification": "Downloaded T3 SRI and two npm ECDSA signatures verified; npm-bundled sigstore verified SLSA bundle with GitHub issuer/workflow identity and matching tarball subject. All 178 lock tarball SHA-512 values verified; lifecycle hooks read, not executed on host.",
+    "node_index": "https://registry-1.docker.io/v2/library/node/manifests/24.20.0-bookworm-slim",
+    "node_source": "https://github.com/nodejs/docker-node/tree/c4eb0858f5c522521768d5b6dc1d9f1631d4854d/24/bookworm-slim",
+    "node_platform_digests": {
+      "linux/amd64": "sha256:6642ef280aebc09c4541bee0b15c9f89f0f3f3c247ddee79ae1d37eddfdcbbaa",
+      "linux/arm64": "sha256:e9b5516b06baeaea9a8e65a7aec6a85fbb960a30b52b66968f2c8092b3e2a3eb"
+    },
+    "debian_release": "https://snapshot.debian.org/archive/debian/20260908T000000Z/dists/bookworm/Release",
+    "docker_validation": "Blocked: no local Docker CLI. Neither platform built or runtime-accepted."
+  }
+}

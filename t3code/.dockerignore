@@ -8,6 +8,9 @@
 !scripts/start.sh
 !scripts/provider.sh
 !scripts/healthcheck.mjs
+!scripts/verify_build.py
+!scripts/smoke-native.mjs
 !runtime/
 !runtime/package.json
 !runtime/package-lock.json
+!runtime/pins.json

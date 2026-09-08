@@ -2,6 +2,6 @@
   "name": "t3code-container-runtime",
   "version": "0.0.0",
   "private": true,
-  "description": "BUILD BLOCKED: add the approved exact t3 dependency and reviewed npm lock together; candidate 0.0.40 is not approved.",
-  "dependencies": {}
+  "description": "Provider-neutral immutable T3 container runtime",
+  "dependencies": {"t3": "0.0.40"}
 }

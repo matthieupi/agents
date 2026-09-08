@@ -14,14 +14,11 @@ import stat
 import subprocess
 import sys
 import tempfile
+from verify_build import validate as validate_build
 
 
 COMPONENT = Path(__file__).resolve().parent.parent
 COMPOSE = COMPONENT / "docker-compose.yml"
-BUILD_ARGS = (
-    "NODE_IMAGE", "BUILDER_IMAGE", "NODE_VERSION", "T3_VERSION", "T3_INTEGRITY",
-    "PACKAGE_LOCK_SHA256", "PREPARED_BASES_REVIEWED", "INSTALL_HOOKS_REVIEWED",
-)
 NAME = re.compile(r"t3code-[1-9][0-9]*-[a-z0-9-]{1,24}-[a-f0-9]{16}")
 IMAGE = re.compile(r"(?:sha256:[a-f0-9]{64}|[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64})")
 DOCKER_ENDPOINT = None
@@ -64,6 +61,16 @@ def directory(value, private=False):
     return path
 
 
+def workspace_directory(value):
+    # Resolve relative syntax, but do not silently accept a symlink alias. Check
+    # the lexical path first (including components preceding '..').
+    path = Path(os.path.abspath(os.curdir)) / value
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            fail("Symlinked workspace components are not supported.")
+    return directory(path.resolve(strict=True))
+
+
 def private_file(path):
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
@@ -72,7 +79,35 @@ def private_file(path):
 
 
 def registry():
-    return directory(os.environ.get("T3CODE_STATE_ROOT"), private=True)
+    value = os.environ.get("T3CODE_STATE_ROOT")
+    if value is not None:
+        return directory(value, private=True)
+    # Account database, not an inherited HOME, owns the default. Create only
+    # missing directories under an owned, non-group/world-writable account home.
+    path = directory(pwd.getpwuid(os.getuid()).pw_dir)
+    for part in (None, ".local", "state", "t3code"):
+        if part:
+            path = path / part
+            try:
+                path.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+        directory(path)
+        info = path.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            fail("Default state ancestors must be operator-owned and not group/world-writable; no repair performed.")
+    return directory(path, private=True)
+
+
+def default_image(root):
+    path = root / "build.json"
+    if not path.exists() and not path.is_symlink():
+        fail("No successful build recorded. Run ./t3code build or set T3CODE_IMAGE to an existing immutable image.")
+    private_file(path)
+    value = json.loads(path.read_text())
+    if value.get("schema") != 1 or not re.fullmatch(r"sha256:[a-f0-9]{64}", value.get("image", "")):
+        fail("Invalid successful-build metadata; refusing a mutable or missing image.")
+    return value["image"]
 
 
 def narrow_mounts(workspace, agent):
@@ -101,9 +136,14 @@ def execute(args, capture=False, env=None):
         # Freeze the inspected local endpoint; do not inherit a remote builder.
         for key in ("DOCKER_CONTEXT", "DOCKER_HOST", "BUILDX_BUILDER", "BUILDKIT_HOST"):
             env.pop(key, None)
-    result = subprocess.run(args, env=env, text=True,
-                            stdout=subprocess.PIPE if capture else None,
-                            stderr=subprocess.PIPE if capture else None, check=False)
+    try:
+        result = subprocess.run(args, env=env, text=True,
+                                stdout=subprocess.PIPE if capture else None,
+                                stderr=subprocess.PIPE if capture else None, check=False)
+    except FileNotFoundError:
+        if args[0] == "docker":
+            fail("Docker CLI is unavailable. Use an authorized local Docker/BuildKit/Compose setup; nothing was installed or deployed.")
+        raise
     if result.returncode:
         fail("Command failed; instance/state retained. Inspect privately before retrying.")
     return result.stdout if capture else None
@@ -328,8 +368,8 @@ def launch(args):
     options = parser.parse_args(args)
     operator()
     root = registry()
-    workspace = directory(options.workspace)
-    agent = directory(os.environ.get("T3CODE_AGENT_ROOT"))
+    workspace = workspace_directory(options.workspace)
+    agent = directory(os.environ.get("T3CODE_AGENT_ROOT", str(COMPONENT.parent / "agent")))
     narrow_mounts(workspace, agent)
     name = instance_name(workspace)
     profile = {"schema": 1, "name": name, "uid": os.getuid(), "gid": os.getgid(),
@@ -339,7 +379,6 @@ def launch(args):
                "cpus": options.cpus, "memory": options.memory,
                "provider": os.environ.get("T3CODE_PROVIDER", "none"),
                "compose_sha256": digest(COMPOSE.read_text())}
-    settings(profile)
     # Validate root overlap before creating directories under it.
     for a, b in ((root, workspace), (root, agent), (workspace, agent)):
         if a == b or a in b.parents or b in a.parents:
@@ -348,9 +387,16 @@ def launch(args):
         instance = root / name
         if instance.exists() or instance.is_symlink():
             old = load(root, name)
+            if "T3CODE_IMAGE" not in os.environ:
+                profile["image"] = old["image"]
+            settings(profile)
             if profile != old:
                 fail("Existing image/profile differs; use explicit recreate NAME --ack-stop, not implicit replacement.")
         else:
+            if "T3CODE_IMAGE" not in os.environ:
+                profile["image"] = default_image(root)
+            settings(profile)
+            require_image(profile)
             instance.mkdir(mode=0o700)
             (instance / "home").mkdir(mode=0o700)
             save(root, profile)
@@ -363,40 +409,37 @@ def launch(args):
         print(f"Instance: {name}\nRequested URL: http://127.0.0.1:{profile['port']}\nStart requested; health/auth/provider acceptance NOT established.")
 
 
+def build_inputs():
+    return validate_build(COMPONENT / "runtime")
+
+
 def build():
-    missing = [key for key in BUILD_ARGS if not os.environ.get(key)]
-    if missing or not (COMPONENT / "runtime/package-lock.json").is_file():
-        fail("Build blocked: supply reviewed build arguments, exact runtime dependency and real package-lock.json; see README.")
-    # These gates run BEFORE Docker resolves/executes either base image.
-    node = os.environ["NODE_VERSION"]
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", node):
-        fail("An approved exact NODE_VERSION is required.")
-    for key in ("NODE_IMAGE", "BUILDER_IMAGE"):
-        image = os.environ[key]
-        if not re.fullmatch(r"[^\s@]+:[A-Za-z0-9_][A-Za-z0-9_.-]*@sha256:[a-f0-9]{64}", image):
-            fail("Both prepared bases require reviewed exact tags and digests.")
-        tag = image.split("@")[0].rsplit(":", 1)[1]
-        if tag.lower() in ("latest", "nightly") or tag.lower().startswith(("latest-", "nightly-")):
-            fail("Mutable base tag names are not permitted, even with a digest.")
-        if key == "NODE_IMAGE" and tag != node and not tag.startswith(node + "-"):
-            fail("Runtime image tag must begin with the exact Node patch.")
-    if any(os.environ[key] != "yes" for key in ("PREPARED_BASES_REVIEWED", "INSTALL_HOOKS_REVIEWED")):
-        fail("Prepared bases and installation hooks require explicit review before building.")
-    platform = os.environ.get("T3CODE_BUILD_PLATFORM", "")
-    if platform not in ("linux/amd64", "linux/arm64"):
-        fail("Set the reviewed T3CODE_BUILD_PLATFORM to linux/amd64 or linux/arm64.")
-    # Content-addressed output only. No tag overwrite, Compose up, or container mutation.
-    with tempfile.TemporaryDirectory(prefix="t3code-build-") as temporary:
+    pins = build_inputs()
+    native = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}.get(os.uname().machine, "")
+    platform = os.environ.get("T3CODE_BUILD_PLATFORM", native)
+    if platform not in pins["platforms"]:
+        fail("Unsupported build platform; use a pinned linux/amd64 or linux/arm64 target.")
+    root = registry()
+    # Serialize build capture and launch. Temporary output stays private and is
+    # never a tag; failure cannot change build.json or any instance profile.
+    with locked(root), tempfile.TemporaryDirectory(prefix=".build-", dir=root) as temporary:
         iid = Path(temporary) / "image.id"
         command = [*docker_prefix(), "build", "--platform", platform, "--iidfile", str(iid), "--file", str(COMPONENT / "Dockerfile")]
-        for key in BUILD_ARGS:
-            command.extend(["--build-arg", f"{key}={os.environ[key]}"])
+        for key, value in pins["build_args"].items():
+            command.extend(["--build-arg", f"{key}={value}"])
         command.append(str(COMPONENT))
         execute(command)
+        if not iid.exists():
+            fail("Build succeeded without an image ID; previous default retained.")
+        private_file(iid)
         image = iid.read_text().strip()
-        if not IMAGE.fullmatch(image):
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
             fail("Build returned an unexpected image identity.")
-        print(f"Built image: {image}\nNot deployed or accepted. Review before setting T3CODE_IMAGE.")
+        if require_image({"image": image}) != image:
+            fail("Built image is not loaded in the local daemon; previous default retained.")
+        write_private(root / "build.json", {"schema": 1, "image": image, "platform": platform,
+                      "pins_sha256": hashlib.sha256((COMPONENT / "runtime/pins.json").read_bytes()).hexdigest()})
+        print(f"Built image: {image}\nSaved as default for NEW workspaces only. Existing profiles and containers unchanged.")
 
 
 def manage(args):
