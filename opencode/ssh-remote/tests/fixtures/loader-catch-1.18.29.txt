@@ -1,0 +1,24 @@
+        for (const load of loaded) {
+          if (!load) continue
+
+          // Keep plugin execution sequential so hook registration and execution
+          // order remains deterministic across plugin runs.
+          yield* Effect.tryPromise({
+            try: () => applyPlugin(load, input, hooks),
+            catch: (err) => {
+              const message = errorMessage(err)
+              return message
+            },
+          }).pipe(
+            Effect.tapError((error) => Effect.logError("failed to load plugin", { path: load.spec, error })),
+            Effect.catch(() => {
+              // TODO: make proper events for this
+              // events.publish(Session.Event.Error, {
+              //   error: new NamedError.Unknown({
+              //     message: `Failed to load plugin ${load.spec}: ${message}`,
+              //   }).toObject(),
+              // })
+              return Effect.void
+            }),
+          )
+        }

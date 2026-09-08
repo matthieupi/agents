@@ -1,0 +1,15 @@
+{
+  "projects": [{
+    "ref": "example.fake-project",
+    "label": "FAKE ONLY - not an authorization",
+    "address": "ssh-project.example.invalid",
+    "port": 22,
+    "user": "example-project",
+    "cwd": "/srv/example/workspace",
+    "identity_file": "/home/example/.ssh/example-only-key",
+    "host_key_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "environment": "example",
+    "host_key": "fake-project",
+    "workspace_name": "workspace"
+  }]
+}

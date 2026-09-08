@@ -1,0 +1,4 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [["file:///opt/example/opencode-ssh-remote/index.js", { "enabled": false }]]
+}

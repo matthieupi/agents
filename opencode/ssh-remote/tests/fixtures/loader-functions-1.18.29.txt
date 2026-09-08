@@ -1,0 +1,38 @@
+function isServerPlugin(value: unknown): value is PluginInstance {
+  return typeof value === "function"
+}
+
+function getServerPlugin(value: unknown) {
+  if (isServerPlugin(value)) return value
+  if (!value || typeof value !== "object" || !("server" in value)) return
+  if (!isServerPlugin(value.server)) return
+  return value.server
+}
+
+function getLegacyPlugins(mod: Record<string, unknown>) {
+  const seen = new Set<unknown>()
+  const result: PluginInstance[] = []
+
+  for (const entry of Object.values(mod)) {
+    if (seen.has(entry)) continue
+    seen.add(entry)
+    const plugin = getServerPlugin(entry)
+    if (!plugin) throw new TypeError("Plugin export is not a function")
+    result.push(plugin)
+  }
+
+  return result
+}
+
+async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
+  const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
+  if (plugin) {
+    await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+    hooks.push(await (plugin as PluginModule).server(input, load.options))
+    return
+  }
+
+  for (const server of getLegacyPlugins(load.mod)) {
+    hooks.push(await server(input, load.options))
+  }
+}
