@@ -1,0 +1,61 @@
+services:
+  t3code:
+    image: ${T3CODE_IMAGE:?immutable image required}
+    pull_policy: never
+    container_name: ${T3CODE_NAME:?instance name required}
+    user: "${T3CODE_UID:?}:${T3CODE_GID:?}"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    stop_grace_period: 60s
+    working_dir: /workspace
+    environment:
+      HOME: /home/t3code
+      T3CODE_UID: ${T3CODE_UID:?}
+      T3CODE_GID: ${T3CODE_GID:?}
+      T3CODE_PORT: ${T3CODE_PORT:?}
+      T3CODE_PROVIDER: ${T3CODE_PROVIDER:?}
+      T3CODE_LOG_WS_EVENTS: "false"
+    ports:
+      - target: ${T3CODE_PORT:?}
+        published: "${T3CODE_PORT:?}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${T3CODE_WORKSPACE:?}
+        target: /workspace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${T3CODE_AGENT_ROOT:?}
+        target: /opt/agent
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${T3CODE_STATE_ROOT:?}
+        target: /home/t3code
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=268435456
+    cpus: ${T3CODE_CPUS:?}
+    mem_limit: ${T3CODE_MEMORY:?}
+    pids_limit: 512
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      io.t3code.component: t3code
+      io.t3code.owner: ${T3CODE_UID:?}
+      io.t3code.workspace: ${T3CODE_WORKSPACE_ID:?}
+      io.t3code.profile: ${T3CODE_PROFILE_ID:?}
+    networks: [private]
+networks:
+  private:
+    driver: bridge

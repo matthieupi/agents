@@ -1,0 +1,13 @@
+# Allowlist: never send state, credentials, workspaces or parent-owned wrappers.
+**
+!Dockerfile
+!.dockerignore
+!init.sh
+!scripts/
+!scripts/entrypoint.sh
+!scripts/start.sh
+!scripts/provider.sh
+!scripts/healthcheck.mjs
+!runtime/
+!runtime/package.json
+!runtime/package-lock.json
