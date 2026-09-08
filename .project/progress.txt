@@ -1,0 +1,27 @@
+## 2026-09-07T19:54:39Z - Editable native agents source workstream
+- Replaced native root provision/service-control scripts with shared stdlib non-root lifecycle and manifest, selected component installs under .runtime, safe FF-only branch-preserving Git updates, and preservation-first home initialization.
+- Added independent OMP CLI-only selection. Verified public Pi pair, OpenCode stable 1.18.29 launcher/platform metadata, OMP 18.0.4 and Bun 1.4.0 release digests. No fallback pins required.
+- Preserved all Docker executable/configuration files and existing untracked Pi __pycache__. Consolidated current native docs; retained Docker sections.
+- Tests: shared suite 70 passed, Pi suite 26 passed (including real npm config-only probe), OpenCode suite 25 passed; bash syntax and git diff --check passed. Subsequent HTTPS redirect guard test added for final verification.
+- Issues: initial npm probe needed fixture-only access to controller Node outside /usr/bin. /progress.txt did not exist and creating it failed PermissionDenied; this scoped record is the fallback, with manual handoff in TODO-MANUAL.md.
+- No controller dependency installs, repository commits/pushes, live VM changes or publication. Temporary fixture Git commits are test data only. Publication and parent indexed-source approval remain later explicit gates.
+
+## 2026-09-07T20:03:46Z - Final source verification
+- Tightened HTTPS downgrade handling, private state-root checks on launch, non-secret read-only unit status, and staging cleanup reporting. Native dispatchers are executable; all continue to refuse root.
+- Review caught and fixed inverted npm ignore-scripts flag. Actual npm configuration probes now verify both the public registry and ignore-scripts=false for both npm harnesses without installing packages.
+- Final tests: native/tests 80 passed; pi/tests 29 passed; opencode/tests 28 passed. Component suites intentionally reuse shared tests; counts are not independent coverage totals.
+- bash -n passed for all nine native shell dispatchers. git diff --check passed. git diff --exit-code confirmed Pi/OpenCode Dockerfiles, compose, init.sh, wrappers and menu unchanged.
+- HEAD remains b15a790. Existing untracked pi/tests/__pycache__ preserved. Actual root execution was not available; root policy tested with mocked UID guards, actual non-root shell/exec/Git tests passed. No real package install, VM/service change or source publication performed.
+
+## 2026-09-07T20:40:47Z - Approved simplification: Pi-first Bash only
+- Supersedes the shared-framework implementation recorded above. Removed only this agent's native/{manifest.json,lifecycle.py,README.md,ARTIFACTS.md,tests/test_lifecycle.py} and new omp/{README.md,scripts/entrypoint.sh,scripts/start.sh,scripts/manage.sh}; removed their empty directories.
+- Restored all OpenCode changes, including modes, exactly to b15a790; git diff --exit-code b15a790 -- opencode passed. Existing Docker files/wrappers/config and Pi __pycache__ preserved.
+- Pi retains its original Bash files/constants and PI_USER/ROOT/REPO/PREFIX/UNIT/WORKSPACE contract. Install now runs as PI_USER into PI_REPO/pi/.runtime, no APT/build user/root promotion, with sanitized staging, version checks and preservation on failure. Install invokes preservation-first initialization and optional PI_PREVIOUS_REPO migration.
+- Pi management is read-only status/version or clean-tree FF-only update on PI_BRANCH; no administrative service actions, commits or pushes. Pi start environment, loopback/password and exec behavior retained. README retains original upstream evidence and untouched Docker section; root README only corrects the Pi anchor.
+- Verification checkpoint: 17 tests ran, 16 passed and actual-root test skipped on non-root runner. Added whole-checkout-root preflight and fixture regression for final run. bash syntax and git diff --check passed. No live calls/deployment or controller dependency installation.
+- Global /progress.txt was inaccessible in the previous pass; keeping this source-local append and the existing manual handoff rather than changing unrelated permissions or infrastructure.
+
+## 2026-09-07T20:43:03Z - Pi-only final verification
+- python3 -B -m unittest discover -s pi/tests -v: 18 tests, 17 passed, 1 skipped (actual-root execution unavailable). Fixtures exercise real non-root env/timeout/Git/exec with fake Node/npm packages; real npm probe parses configuration only.
+- bash -n passed for all three Pi scripts; git diff --check passed. Exact b15a790 comparison passed for all OpenCode files/modes and retained Pi Docker files/wrappers/init. No mode changes remain.
+- HEAD is still b15a790. Shared native/ and new omp/ files/directories are gone. Only Pi-focused tracked changes and preserved source-local log/handoff remain; existing untracked Pi __pycache__ remains untouched. No source commits/pushes, live calls or deployment performed.
