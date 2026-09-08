@@ -1,8 +1,44 @@
 #!/bin/bash
 set -euo pipefail
 
-HOME_ROOT="/home/pi"
-DEFAULTS_ROOT="/opt/agent"
+import_system_agents() (
+    local shared="$1" agents="$2" previous="${3:-}"
+    local root file name target current old
+    root="$(realpath -e -- "$shared/system")"
+    [[ -d "$root" && "${agents%/*}" == "$(realpath -m -- "${agents%/*}")" ]] || {
+        printf '[pi] Missing system root or redirected agent state: %s\n' "$agents" >&2; return 1;
+    }
+    # Convert only the literal root link created by older Pi initialization.
+    # Never write individual imports through that link into the shared checkout.
+    if [[ -L "$agents" ]]; then
+        old="$(readlink -- "$agents")"
+        if [[ "$old" == "$shared" || ( -n "$previous" && "$old" == "$previous" ) ]]; then
+            unlink -- "$agents"
+        else
+            printf '[pi] Preserved conflicting agents link: %s\n' "$agents" >&2; return 1
+        fi
+    fi
+    mkdir -p -- "$agents"
+    shopt -s nullglob
+    for file in "$root"/*.md; do
+        name="${file##*/}"
+        [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*\.md$ ]] || {
+            printf '[pi] Invalid system agent basename: %s\n' "$name" >&2; return 1;
+        }
+        target="$(realpath -e -- "$file")"
+        [[ -f "$target" && "${target%/*}" == "$root" && "${target##*/}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*\.md$ ]] || {
+            printf '[pi] Refusing system agent outside shared system root: %s\n' "$file" >&2; return 1;
+        }
+        current="$agents/system-$name"
+        if [[ -L "$current" && "$(readlink -- "$current")" == "$target" ]]; then
+            continue
+        fi
+        if [[ -e "$current" || -L "$current" ]]; then
+            printf '[pi] Preserved conflicting %s; reconcile explicitly to use %s.\n' "$current" "$target" >&2; return 1
+        fi
+        ln -sT -- "$target" "$current"
+    done
+)
 
 dir_empty() {
     local path="$1"
@@ -69,11 +105,13 @@ ensure_shared_home_root() {
 }
 
 init_home() {
+    local HOME_ROOT="/home/pi" DEFAULTS_ROOT="/opt/agent"
     local shared_root="$HOME_ROOT/.agents"
     local pi_root="$HOME_ROOT/.pi/agent"
 
     [[ -d "$HOME_ROOT" ]] || return 0
 
+    import_system_agents "$DEFAULTS_ROOT" "$pi_root/agents"
     ensure_shared_home_root "$shared_root"
     ensure_real_dir "$HOME_ROOT/.pi"
     ensure_real_dir "$pi_root"
@@ -82,7 +120,6 @@ init_home() {
     [[ -d "$DEFAULTS_ROOT/commands" ]] || return 0
     [[ -d "$DEFAULTS_ROOT/skills" ]] || return 0
 
-    link_path "$pi_root/agents" "$DEFAULTS_ROOT"
     link_path "$pi_root/prompts" "$DEFAULTS_ROOT/prompts"
     link_path "$pi_root/skills" "$DEFAULTS_ROOT/skills"
     link_path "$shared_root/agents" "$DEFAULTS_ROOT"
@@ -90,4 +127,6 @@ init_home() {
     link_path "$shared_root/skills" "$DEFAULTS_ROOT/skills"
 }
 
-init_home
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    init_home
+fi

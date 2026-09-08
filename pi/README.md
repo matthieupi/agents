@@ -5,8 +5,9 @@
 **Native UI and CLI launch with LOCAL execution under `PI_USER`.**
 This is not a remote-only adapter or an agent sandbox. Remote-only DevAI activation
 still requires validated adapters and containment. This pass installs only Pi and
-Pi Web; OpenCode/OMP native porting is deferred. Docker files, wrappers, `init.sh`,
-and the checked-in `.pi` tree remain independent and unchanged.
+Pi Web; OpenCode/OMP native porting is deferred. Docker lifecycle and wrappers
+remain independent. Docker and native home initialization share only the system-agent
+import helper in `init.sh`; the checked-in `.pi` extension tree is unchanged.
 
 ### Chosen UI and verified upstream evidence (2026-09-05)
 
@@ -127,10 +128,12 @@ does not enforce GitHub permissions; infrastructure owns source approval and any
 future server-side publication restrictions.
 
 `initialize-home` retains `~/.pi/agent`, auth, sessions, databases, model settings
-and real user resource directories. Only `agents`, `prompts`, `skills` links whose
-literal targets match the new checkout or explicitly supplied previous checkout
-are reused/repointed. Unknown links and real directories are preserved with a
-notice. No `.agents` discovery tree is created or removed.
+and real user resource directories. Only `prompts` and `skills` links whose literal
+targets match the new checkout or explicitly supplied previous checkout are
+reused/repointed. Unknown links and real directories are preserved with a notice.
+The recognized whole-root `agents` link is converted to a real directory containing
+individual system-agent links; unknown agent links or conflicting entries are
+preserved and fail initialization. No `.agents` discovery tree is created or removed.
 
 Only missing tracked settings, TypeScript extensions and JSON themes are copied
 from the committed checkout defaults. Existing files, including concurrently
@@ -169,6 +172,67 @@ Tests use non-root temporary Git/build/launch fixtures and a real npm config-onl
 probe. They do not install controller dependencies or change live services. The
 actual-root refusal test skips on non-root runners; fixture Git/install tests
 skip on root runners. Docker workflows below retain their original lifecycle.
+
+## Automatic system-agent import (Docker and native)
+
+Docker `init.sh` (startup and wrapper attach) and native `install`/`initialize-home`
+import the eight shared system prompts into `~/.pi/agent/agents/system-*.md`.
+Docker targets `/opt/agent/system/*.md`; native targets `$PI_REPO/agent/system/*.md`.
+The existing auto-loaded [`system-select.ts`](.pi/agent/extensions/system-select.ts)
+scans that directory nonrecursively, parses `name`/`description`, and reads the
+linked Markdown body directly. `/system` selects the role and prepends its body
+to Pi's normal system prompt. Import does **not** automatically select a primary
+persona or create a native named-delegation tool in vanilla Pi.
+
+| Consumer | Actual discovery paths | Shared home imports |
+|---|---|---|
+| `/system` | Project `.pi/agents`, `.claude/agents`, `.gemini/agents`, `.codex/agents`; then home `.pi/agent/agents` and the other three home agent directories | Available when `system-select.ts` is loaded; project names win |
+| `ext-agent-team` agent pool | Project `agents`, `.claude/agents`, `.pi/agents`; teams from `.pi/agents/teams.yaml` | Not added to team pool; `/system` remains in the preset's daily-driver stack |
+| `ext-agent-chain` agent pool | Same project agent directories; chains from `.pi/agents/agent-chain.yaml` | Not added to chains; `/system` remains in the preset stack |
+| `ext-pi-pi` experts | Project `.pi/agents/pi-pi`; its own `pi-orchestrator.md` | Not added as experts; `/system` remains in the preset stack |
+
+Preset hooks also control orchestration system prompts; selecting a `/system` role
+does not configure a team, chain, or expert, and their combined prompt behavior is
+not runtime-validated here. `/sub` does not resolve these files by role name.
+No extension/preset definitions, tool defaults, or aliases were changed.
+
+Names are `system-build`, `system-coo`, `system-devops`, `system-explore`, `system-plan`,
+`system-plan-inline`, `system-reviewer`, and `system-secops`, shared with OMP to avoid
+its built-in collisions. Existing instructions requesting unprefixed roles are not
+automatically mapped. The two-field metadata introduces no model/tools/permissions;
+role rules are prompt instructions, not a security boundary.
+
+Import scans only top-level system Markdown, validates basenames and canonical
+targets within the system root, and creates individual symlinks, never prompt copies.
+Existing real agent directories retain their unrelated contents. Exact links are
+idempotent; conflicting entries and unknown directory symlinks are preserved and
+fatal. Only the literal legacy `agents -> shared root` link (or the native explicitly
+provided previous checkout root) is unlinked and replaced with a real directory;
+its source data is untouched. Existing individual links to a previous checkout
+require explicit reconciliation. Stale imports are never removed automatically.
+No GSD or recursive shared-root import is performed by this helper.
+
+### Method Signature Surface
+
+```text
+pi/init.sh
+  + import_system_agents(SHARED_ROOT, DESTINATION, PREVIOUS_SHARED_ROOT?)
+```
+
+`init_home()` and native `initialize_home()` retain their signatures. Native code
+sources the guarded `init.sh` helper without executing Docker home setup. Native
+extension defaults remain tracked-HEAD, copy-once resources: an existing customized
+or disabled `system-select.ts` is not overwritten or forced on. Named `ext-*` wrapper
+commands are Docker-only; native users can explicitly load existing extension files
+with Pi's `-e` option. Native SDK/legacy extension compatibility and Pi Web UI exposure
+of `/system` remain unverified; home links alone do not establish those capabilities.
+
+Source/diff review only: no tests added/run, syntax/build checks, Docker operations
+or native installation/service changes. Pending manual acceptance is concerned-home
+initialization, exact target/body discovery via `/system`, repeat-init/conflict and
+legacy-link conversion behavior, followed by extension/preset compatibility. Existing
+sessions need reload/new-session discovery after initialization; no sessions were
+restarted here. OMP task registration is documented [separately](../omp/README.md#shared-resources-and-discovery-evidence).
 
 ## Retained Docker workflows
 
@@ -266,6 +330,10 @@ prevented fallback migration/renaming of Pi settings. See
 
 OMP source delivery is complete; automated test creation/execution is waived.
 Final OMP manual verification/validation remains user-owned and pending, not passed.
+In the standalone facade, leading `omp -r` rebuilds only the OMP image; use
+`omp --resume`, `omp session -r`, `omp -- -r`, or `-r` after a workspace for native
+resume. OMP's ownership/diagnostic follow-ups do not change Pi's lifecycle; the
+[remote OMP reuse failure remains unresolved](../omp/README.md#known-runtime-follow-ups).
 
 This service persists that path from `./.pi`, including:
 
@@ -283,8 +351,8 @@ This service persists that path from `./.pi`, including:
 Pi initializes its own home links to the shared `agent/` resource root when the container starts.
 
 - Shared editable agent assets live in the shared root at `/opt/agent` with nested `commands/`, `prompts/`, and `skills/`
-- Pi links `~/.pi/agent/{agents,prompts,skills}` and `~/.agents/*` back to that shared source
-- Existing real home directories are preserved by moving them aside to `.local*` backups if they conflict during startup
+- Pi links individual `~/.pi/agent/agents/system-*.md` files and retains its prompt/skill and `~/.agents/*` compatibility links
+- System-agent conflicts are preserved in place and fatal; the older prompt/skill and `.agents` setup still uses `.local*` backups for real-directory conflicts
 
 ## Starter Project Agent Teams and Chains
 
@@ -320,7 +388,8 @@ Use them with:
 
 Shared default agents, commands, and skills now live under the shared workspace `agent/` tree, mounted in the container as `/opt/agent`, and Pi links them into its home config during startup via `init.sh`.
 
-- `../agent/` -> `~/.agents/agents` -> `~/.pi/agent/agents`
+- `../agent/system/*.md` -> individual `~/.pi/agent/agents/system-*.md` links
+- `../agent/` -> `~/.agents/agents` (retained compatibility link, not the system-agent import)
 - `../agent/prompts/` -> `~/.agents/prompts` -> `~/.pi/agent/prompts`
 - `../agent/skills/` -> `~/.agents/skills` -> `~/.pi/agent/skills`
 
