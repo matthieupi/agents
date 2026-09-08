@@ -18,8 +18,8 @@ ssh/
 .claude
 .agents
 
-# Keep the OMP coexistence configuration in the Pi harness while ignoring all
-# other untracked runtime state under pi/.pi.
+# Retain legacy OMP YAML and exceptions in Pi pending offline migration preflight.
+# Active OMP runtime now belongs to omp/; never delete legacy private state.
 !pi/.pi/
 pi/.pi/*
 !pi/.pi/agent/
@@ -36,7 +36,21 @@ pi/.pi/agent/*
 # IDE metadata
 .idea/
 
+# Python runtime bytecode
+__pycache__/
+*.py[cod]
+
 # Native Pi generated runtime and install evidence
 /pi/.runtime/
 /pi/.build.*/
 /pi/.lifecycle.lock
+
+# Standalone OMP: runtime state is private except reviewed starter YAML.
+.omp
+!omp/.omp/
+omp/.omp/*
+!omp/.omp/.gitignore
+!omp/.omp/agent/
+omp/.omp/agent/*
+!omp/.omp/agent/config.yml
+!omp/.omp/agent/models.yml

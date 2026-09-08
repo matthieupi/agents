@@ -1,0 +1,73 @@
+services:
+  omp:
+    build:
+      context: .
+      args:
+        OMP_UID: ${OMP_UID:-1000}
+        OMP_GID: ${OMP_GID:-1000}
+    image: ${OMP_IMAGE:-lab/omp:latest}
+    container_name: omp
+    labels:
+      dev.xmist.agents.component: omp
+      dev.xmist.agents.owner: ${OMP_COMPONENT_DIR:?Set canonical absolute OMP_COMPONENT_DIR}
+      dev.xmist.agents.workspace: ${WORKSPACE_PATH:?Set canonical absolute WORKSPACE_PATH}
+    user: "${OMP_UID:-1000}:${OMP_GID:-1000}"
+    working_dir: /workspace
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    mem_limit: ${OMP_MEMORY:-2g}
+    cpus: ${OMP_CPUS:-2.0}
+    environment:
+      HOME: /home/omp
+      TERM: xterm-256color
+      OMP_PERSONA: ${OMP_PERSONA:-build}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH}
+        target: /workspace
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OMP_STATE_DIR:-./.omp}
+        target: /home/omp/.omp
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OMP_AGENT_DIR:-../agent}
+        target: /opt/agent
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./init.sh
+        target: /opt/harness/init.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SSH_DIR_PATH:-./ssh}
+        target: /home/omp/.ssh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GITCONFIG_PATH:-/dev/null}
+        target: /home/omp/.gitconfig
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [models]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+    entrypoint: ["bash", "-c", "/opt/harness/init.sh && exec sleep infinity"]
+networks:
+  models:
+    external: true
+    name: ${OMP_NETWORK:-devai-xmist}

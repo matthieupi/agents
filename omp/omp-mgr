@@ -1,0 +1,78 @@
+#!/bin/bash
+set -euo pipefail
+SOURCE="$(realpath -e -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="${SOURCE%/*}"
+source "$SCRIPT_DIR/common.sh"
+
+rebuild_image() {
+    docker build --build-arg "OMP_UID=$OMP_UID" --build-arg "OMP_GID=$OMP_GID" -t "$OMP_IMAGE" "$SCRIPT_DIR"
+    printf '[omp] Image built; existing containers were not changed. Drain and explicitly recreate selected containers.\n'
+}
+
+prepare_existing_container() {
+    resolve_mounts
+    export WORKSPACE_PATH
+    WORKSPACE_PATH="$(docker container inspect --format '{{index .Config.Labels "dev.xmist.agents.workspace"}}' "$1")"
+    [[ -d "$WORKSPACE_PATH" && "$(realpath -e -- "$WORKSPACE_PATH")" == "$WORKSPACE_PATH" ]] || die 'Recorded workspace is missing or no longer canonical.'
+    validate_existing_container "$1"
+}
+
+command="${1:-help}"
+shift "$(( $# > 0 ? 1 : 0 ))"
+if [[ "$command" == help ]]; then exec "$SCRIPT_DIR/omp" help; fi
+require_host
+case "$command" in
+    list|ls)
+        [[ $# == 0 ]] || die 'Usage: omp list'
+        docker container ls -a --filter label=dev.xmist.agents.component=omp \
+            --filter "label=dev.xmist.agents.owner=$SCRIPT_DIR" \
+            --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}'
+        ;;
+    build|rebuild|update)
+        [[ $# == 0 ]] || die 'Usage: omp build (update is an image-rebuild alias)'
+        rebuild_image
+        ;;
+    start|shell|logs)
+        [[ $# == 1 ]] || die "Usage: omp $command <name|ID>"
+        id="$(require_owned_container "$1")"
+        case "$command" in
+            logs) exec docker logs --tail 100 -f "$id" ;;
+            start) prepare_existing_container "$id"; docker start "$id" ;;
+            shell)
+                prepare_existing_container "$id"
+                exec docker exec -it --workdir /workspace "$id" bash -c '/opt/harness/init.sh && exec bash'
+                ;;
+        esac
+        ;;
+    stop|remove|rm)
+        [[ $# == 1 ]] || die "Usage: omp $command <name|ID|all>"
+        if [[ "$1" == all ]]; then ids="$(owned_container_ids)"; else ids="$(require_owned_container "$1")"; fi
+        while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            id="$(require_owned_container "$id")"
+            if [[ "$command" == stop ]]; then docker stop "$id"; else docker rm "$id"; fi
+        done <<< "$ids"
+        ;;
+    clean|fclean)
+        force=false
+        if [[ "$command" == fclean ]]; then
+            [[ $# == 0 ]] || die 'Usage: omp fclean'
+            force=true
+        elif [[ $# == 1 && "$1" == -f ]]; then force=true
+        elif [[ $# != 0 ]]; then die 'Usage: omp clean [-f]'; fi
+        ids="$(owned_container_ids)"
+        while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            id="$(require_owned_container "$id")"
+            status="$(docker container inspect --format '{{.State.Status}}' "$id")"
+            if "$force"; then
+                docker stop "$id" >/dev/null
+            elif [[ "$status" != exited && "$status" != created && "$status" != dead ]]; then
+                continue
+            fi
+            # Never -f/-v: a concurrent restart must make remove fail, not kill it.
+            docker rm "$id"
+        done <<< "$ids"
+        ;;
+    *) die "Unknown management command: $command (see omp help)" ;;
+esac

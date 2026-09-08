@@ -1,0 +1,33 @@
+#!/bin/bash
+set -euo pipefail
+SOURCE="$(realpath -e -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="${SOURCE%/*}"
+
+usage() {
+    cat <<'EOF'
+OMP — standalone Docker CLI
+  omp [existing-workspace] [OMP_ARGS...]
+  omp session [existing-workspace] [--] [OMP_ARGS...]
+  omp -- [OMP_ARGS...]
+  omp {list|ls|build|rebuild|update}
+  omp {stop|remove|rm} <name|ID|all>
+  omp {start|logs|shell} <name|ID>
+  omp clean [-f] | fclean
+  omp help
+
+Only the first management word is reserved. Use `session -- build` for a
+prompt named build, or `session -- --help` for upstream help. A leading --
+skips workspace detection. Remaining arguments are forwarded without scanning:
+-r/--resume, --login and --rebuild are NOT harness flags.
+Build/update only rebuild the image; they never remove or refresh containers.
+EOF
+}
+
+case "${1:-}" in
+    session) shift; exec "$SCRIPT_DIR/omp-run" "$@" ;;
+    --) exec "$SCRIPT_DIR/omp-run" "$@" ;;
+    list|ls|build|rebuild|update|stop|start|remove|rm|clean|fclean|logs|shell)
+        exec "$SCRIPT_DIR/omp-mgr" "$@" ;;
+    help|--help|-h) usage ;;
+    *) exec "$SCRIPT_DIR/omp-run" "$@" ;;
+esac

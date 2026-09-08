@@ -172,10 +172,14 @@ skip on root runners. Docker workflows below retain their original lifecycle.
 
 ## Retained Docker workflows
 
-The rest of this document describes the existing container lifecycle only; its
-paths, optional OMP runtime and security assumptions do not apply to native VMs.
+The rest of this document describes the container lifecycle only; its
+paths and security assumptions do not apply to native VMs.
 
-Dockerized [Pi](https://pi.dev) and [Oh My Pi](https://omp.sh) for local and remote development workflows. Upstream Pi remains the default; use `--oh` to launch the OMP runtime from the same image.
+Dockerized [Pi](https://pi.dev) for local and remote development workflows.
+OMP now has its own [standalone Docker CLI component](../omp/README.md), image,
+wrappers and state. `pi --oh` and `pi-run --agent-cli` are removed; use `../omp/omp`.
+This is a source extraction, not a live cutover: existing images/containers still
+need deliberate rebuilding/recreation. Never delete old state as part of that work.
 
 ## Quick Start
 
@@ -189,9 +193,8 @@ mkdir -p workspace
 # 3. Build and start
 docker compose up -d --build
 
-# 4. Attach to either installed agent
+# 4. Attach to Pi
 docker exec -it pi pi
-docker exec -it pi omp
 ```
 
 ## Wrapper Usage
@@ -200,10 +203,6 @@ The `pi` wrapper manages per-workspace containerized instances.
 
 ```bash
 ./pi
-./pi --oh
-./pi --oh /path/to/project
-./pi --oh -p "Review this repo"
-./pi --oh --login
 ./pi /path/to/project
 ./pi build
 ./pi login
@@ -218,9 +217,6 @@ The `pi` wrapper manages per-workspace containerized instances.
 The wrapper is command-first:
 
 - `pi build` rebuilds the image
-- `pi --oh` launches OMP instead of upstream Pi
-- after an optional leading workspace path, OMP arguments are forwarded unchanged, including `-r`/`--resume`
-- an immediate `--login` after `--oh` is reserved by the harness and publishes the existing OAuth callback ports
 - `pi login` starts Pi with OAuth callback ports published
 - `pi ext-agent-team` launches Pi with the dispatcher/team-grid orchestration preset
 - `pi ext-agent-chain` launches Pi with the sequential chain orchestration preset
@@ -245,24 +241,25 @@ pi/
 │       ├── extension-library/
 │       ├── themes/
 │       ├── settings.json
-│       ├── config.yml
+│       ├── config.yml       # retained legacy OMP rollback sentinel
 │       ├── models.json
-│       ├── models.yml
+│       ├── models.yml       # retained legacy OMP defaults
 │       └── sessions/
 └── ssh/
 ```
 
 ## Persistence
 
-The harness mounts `./.pi` at `/home/pi/.pi` for both runtimes. Pi uses this path natively; OMP is explicitly configured with `PI_CONFIG_DIR=.pi` and `PI_CODING_AGENT_DIR=/home/pi/.pi/agent`.
+The harness mounts `./.pi` at `/home/pi/.pi` for vanilla Pi only.
+`settings.json`, `models.json`, `keybindings.json`, `auth.json`, extensions,
+themes and Pi sessions stay here. No OMP state is mounted by the new OMP component.
 
-File ownership is intentionally split so both agents can coexist:
-
-- `settings.json`, `models.json`, and `auth.json` belong to upstream Pi
-- `config.yml`, `models.yml`, and `agent.db` belong to OMP
-- `extensions/`, `extension-library/`, `themes/`, and shared resource links are visible to both
-
-Do not remove `config.yml`: its presence prevents OMP from migrating and renaming Pi's `settings.json` on startup. OMP credentials are stored in ignored `agent.db` state and must not be committed.
+**Legacy migration hold:** tracked `config.yml` and `models.yml`, their ignore
+exceptions, and all ignored OMP state are intentionally retained pending the
+[offline migration preflight](../omp/README.md#offline-migration-and-rollback).
+Keep `config.yml`: old OMP images may otherwise migrate/rename Pi settings on
+rollback. Legacy `agent.db` contains secrets; never commit it or copy the entire
+Pi state into OMP. Nothing performs an automatic migration.
 
 This service persists that path from `./.pi`, including:
 
@@ -273,7 +270,7 @@ This service persists that path from `./.pi`, including:
 - `extensions/` for auto-loaded local extensions
 - `extension-library/` for manually loaded extension bundles
 - `themes/` for custom themes
-- OMP databases, plugins, caches, and install identity (ignored by Git where appropriate)
+- legacy OMP private files remain protected but are not used by this Pi image
 
 ## Shared Project Folder
 
@@ -327,7 +324,6 @@ Authenticate with an API key from your shell or `.env`:
 
 ```bash
 docker exec -it pi pi
-docker exec -it pi omp
 ```
 
 Authenticate using Pi's provider login flow:
@@ -361,10 +357,10 @@ Configure local or self-hosted providers by editing:
 
 ```text
 .pi/agent/models.json
-.pi/agent/models.yml
 ```
 
-Use `models.json` for Pi and `models.yml` for OMP. Both checked-in files define the same Ollama service endpoint.
+Use `models.json` for Pi. The retained OMP YAML is historical rollback state,
+not active Pi configuration.
 
 For the local stack, the default config uses the Ollama container directly:
 
@@ -374,7 +370,8 @@ http://ollama:11434/v1
 
 This works because Pi now joins the same external Docker network as the `ollama` service. Do not use `localhost` here unless Ollama is running inside the same container.
 
-If Ollama runs on another host, update both `./.pi/agent/models.json` (Pi) and `./.pi/agent/models.yml` (OMP) to that reachable URL, then rebuild/restart the container.
+If Ollama runs on another host, update `./.pi/agent/models.json` to that reachable URL.
+OMP provider configuration is independent under `../omp/.omp/agent/models.yml`.
 
 ## Local UI Customizations
 
@@ -436,7 +433,8 @@ Named extension presets exposed by the host wrapper:
 
 These presets rebuild the current explicit daily-driver stack with `--no-extensions`, prepend the requested bundle (`agent-team.ts`, `agent-chain.ts`, or `pi-pi.ts`) so its mapped theme/title stays primary, and avoid double-loading the auto-discovered defaults.
 
-Named `ext-*` presets remain Pi-only. OMP can load many legacy Pi extensions, but the orchestration extensions in this repository explicitly spawn the `pi` executable and use Pi-specific tool names. Under OMP, prefer its built-in `task` tool and Agent Hub until those extensions are deliberately ported.
+Named `ext-*` presets remain Pi-only. The standalone OMP component does not
+install these extensions; they explicitly spawn `pi` and use Pi-specific APIs.
 
 If you are already inside the Pi container and want the raw Pi CLI, use the bundle files under `~/.pi/agent/extension-library/pi-vs-claude-code/` together with the explicit extension stack from `~/.pi/agent/extensions/`.
 
@@ -444,26 +442,15 @@ If you are already inside the Pi container and want the raw Pi CLI, use the bund
 
 - Container runs as non-root user (`pi:1000`)
 - API keys are not baked into the image
-- OMP auth stored in `.pi/agent/agent.db` is ignored and must be treated as secret state
+- Legacy `.pi/agent/agent.db` is ignored secret state, retained for offline migration/rollback
 - SSH keys are mounted read-only
 - Pi intentionally operates with minimal built-in safety rails; use container isolation as your boundary
 - This image keeps parity with the existing agent containers and allows sudo inside the container
 
 ## Troubleshooting
 
-### Upgrade OMP
-
-OMP and Bun are pinned by Docker build arguments. Upgrade by changing the defaults in `Dockerfile`, rebuilding, and recreating containers; do not run `omp update` inside a durable container.
-
-```bash
-docker build \
-  --build-arg BUN_VERSION=1.4.0 \
-  --build-arg OMP_VERSION=18.0.4 \
-  -t lab/pi:latest .
-./pi fclean
-```
-
-`omp setup` is interactive. Run it after the container starts (`./pi --oh`), never during image construction. Workspace-native OMP configuration still belongs in each project's `.omp/` directory; only the user-level root is redirected to `.pi`.
+OMP build/setup instructions now live in [OMP's README](../omp/README.md).
+Rebuilding Pi does not migrate or retire legacy OMP state.
 
 Image missing:
 

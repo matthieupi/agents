@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+SOURCE="$(realpath -e -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="${SOURCE%/*}"
+source "$SCRIPT_DIR/common.sh"
+
+# Consume at most an existing directory and one delimiter. Never scan agent argv.
+WORKSPACE_PATH="$PWD"
+if [[ "${1:-}" != -- && $# -gt 0 && -d "$1" ]]; then
+    WORKSPACE_PATH="$1"
+    shift
+fi
+if [[ "${1:-}" == -- ]]; then shift; fi
+export WORKSPACE_PATH
+WORKSPACE_PATH="$(realpath -e -- "$WORKSPACE_PATH")"
+[[ "$WORKSPACE_PATH" != *,* && "$WORKSPACE_PATH" != *$'\n'* ]] || die 'Unsupported comma/newline in workspace path.'
+require_host
+resolve_mounts
+CONTAINER_NAME="$(workspace_container_name "$WORKSPACE_PATH")"
+
+docker_run_agent() {
+    local -a providers=()
+    local key
+    for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY \
+        MISTRAL_API_KEY GROQ_API_KEY CEREBRAS_API_KEY XAI_API_KEY HF_TOKEN KIMI_API_KEY MINIMAX_API_KEY; do
+        # Docker reads these from its environment; do not put values on argv.
+        [[ ! -v "$key" ]] || providers+=(-e "$key")
+    done
+    docker run -d --name "$CONTAINER_NAME" --hostname "$CONTAINER_NAME" \
+        --label dev.xmist.agents.component=omp \
+        --label "dev.xmist.agents.owner=$SCRIPT_DIR" \
+        --label "dev.xmist.agents.workspace=$WORKSPACE_PATH" \
+        --restart unless-stopped --user "$OMP_UID:$OMP_GID" --workdir /workspace \
+        -e HOME=/home/omp -e TERM=xterm-256color -e "OMP_PERSONA=$OMP_PERSONA" \
+        "${providers[@]}" \
+        --mount "type=bind,src=$WORKSPACE_PATH,dst=/workspace" \
+        --mount "type=bind,src=$OMP_STATE_DIR,dst=/home/omp/.omp" \
+        --mount "type=bind,src=$OMP_AGENT_DIR,dst=/opt/agent" \
+        --mount "type=bind,src=$SCRIPT_DIR/init.sh,dst=/opt/harness/init.sh,readonly" \
+        --mount "type=bind,src=$SSH_DIR_PATH,dst=/home/omp/.ssh,readonly" \
+        --mount "type=bind,src=$GITCONFIG_PATH,dst=/home/omp/.gitconfig,readonly" \
+        --network "$OMP_NETWORK" --add-host host.docker.internal:host-gateway \
+        --memory "$OMP_MEMORY" --cpus "$OMP_CPUS" \
+        --log-opt max-size=10m --log-opt max-file=3 \
+        "$OMP_IMAGE" bash -c '/opt/harness/init.sh && exec sleep infinity'
+}
+
+# Enumeration must succeed: daemon errors are not interpreted as absence.
+names="$(docker container ls -a --format '{{.Names}}')"
+found=false
+while IFS= read -r name; do
+    if [[ "$name" == "$CONTAINER_NAME" ]]; then found=true; break; fi
+done <<< "$names"
+if "$found"; then
+    id="$(require_owned_container "$CONTAINER_NAME")"
+    validate_existing_container "$id"
+    running="$(docker container inspect --format '{{.State.Running}}' "$id")"
+    if [[ "$running" != true ]]; then docker start "$id" >/dev/null; fi
+else
+    docker image inspect "$OMP_IMAGE" >/dev/null || die "Build first: $SCRIPT_DIR/omp build"
+    # On failure never delete by name: a concurrent creator may own that name.
+    id="$(docker_run_agent)" || die 'Container creation failed; no automatic cleanup performed. Inspect labeled containers with omp list.'
+    validate_existing_container "$id"
+fi
+exec_agent "$id" "$@"

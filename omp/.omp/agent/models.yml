@@ -1,0 +1,3 @@
+# No deployment-specific endpoint or credentials in starter defaults.
+# Add private provider definitions here deliberately; this file is tracked.
+providers: {}
