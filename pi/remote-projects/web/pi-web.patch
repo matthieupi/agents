@@ -1,0 +1,1184 @@
+--- a/app/api/file-index/route.ts
++++ b/app/api/file-index/route.ts
+@@ -1,4 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { execFile } from "child_process";
+ import { promisify } from "util";
+ import fs from "fs";
+@@ -115,6 +116,8 @@
+ // matching, like the TUI passing the query to fd).
+ // Guarded by the same allow-list as /api/files.
+ export async function GET(req: NextRequest) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const cwd = req.nextUrl.searchParams.get("cwd")?.trim() ?? "";
+     if (!cwd || (!cwd.startsWith("/") && !isWindowsAbsolutePath(cwd))) {
+--- a/app/api/files/[...path]/route.ts
++++ b/app/api/files/[...path]/route.ts
+@@ -1,4 +1,5 @@
+ import { NextRequest, NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import fs from "fs";
+ import path from "path";
+ import {
+@@ -119,6 +120,8 @@
+   request: NextRequest,
+   { params }: { params: Promise<{ path: string[] }> }
+ ) {
++  const denied = await rejectRemoteProjectRequest(request);
++  if (denied) return denied;
+   if (!isApiRequestAllowed(request)) {
+     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+   }
+@@ -419,6 +422,8 @@
+   request: NextRequest,
+   { params }: { params: Promise<{ path: string[] }> }
+ ) {
++  const denied = await rejectRemoteProjectRequest(request);
++  if (denied) return denied;
+   try {
+     const { path: segments } = await params;
+     const filePath = filePathFromApiSegments(segments);
+--- a/app/api/git/diff/route.ts
++++ b/app/api/git/diff/route.ts
+@@ -1,8 +1,11 @@
+ import { NextRequest, NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
+ import { getGitFileDiff } from "@/lib/git-changes";
+ 
+ export async function GET(request: NextRequest) {
++  const denied = await rejectRemoteProjectRequest(request);
++  if (denied) return denied;
+   try {
+     const cwd = request.nextUrl.searchParams.get("cwd")?.trim() ?? "";
+     const filePath = request.nextUrl.searchParams.get("path")?.trim() ?? "";
+--- a/app/api/git/status/route.ts
++++ b/app/api/git/status/route.ts
+@@ -1,9 +1,12 @@
+ import fs from "fs";
+ import { NextRequest, NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed, isWindowsAbsolutePath } from "@/lib/file-access";
+ import { getGitStatus } from "@/lib/git-changes";
+ 
+ export async function GET(request: NextRequest) {
++  const denied = await rejectRemoteProjectRequest(request);
++  if (denied) return denied;
+   try {
+     const cwd = request.nextUrl.searchParams.get("cwd")?.trim() ?? "";
+     if (!cwd || (!cwd.startsWith("/") && !isWindowsAbsolutePath(cwd))) {
+--- a/app/api/sessions/[id]/state/route.ts
++++ b/app/api/sessions/[id]/state/route.ts
+@@ -1,4 +1,5 @@
+ import { NextResponse } from "next/server";
++import { sessionProjectMode } from "@/lib/session-project-mode";
+ import { getRpcSession } from "@/lib/rpc-manager";
+ import { resolveSessionPath } from "@/lib/session-reader";
+ 
+@@ -8,16 +9,17 @@
+ ) {
+   const { id } = await params;
+   try {
++    const projectMode = await sessionProjectMode(id);
+     const rpc = getRpcSession(id);
+     if (rpc?.isAlive()) {
+       const state = await rpc.send({ type: "get_state" });
+-      return NextResponse.json({ running: true, state });
++      return NextResponse.json({ running: true, state, projectMode });
+     }
+ 
+     if (!await resolveSessionPath(id)) {
+       return NextResponse.json({ error: "Session not found" }, { status: 404 });
+     }
+-    return NextResponse.json({ running: false });
++    return NextResponse.json({ running: false, projectMode });
+   } catch (error) {
+     return NextResponse.json({ error: String(error) }, { status: 500 });
+   }
+--- a/app/api/sessions/runtime-route.test.mjs
++++ b/app/api/sessions/runtime-route.test.mjs
+@@ -172,6 +172,7 @@
+   };
+   const sessionManager = {
+     getHeader: () => ({ type: "session", id, cwd: "/tmp", timestamp }),
++    getBranch: () => [entry],
+     getEntries: () => [entry],
+     getLeafId: () => entry.id,
+     getTree: () => [],
+@@ -181,7 +182,7 @@
+   globalThis.__piSessions = new Map([[id, {
+     isAlive: () => true,
+     isRunning: () => true,
+-    inner: { sessionManager },
++    inner: { sessionManager, sessionId: id },
+     sessionFile: sessionManager.getSessionFile(),
+     sessionId: id,
+     cwd: "/tmp",
+@@ -209,6 +210,7 @@
+   assert.deepEqual(detail.context.messages.map((message) => message.content), ["hello live"]);
+   assert.equal(stateResponse.status, 200);
+   assert.deepEqual(await stateResponse.json(), {
++    projectMode: "local",
+     running: true,
+     state: { isStreaming: true },
+   });
+--- a/app/api/terminal/[id]/events/route.ts
++++ b/app/api/terminal/[id]/events/route.ts
+@@ -1,4 +1,5 @@
+ import { hasTerminal, subscribeTerminal, type TerminalEvent } from "@/lib/terminal-manager";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ 
+ export const dynamic = "force-dynamic";
+ export const runtime = "nodejs";
+@@ -7,6 +8,8 @@
+   req: Request,
+   { params }: { params: Promise<{ id: string }> },
+ ) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   const { id } = await params;
+   if (!hasTerminal(id)) return new Response("Terminal not found", { status: 404 });
+   const cursor = req.headers.get("last-event-id") ?? new URL(req.url).searchParams.get("after");
+--- a/app/api/terminal/[id]/route.ts
++++ b/app/api/terminal/[id]/route.ts
+@@ -1,10 +1,13 @@
+ import { NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { getTerminalCwd, killTerminal, resizeTerminal, writeTerminal } from "@/lib/terminal-manager";
+ 
+ export const dynamic = "force-dynamic";
+ export const runtime = "nodejs";
+ 
+ export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
++  const denied = await rejectRemoteProjectRequest(_req);
++  if (denied) return denied;
+   const { id } = await params;
+   const cwd = getTerminalCwd(id);
+   return cwd
+@@ -16,6 +19,8 @@
+   req: Request,
+   { params }: { params: Promise<{ id: string }> },
+ ) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const { id } = await params;
+     const body = await req.json() as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
+@@ -41,6 +46,8 @@
+   _req: Request,
+   { params }: { params: Promise<{ id: string }> },
+ ) {
++  const denied = await rejectRemoteProjectRequest(_req);
++  if (denied) return denied;
+   const { id } = await params;
+   killTerminal(id);
+   return NextResponse.json({ success: true });
+--- a/app/api/terminal/route.ts
++++ b/app/api/terminal/route.ts
+@@ -1,6 +1,7 @@
+ import { stat } from "fs/promises";
+ import { resolve } from "path";
+ import { NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+ import { createTerminal } from "@/lib/terminal-manager";
+ 
+@@ -8,6 +9,8 @@
+ export const runtime = "nodejs";
+ 
+ export async function POST(req: Request) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const body = await req.json() as { id?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown };
+     if (body.id !== undefined && (typeof body.id !== "string" || !/^[a-f0-9]{32}$/.test(body.id))) {
+--- a/app/api/worktrees/route.ts
++++ b/app/api/worktrees/route.ts
+@@ -1,4 +1,5 @@
+ import { NextResponse } from "next/server";
++import { rejectRemoteProjectRequest } from "@/lib/session-project-mode";
+ import { existsSync } from "fs";
+ import { addWorktree, findCurrentWorktreePath, listWorktrees, removeWorktree, resolveProject } from "@/lib/worktree";
+ import { allowFileRoot, getAllowedFileRoots, isExistingFilePathAllowed, isFilePathAllowed } from "@/lib/file-access";
+@@ -16,6 +17,8 @@
+ 
+ // GET /api/worktrees?cwd=  →  { projectRoot, projectKey, isGit, isTopLevel, currentWorktreePath, worktrees }
+ export async function GET(req: Request) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const cwd = new URL(req.url).searchParams.get("cwd");
+     if (!cwd) {
+@@ -55,6 +58,8 @@
+ 
+ // POST /api/worktrees  body: { cwd, branch }  →  { path, branch }
+ export async function POST(req: Request) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const body = await req.json() as { cwd?: string; branch?: string };
+     if (!body.cwd || typeof body.cwd !== "string") {
+@@ -79,6 +84,8 @@
+ 
+ // DELETE /api/worktrees  body: { cwd, path, force? }
+ export async function DELETE(req: Request) {
++  const denied = await rejectRemoteProjectRequest(req);
++  if (denied) return denied;
+   try {
+     const body = await req.json() as { cwd?: string; path?: string; force?: boolean };
+     if (!body.cwd || typeof body.cwd !== "string") {
+--- a/components/AppShell.file-viewer-state.test.mjs
++++ b/components/AppShell.file-viewer-state.test.mjs
+@@ -6,7 +6,7 @@
+ 
+ function fileContentBlock() {
+   const start = source.indexOf("{/* Only the active viewer");
+-  const end = source.indexOf("</div>\n      </div>\n    </div>", start);
++  const end = source.indexOf("</LocalOnly>", start);
+   assert.notEqual(start, -1, "file content comment not found");
+   assert.notEqual(end, -1, "end of file content block not found");
+   return source.slice(start, end);
+--- a/components/AppShell.tsx
++++ b/components/AppShell.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { ProjectModeProvider, LocalOnly } from "./ProjectMode";
+ 
+ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+ import { useRouter, useSearchParams } from "next/navigation";
+@@ -1836,7 +1837,7 @@
+   };
+ 
+   return (
+-    <>
++    <ProjectModeProvider sessionId={selectedSession?.id ?? (!initialSessionRestored ? initialSessionId ?? "" : null)}>
+     <style>{`
+       @keyframes session-info-pop {
+         0% {
+@@ -2538,13 +2539,14 @@
+         </div>
+ 
+         {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
++        <LocalOnly>
+         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
+           {activeFileTab?.filePath ? (
+             <FileViewer
+               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
+               filePath={activeFileTab.filePath}
+               cwd={activeCwd ?? undefined}
+-              sourceSessionId={activeFileTab.sourceSessionId}
++              sourceSessionId={selectedSession?.id ?? activeFileTab.sourceSessionId}
+               gitRefreshKey={explorerRefreshKey}
+               initialDisplayMode={activeFileTab.initialDisplayMode}
+               initialState={activeFileTab.viewerState}
+@@ -2579,6 +2581,7 @@
+             </div>
+           ))}
+         </div>
++        </LocalOnly>
+       </div>
+     </div>
+     {settingsSection && (
+@@ -2606,6 +2609,6 @@
+         onConfirm={() => void handleTrustProject()}
+       />
+     )}
+-    </>
++    </ProjectModeProvider>
+   );
+ }
+--- a/components/ChatInput.tsx
++++ b/components/ChatInput.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { useProjectMode } from "./ProjectMode";
+ 
+ import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+ import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
+@@ -483,6 +484,7 @@
+   cwd,
+   compact = false,
+ }: Props, ref) {
++  const project = useProjectMode();
+   const { t } = useI18n();
+   const { fontSize } = useChatAppearance();
+   const isMobile = useIsMobile();
+@@ -911,20 +913,20 @@
+   // Recomputed from the text before the caret on every change/caret move.
+   // Disabled entirely when there is no cwd (new session without a directory).
+   const updateAtQuery = useCallback((text: string, cursor: number | null) => {
+-    if (!cwd) {
++    if (!cwd || !project.local) {
+       setAtQuery(null);
+       return;
+     }
+     const pos = cursor ?? text.length;
+     setAtQuery(extractAtQuery(text.slice(0, pos)));
+-  }, [cwd]);
++  }, [cwd, project.local]);
+ 
+   const atQueryText = atQuery?.query ?? null;
+   const atLocalMatches: FileIndexEntry[] = React.useMemo(() => (
+-    atQueryText !== null && fileIndex && fileIndex.cwd === cwd
++    project.local && atQueryText !== null && fileIndex && fileIndex.cwd === cwd
+       ? filterFileEntries(fileIndex.entries, atQueryText)
+       : []
+-  ), [atQueryText, fileIndex, cwd]);
++  ), [atQueryText, fileIndex, cwd, project.local]);
+ 
+   // When the client index is truncated (repo larger than the index cap),
+   // local filtering cannot see deep files, so queries are also ranked
+@@ -933,11 +935,11 @@
+   // query arrives; stale responses are ignored via the query/cwd tag.
+   const needsServerSearch = Boolean(atQueryText && fileIndex?.truncated && fileIndex.cwd === cwd);
+   useEffect(() => {
+-    if (!needsServerSearch || !cwd || !atQueryText) return;
++    if (!project.local || !needsServerSearch || !cwd || !atQueryText) return;
+     const fetchCwd = cwd;
+     const query = atQueryText;
+     const timer = setTimeout(() => {
+-      fetch(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}&q=${encodeURIComponent(query)}`)
++      fetch(project.url(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}&q=${encodeURIComponent(query)}`))
+         .then((res) => {
+           if (!res.ok) throw new Error(`file search failed: ${res.status}`);
+           return res.json() as Promise<{ matches?: FileIndexEntry[] }>;
+@@ -948,13 +950,14 @@
+         });
+     }, 150);
+     return () => clearTimeout(timer);
+-  }, [needsServerSearch, atQueryText, cwd]);
++  }, [needsServerSearch, atQueryText, cwd, project]);
+ 
+   const serverResultInUse = needsServerSearch
+     && atServerResult !== null
+     && atServerResult.cwd === cwd
+     && atServerResult.query === atQueryText;
+-  const atMatches: FileIndexEntry[] = serverResultInUse ? atServerResult.matches : atLocalMatches;
++  const atMatches = React.useMemo<FileIndexEntry[]>(() => !project.local ? [] : serverResultInUse ? atServerResult.matches : atLocalMatches,
++    [project.local, serverResultInUse, atServerResult, atLocalMatches]);
+ 
+   // Open/reset the menu whenever the @token appears or changes (mirrors the
+   // slash menu: Escape closes it, the next keystroke re-opens it).
+@@ -973,14 +976,14 @@
+   // ~10s, so re-opening refreshes cheaply; while typing nothing refetches.
+   const atTokenActive = atQuery !== null;
+   useEffect(() => {
+-    if (!atTokenActive || !cwd) return;
++    if (!project.local || !atTokenActive || !cwd) return;
+     const meta = fileIndexMetaRef.current;
+     if (meta && meta.cwd === cwd && Date.now() - meta.fetchedAt < 10_000) return;
+     if (fileIndexFetchingRef.current === cwd) return;
+     fileIndexFetchingRef.current = cwd;
+     const fetchCwd = cwd;
+     setFileIndexLoading(true);
+-    fetch(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}`)
++    fetch(project.url(`/api/file-index?cwd=${encodeURIComponent(fetchCwd)}`))
+       .then((res) => {
+         if (!res.ok) throw new Error(`file index failed: ${res.status}`);
+         return res.json() as Promise<{ files?: string[]; truncated?: boolean }>;
+@@ -997,7 +1000,7 @@
+         fileIndexFetchingRef.current = null;
+         setFileIndexLoading(false);
+       });
+-  }, [atTokenActive, cwd]);
++  }, [atTokenActive, cwd, project]);
+ 
+   const applyAtCompletion = useCallback((entry: FileIndexEntry) => {
+     if (!atQuery) return;
+--- a/components/FileExplorer.tsx
++++ b/components/FileExplorer.tsx
+@@ -1,4 +1,6 @@
+ "use client";
++import { useProjectMode } from "./ProjectMode";
++import { projectRequestUrl } from "@/lib/project-request";
+ 
+ import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+ import { getFileIcon, FolderIcon } from "./FileIcons";
+@@ -78,9 +80,9 @@
+   nonReplaceable: string[];
+ }
+ 
+-async function fetchEntries(dirPath: string): Promise<FileNode[]> {
++async function fetchEntries(dirPath: string, sessionId: string | null): Promise<FileNode[]> {
+   const encoded = encodeFilePathForApi(dirPath);
+-  const res = await fetch(`/api/files/${encoded}?type=list`);
++  const res = await fetch(projectRequestUrl(`/api/files/${encoded}?type=list`, sessionId));
+   if (!res.ok) {
+     let message = `Failed to load files (HTTP ${res.status})`;
+     try {
+@@ -102,9 +104,9 @@
+   }));
+ }
+ 
+-async function fetchGitStatus(cwd: string): Promise<GitStatusResponse> {
++async function fetchGitStatus(cwd: string, sessionId: string | null): Promise<GitStatusResponse> {
+   const params = new URLSearchParams({ cwd });
+-  const res = await fetch(`/api/git/status?${params.toString()}`);
++  const res = await fetch(projectRequestUrl(`/api/git/status?${params.toString()}`, sessionId));
+   if (!res.ok) throw new Error(`Failed to load Git status (HTTP ${res.status})`);
+   return res.json() as Promise<GitStatusResponse>;
+ }
+@@ -155,6 +157,7 @@
+   files: File[],
+   strategy: UploadConflictStrategy,
+   onProgress: (progress: number) => void,
++  sessionId: string | null,
+ ): Promise<{ status: number; data: UploadResponse }> {
+   return new Promise((resolve, reject) => {
+     const formData = new FormData();
+@@ -163,7 +166,7 @@
+     const xhr = new XMLHttpRequest();
+     xhr.open(
+       "POST",
+-      `/api/files/${encodeFilePathForApi(targetDirectory)}?type=upload&conflict=${strategy}`,
++      projectRequestUrl(`/api/files/${encodeFilePathForApi(targetDirectory)}?type=upload&conflict=${strategy}`, sessionId),
+     );
+     xhr.upload.onprogress = (event) => {
+       if (event.lengthComputable && event.total > 0) {
+@@ -240,6 +243,7 @@
+   changedDirectoryPaths: Set<string>;
+   t: Translate;
+ }) {
++  const project = useProjectMode();
+   const open = expandedPaths.has(node.fullPath);
+   const highlighted = highlightedPaths.has(node.fullPath);
+   const normalizedPath = normalizeFilePathSlashes(node.fullPath);
+@@ -256,7 +260,7 @@
+     if (loaded && !force) return;
+     setLoading(true);
+     try {
+-      const entries = await fetchEntries(node.fullPath);
++      const entries = await fetchEntries(node.fullPath, project.sessionId);
+       setChildren(entries);
+       setLoaded(true);
+     } catch {
+@@ -264,7 +268,7 @@
+     } finally {
+       setLoading(false);
+     }
+-  }, [loaded, node.fullPath]);
++  }, [loaded, node.fullPath, project.sessionId]);
+ 
+   // Re-fetch children when the tree refreshes and the directory is open.
+   useEffect(() => {
+@@ -397,7 +401,7 @@
+         )}
+         {hovered && !node.isDir && (
+           <a
+-            href={`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`}
++            href={project.url(`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`)}
+             download
+             onClick={(e) => e.stopPropagation()}
+             title={t("files.download")}
+@@ -530,6 +534,7 @@
+   fileSearchOpen = false,
+   onFileSearchOpenChange,
+ }, ref) {
++  const project = useProjectMode();
+   const { t } = useI18n();
+   const [roots, setRoots] = useState<FileNode[]>([]);
+   const [loading, setLoading] = useState(true);
+@@ -570,7 +575,7 @@
+     setSearchLoading(true);
+     setSearchError(false);
+     const timer = setTimeout(() => {
+-      fetch(`/api/file-index?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}`, { signal: controller.signal })
++      fetch(project.url(`/api/file-index?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}`), { signal: controller.signal })
+         .then((response) => response.ok ? response.json() as Promise<{ matches?: FileIndexEntry[] }> : Promise.reject(new Error("Search failed")))
+         .then((data) => setSearchPaths((data.matches ?? []).filter((entry) => !entry.isDir).map((entry) => entry.path)))
+         .catch(() => {
+@@ -582,7 +587,7 @@
+         .finally(() => { if (!controller.signal.aborted) setSearchLoading(false); });
+     }, 150);
+     return () => { clearTimeout(timer); controller.abort(); };
+-  }, [cwd, fileSearchOpen, searchQuery]);
++  }, [cwd, fileSearchOpen, searchQuery, project]);
+ 
+   // Focus the search input whenever the search panel opens.
+   useEffect(() => {
+@@ -674,7 +679,7 @@
+     setUploadPhase("uploading");
+ 
+     try {
+-      const { status, data } = await uploadFiles(cwd, files, strategy, setUploadProgress);
++      const { status, data } = await uploadFiles(cwd, files, strategy, setUploadProgress, project.sessionId);
+       if (status === 409 && data.conflicts?.length) {
+         setPendingConflict({
+           files,
+@@ -693,7 +698,7 @@
+     } finally {
+       setUploadPhase("idle");
+     }
+-  }, [applyUploadResult, cwd]);
++  }, [applyUploadResult, cwd, project.sessionId]);
+ 
+   const prepareUpload = useCallback(async (files: File[]) => {
+     if (files.length === 0 || uploadBusy) return;
+@@ -706,7 +711,7 @@
+ 
+     try {
+       const res = await fetch(
+-        `/api/files/${encodeFilePathForApi(cwd)}?type=upload-check`,
++        project.url(`/api/files/${encodeFilePathForApi(cwd)}?type=upload-check`),
+         {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+@@ -731,7 +736,7 @@
+     } finally {
+       setUploadPhase("idle");
+     }
+-  }, [cwd, performUpload, uploadBusy]);
++  }, [cwd, performUpload, uploadBusy, project]);
+ 
+   const handleUploadInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+     const files = Array.from(event.target.files ?? []);
+@@ -767,16 +772,16 @@
+     setLoading(cwdChanged);
+     setError(null);
+     let cancelled = false;
+-    fetchEntries(cwd)
++    fetchEntries(cwd, project.sessionId)
+       .then((entries) => { if (!cancelled) setRoots(entries); })
+       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+       .finally(() => { if (!cancelled) setLoading(false); });
+     return () => { cancelled = true; };
+-  }, [cwd, refreshKey, treeRefreshKey]);
++  }, [cwd, refreshKey, treeRefreshKey, project.sessionId]);
+ 
+   useEffect(() => {
+     let cancelled = false;
+-    fetchGitStatus(cwd)
++    fetchGitStatus(cwd, project.sessionId)
+       .then((status) => {
+         if (!cancelled) {
+           setGitFiles(status.isGitRepository ? status.files : []);
+@@ -792,7 +797,7 @@
+         }
+       });
+     return () => { cancelled = true; };
+-  }, [cwd, refreshKey, treeRefreshKey]);
++  }, [cwd, refreshKey, treeRefreshKey, project.sessionId]);
+ 
+   useEffect(() => {
+     onChangesCountChange?.(gitFiles.length);
+--- a/components/FileViewer.tsx
++++ b/components/FileViewer.tsx
+@@ -1238,6 +1238,7 @@
+ 
+     try {
+       const params = new URLSearchParams({ cwd, path: targetPath });
++      if (sourceSessionId) params.set("sessionId", sourceSessionId);
+       const response = await fetch(`/api/git/diff?${params.toString()}`);
+       const next = await response.json() as GitFileDiffResponse & { error?: string };
+       if (requestId !== gitDiffRequestRef.current) return;
+@@ -1250,7 +1251,7 @@
+         setGitDiffResolved(true);
+       }
+     }
+-  }, [cwd]);
++  }, [cwd, sourceSessionId]);
+ 
+   // Reset and load the file itself when its identity changes. Live watching is
+   // managed separately so pausing it never clears the displayed content.
+--- a/components/MarkdownBody.test.mjs
++++ b/components/MarkdownBody.test.mjs
+@@ -9,6 +9,7 @@
+   tsconfigPaths: true,
+ });
+ const { MarkdownBody } = await jiti.import("./MarkdownBody.tsx");
++const { ProjectModeProvider } = await jiti.import("./ProjectMode.tsx");
+ const { normalizeDisplayMath } = await jiti.import("../lib/markdown.ts");
+ const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+ 
+@@ -17,11 +18,11 @@
+     React.createElement(
+       I18nProvider,
+       null,
+-      React.createElement(MarkdownBody, {
++      React.createElement(ProjectModeProvider, { sessionId: null }, React.createElement(MarkdownBody, {
+         cwd: "/home/me/project",
+         onOpenFile() {},
+         ...props,
+-      }, markdown),
++      }, markdown)),
+     ),
+   );
+ }
+--- a/components/MarkdownBody.tsx
++++ b/components/MarkdownBody.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { useProjectMode } from "./ProjectMode";
+ 
+ import { useMemo, type MouseEvent } from "react";
+ import ReactMarkdown, { type Components } from "react-markdown";
+@@ -16,6 +17,7 @@
+ }
+ 
+ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile }: MarkdownBodyProps) {
++  const project = useProjectMode();
+   const normalizedMarkdown = useMemo(() => normalizeDisplayMath(children), [children]);
+   // Stable renderer identities keep stateful blocks mounted across message hover updates.
+   const components = useMemo<Components>(() => ({
+@@ -52,6 +54,7 @@
+       delete props.node;
+       const filePath = onOpenFile ? resolveLocalFileHref(href, cwd) : null;
+       const openFile = onOpenFile;
++      if (filePath && !project.local) return <span title="Available in Local mode">{children} (Local mode)</span>;
+       if (!filePath || !openFile) {
+         return (
+           <a href={href} {...props} target="_blank" rel="noopener noreferrer">
+@@ -77,8 +80,9 @@
+     img({ src, alt, ...props }) {
+       delete props.node;
+       const filePath = typeof src === "string" ? resolveLocalFileHref(src, cwd) : null;
++      if (filePath && !project.local) return <span>{alt} (available in Local mode)</span>;
+       const imageSrc = filePath
+-        ? `/api/files/${encodeFilePathForApi(filePath)}?type=read`
++        ? project.url(`/api/files/${encodeFilePathForApi(filePath)}?type=read`)
+         : src;
+       // Dynamic local paths are served directly by the file API.
+       // eslint-disable-next-line @next/next/no-img-element
+@@ -91,7 +95,7 @@
+         </div>
+       );
+     },
+-  }), [cwd, isStreaming, onOpenFile]);
++  }), [cwd, isStreaming, onOpenFile, project]);
+ 
+   return (
+     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
+--- /dev/null
++++ b/components/ProjectMode.tsx
+@@ -0,0 +1,47 @@
++"use client";
++
++import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
++import { projectRequestUrl } from "@/lib/project-request";
++
++const ProjectModeContext = createContext({ sessionId: "" as string | null, local: false });
++
++export function ProjectModeProvider({ sessionId, children }: { sessionId: string | null; children: ReactNode }) {
++  const [resolved, setResolved] = useState<{ id: string; mode: string } | null>(null);
++  useEffect(() => {
++    if (sessionId === null) return;
++    let closed = false;
++    let timer: ReturnType<typeof setTimeout>;
++    const controller = new AbortController();
++    const refresh = async () => {
++      try {
++        const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/state`, {
++          cache: "no-store", signal: controller.signal,
++        });
++        const data = response.ok ? await response.json() : null;
++        if (!closed) setResolved({ id: sessionId, mode: data?.projectMode ?? "unknown" });
++      } catch {
++        if (!closed) setResolved({ id: sessionId, mode: "unknown" });
++      } finally {
++        if (!closed) timer = setTimeout(refresh, 1000);
++      }
++    };
++    void refresh();
++    return () => { closed = true; clearTimeout(timer); controller.abort(); };
++  }, [sessionId]);
++  const local = sessionId === null || (resolved?.id === sessionId && resolved.mode === "local");
++  const value = useMemo(() => ({ sessionId, local }), [sessionId, local]);
++  return <ProjectModeContext.Provider value={value}>{children}</ProjectModeContext.Provider>;
++}
++
++export function useProjectMode() {
++  const context = useContext(ProjectModeContext);
++  return useMemo(() => ({ ...context, url: (path: string) => projectRequestUrl(path, context.sessionId) }), [context]);
++}
++
++export function LocalOnly({ children }: { children: ReactNode }) {
++  const { local } = useProjectMode();
++  return local ? children : <p role="status" style={{ padding: 10, color: "var(--text-muted)" }}>
++    Files, Git, worktrees, @ file index and terminal: available in Local mode. Remote panels are off.
++    Chat and remote tools use the existing /remote extension; select Local explicitly to use these panels.
++  </p>;
++}
+--- a/components/SessionSidebar.tsx
++++ b/components/SessionSidebar.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { LocalOnly, useProjectMode } from "./ProjectMode";
+ 
+ import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+ import type { SessionInfo } from "@/lib/types";
+@@ -370,6 +371,7 @@
+ }
+ 
+ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
++  const project = useProjectMode();
+   const { t } = useI18n();
+   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
+   const [sessionListVersion, setSessionListVersion] = useState<number | null>(null);
+@@ -710,14 +712,14 @@
+   // Load worktrees for the current effective cwd
+   const [wtRefreshKey, setWtRefreshKey] = useState(0);
+   useLayoutEffect(() => {
+-    if (!selectedCwd) {
++    if (!selectedCwd || !project.local) {
+       setWorktreeState(null);
+       setWorktreeLoadingCwd(null);
+       return;
+     }
+     let cancelled = false;
+     setWorktreeLoadingCwd(selectedCwd);
+-    fetch(`/api/worktrees?cwd=${encodeURIComponent(selectedCwd)}`)
++    fetch(project.url(`/api/worktrees?cwd=${encodeURIComponent(selectedCwd)}`))
+       .then((r) => r.json())
+       .then((d: { projectRoot?: string; projectKey?: string; isGit?: boolean; isTopLevel?: boolean; currentWorktreePath?: string | null; worktrees?: WorktreeEntry[]; error?: string }) => {
+         if (cancelled) return;
+@@ -743,7 +745,7 @@
+         }
+       });
+     return () => { cancelled = true; };
+-  }, [selectedCwd, wtRefreshKey, refreshKey]);
++  }, [selectedCwd, wtRefreshKey, refreshKey, project]);
+ 
+   // Auto-select cwd and restore session from URL on first load
+   useEffect(() => {
+@@ -844,7 +846,7 @@
+     setWtBusy(true);
+     setWtError(null);
+     try {
+-      const res = await fetch("/api/worktrees", {
++      const res = await fetch(project.url("/api/worktrees"), {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ cwd: worktreeState.projectRoot, branch }),
+@@ -873,14 +875,14 @@
+     } finally {
+       setWtBusy(false);
+     }
+-  }, [wtNewBranch, wtBusy, worktreeState]);
++  }, [wtNewBranch, wtBusy, worktreeState, project]);
+ 
+   const handleRemoveWorktree = useCallback(async (path: string, force: boolean) => {
+     if (!worktreeState || wtBusy) return;
+     setWtBusy(true);
+     setWtError(null);
+     try {
+-      const res = await fetch("/api/worktrees", {
++      const res = await fetch(project.url("/api/worktrees"), {
+         method: "DELETE",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ cwd: worktreeState.projectRoot, path, force }),
+@@ -903,7 +905,7 @@
+     } finally {
+       setWtBusy(false);
+     }
+-  }, [worktreeState, wtBusy, currentWorktreePath]);
++  }, [worktreeState, wtBusy, currentWorktreePath, project]);
+ 
+   // Close dropdowns on outside click
+   useEffect(() => {
+@@ -1326,7 +1328,7 @@
+             switching between worktrees of one project keeps the row mounted
+             instead of flickering while data refetches: all worktrees of a
+             project share the same list anyway. */}
+-        {!sessionSearchOpen && showWorktreeSwitcher && (() => {
++        {!sessionSearchOpen && project.local && showWorktreeSwitcher && (() => {
+           if (!worktreeState) return null;
+           const showWtFilter = worktreeState.worktrees.length >= 8;
+           const visibleWorktrees = showWtFilter && wtFilter.trim()
+@@ -1634,7 +1636,7 @@
+             </div>
+           );
+         })()}
+-        {!sessionSearchOpen && inactiveWorktreeSelector && (
++        {!sessionSearchOpen && project.local && inactiveWorktreeSelector && (
+           <button
+             type="button"
+             aria-disabled="true"
+@@ -1737,7 +1739,7 @@
+ 
+       {/* File Explorer section */}
+       {(selectedCwdProp || selectedCwd) && (
+-        <div
++        <LocalOnly><div
+           style={{
+             borderTop: "1px solid var(--border)",
+             display: "flex",
+@@ -1878,7 +1880,7 @@
+               />
+             </div>
+           )}
+-        </div>
++        </div></LocalOnly>
+       )}
+     </div>
+   );
+--- a/components/TerminalPanel.test.mjs
++++ b/components/TerminalPanel.test.mjs
+@@ -1,7 +1,8 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { setImmediate } from "node:timers/promises";
+-import { createTerminalWriter } from "../lib/terminal-client.ts";
++import { createJiti } from "jiti";
++const { createTerminalWriter } = await createJiti(import.meta.url).import("../lib/terminal-client.ts");
+ 
+ test("a delayed input request cannot be overtaken by typing or resize", async (t) => {
+   const received = [];
+--- a/components/TerminalPanel.tsx
++++ b/components/TerminalPanel.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { useProjectMode } from "./ProjectMode";
+ 
+ import { useEffect, useRef, useState } from "react";
+ import { FitAddon } from "@xterm/addon-fit";
+@@ -17,6 +18,7 @@
+ }
+ 
+ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }: Props) {
++  const project = useProjectMode();
+   const { t } = useI18n();
+   const { id, cwd, restored } = tab;
+   const containerRef = useRef<HTMLDivElement>(null);
+@@ -79,7 +81,7 @@
+       terminal.options.disableStdin = true;
+       setError(reason.message);
+       setStatus("error");
+-    });
++    }, project.sessionId);
+     writerRef.current = writer;
+     const onData = terminal.onData((data) => {
+       if (connected && !exited && !inputFailed) writer.write(data);
+@@ -97,7 +99,7 @@
+     const connect = () => {
+       if (disposed || exited || !navigator.onLine) return;
+       events?.close();
+-      events = new EventSource(`/api/terminal/${encodeURIComponent(id)}/events${offset === undefined ? "" : `?after=${offset}`}`);
++      events = new EventSource(project.url(`/api/terminal/${encodeURIComponent(id)}/events${offset === undefined ? "" : `?after=${offset}`}`));
+       events.onmessage = (message) => {
+         const event = JSON.parse(message.data) as TerminalEvent;
+         if (event.type === "output") {
+@@ -135,9 +137,9 @@
+       fitAndResize();
+       if (restored || reconnectKey > 0) {
+         // Restoring a tab must never silently launch a replacement shell.
+-        await terminalRequest(`/api/terminal/${encodeURIComponent(id)}`);
++        await terminalRequest(project.url(`/api/terminal/${encodeURIComponent(id)}`));
+       } else {
+-        await terminalRequest("/api/terminal", {
++        await terminalRequest(project.url("/api/terminal"), {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           body: JSON.stringify({ id, cwd, cols: terminal.cols, rows: terminal.rows }),
+@@ -175,7 +177,7 @@
+       terminal.dispose();
+       terminalRef.current = null;
+     };
+-  }, [id, cwd, restored, reconnectKey]);
++  }, [id, cwd, restored, reconnectKey, project]);
+ 
+   useEffect(() => {
+     if (active) terminalRef.current?.focus();
+@@ -188,7 +190,7 @@
+     void (async () => {
+       await startRef.current;
+       await writerRef.current?.stop();
+-      await terminalRequest(`/api/terminal/${encodeURIComponent(id)}`, { method: "DELETE", keepalive: true });
++      await terminalRequest(project.url(`/api/terminal/${encodeURIComponent(id)}`), { method: "DELETE", keepalive: true });
+       if (!cancelled) callbacksRef.current.onClosed();
+     })().catch((reason: Error) => {
+       if (cancelled) return;
+@@ -197,7 +199,7 @@
+       callbacksRef.current.onCloseError();
+     });
+     return () => { cancelled = true; };
+-  }, [id, tab.closing]);
++  }, [id, tab.closing, project]);
+ 
+   return (
+     <section className="terminal-panel" aria-label={t("terminal.title")}>
+--- a/lib/pi-types.ts
++++ b/lib/pi-types.ts
+@@ -1,6 +1,10 @@
+ import type {
+   AgentSessionEvent,
+   BashOperations,
++  AgentSession,
++  ExtensionError,
++  UserBashEvent,
++  UserBashEventResult,
+   SessionManager,
+   SettingsManager,
+   SlashCommandInfo,
+@@ -12,6 +16,7 @@
+   PrepareNextTurnContext,
+ } from "@earendil-works/pi-agent-core";
+ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
++type BashResult = Parameters<AgentSession["recordBashResult"]>[1];
+ 
+ export interface ContextUsage {
+   percent: number | null;
+@@ -78,6 +83,8 @@
+ }
+ 
+ interface ExtensionRunnerLike {
++  emitUserBash?(event: UserBashEvent): Promise<UserBashEventResult | undefined>;
++  onError?(handler: (error: ExtensionError) => void): () => void;
+   getRegisteredCommands(): Array<{
+     invocationName: string;
+     description?: string;
+@@ -181,6 +188,7 @@
+     operations?: BashOperations;
+   }): Promise<{ output: string; exitCode?: number; cancelled?: boolean; truncated?: boolean; fullOutputPath?: string }>;
+   abortBash(): void;
++  recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void;
+   readonly isBashRunning: boolean;
+   setModel(model: ModelLike): Promise<void>;
+   navigateTree(targetId: string, options?: { summarize?: boolean }): Promise<NavigateTreeResult>;
+--- /dev/null
++++ b/lib/project-request.ts
+@@ -0,0 +1,7 @@
++/** Explicit null is unbound Local control use; empty context fails on the server. */
++export function projectRequestUrl(path: string, sessionId: string | null): string {
++  if (sessionId === null) return path;
++  const url = new URL(path, "http://local.invalid");
++  url.searchParams.set("sessionId", sessionId);
++  return `${url.pathname}${url.search}${url.hash}`;
++}
+--- a/lib/rpc-manager-shutdown.test.mjs
++++ b/lib/rpc-manager-shutdown.test.mjs
+@@ -595,6 +595,7 @@
+       getShellPath: () => shellPath,
+     },
+     sessionManager: {
++      getBranch: () => [],
+       getCwd: () => process.cwd(),
+       getSessionFile: () => undefined,
+     },
+--- a/lib/rpc-manager.ts
++++ b/lib/rpc-manager.ts
+@@ -7,6 +7,7 @@
+ import { validateAgentImages } from "./image-attachments";
+ import { invalidateModelsCache } from "./models-cache";
+ import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
++import { remoteProjectMode } from "./remote-project-mode";
+ import {
+   createProjectCommandBashExtension,
+   createProjectCommandBashOperations,
+@@ -226,6 +227,8 @@
+   private extensionWidgetGenerations = new Map<string, number>();
+   private extensionWidgetsResetting = false;
+   private pendingPromptCount = 0;
++  private bashDispatchPending = false;
++  private bashDispatchAborted = false;
+   private activeMutatingCommands = 0;
+   private sessionReplacement: "fork" | "clone" | null = null;
+   private agentRunNeedsCompletion = false;
+@@ -282,7 +285,7 @@
+   }
+ 
+   isRunning(): boolean {
+-    return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
++    return this._alive && (this.bashDispatchPending || this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
+   }
+ 
+   isChatOnly(): boolean {
+@@ -393,6 +396,7 @@
+ 
+   private shouldWaitForExtensions(type: string): boolean {
+     return type === "prompt"
++      || type === "bash"
+       || type === "steer"
+       || type === "follow_up"
+       || type === "get_commands"
+@@ -522,7 +526,7 @@
+   }
+ 
+   private isSessionRunningForReplacement(): boolean {
+-    return this.inner.isBashRunning
++    return this.bashDispatchPending || this.inner.isBashRunning
+       || this.inner.isStreaming
+       || this.inner.isCompacting
+       || this.pendingPromptCount > 0;
+@@ -572,7 +576,7 @@
+         // this submission starts a run or joins its streaming queue.
+         const releaseAdmission = await this.acquirePromptAdmission();
+         try {
+-          if (this.inner.isBashRunning) {
++          if (this.bashDispatchPending || this.inner.isBashRunning) {
+             throw new Error("Cannot send a prompt while a shell command is running");
+           }
+           if (this.extensionUiAbortController.signal.aborted) {
+@@ -662,6 +666,7 @@
+       }
+ 
+       case "abort":
++        this.bashDispatchAborted = true;
+         this.forceShutdownOnIdle = true;
+         // Stop must unwind extension commands that have not started the agent yet.
+         this.extensionUiAbortController.abort(new DOMException("Extension UI cancelled by Stop", "AbortError"));
+@@ -680,7 +685,7 @@
+           sessionFile: this.inner.sessionFile ?? "",
+           isStreaming: this.inner.isStreaming,
+           isPromptRunning: this.pendingPromptCount > 0,
+-          isBashRunning: this.inner.isBashRunning,
++          isBashRunning: this.bashDispatchPending || this.inner.isBashRunning,
+           isCompacting: this.inner.isCompacting,
+           autoCompactionEnabled: this.inner.autoCompactionEnabled,
+           autoRetryEnabled: this.inner.autoRetryEnabled,
+@@ -961,30 +966,56 @@
+       }
+ 
+       case "bash": {
+-        if (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning) {
++        if (this.bashDispatchPending || this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning) {
+           throw new Error("Cannot run a shell command while the session is busy");
+         }
+-        const execution = this.inner.executeBash(
+-          command.command as string,
+-          undefined,
+-          {
+-            excludeFromContext: command.excludeFromContext as boolean | undefined,
+-            operations: createProjectCommandBashOperations({
+-              shellPath: this.inner.settingsManager.getShellPath(),
+-            }),
+-          },
+-        );
++        const text = command.command as string;
++        const excludeFromContext = command.excludeFromContext as boolean | undefined;
++        const runner = this.inner.extensionRunner;
++        const remoteBefore = remoteProjectMode(this.inner.sessionManager.getBranch()) === "remote";
++        let hookError: string | undefined;
++        const unsubscribe = runner?.onError?.((error) => {
++          if (error.event === "user_bash") hookError = error.error;
++        });
++        this.bashDispatchPending = true;
++        this.bashDispatchAborted = false;
+         try {
+-          const result = await execution;
++          if (remoteBefore && (!runner?.emitUserBash || !unsubscribe)) {
++            throw new Error("Remote shell hook unavailable; local execution blocked");
++          }
++          const intercepted = await runner?.emitUserBash?.({
++            type: "user_bash", command: text, excludeFromContext: !!excludeFromContext, cwd: this.cwd,
++          });
++          if (hookError !== undefined) throw new Error(`Shell hook failed: ${hookError}`);
++          if (this.bashDispatchAborted || !this._alive) throw new Error("Shell command aborted");
++          const remote = remoteBefore || remoteProjectMode(this.inner.sessionManager.getBranch()) === "remote";
++          if (remote && !intercepted?.result && !intercepted?.operations) {
++            throw new Error("Remote shell hook did not route command; local execution blocked");
++          }
++          let result;
++          if (intercepted?.result) {
++            result = intercepted.result;
++            this.inner.recordBashResult(text, result, { excludeFromContext });
++          } else {
++            result = await this.inner.executeBash(text, undefined, {
++              excludeFromContext,
++              operations: intercepted?.operations ?? createProjectCommandBashOperations({
++                shellPath: this.inner.settingsManager.getShellPath(),
++              }),
++            });
++          }
+           this.persistBashOnlySession();
+           return result;
+         } finally {
++          unsubscribe?.();
++          this.bashDispatchPending = false;
+           this.resetIdleTimer();
+           invalidateSessionListCache();
+         }
+       }
+ 
+       case "abort_bash": {
++        this.bashDispatchAborted = true;
+         this.forceShutdownOnIdle = true;
+         this.inner.abortBash();
+         return null;
+--- /dev/null
++++ b/lib/session-project-mode.ts
+@@ -0,0 +1,29 @@
++import { SessionManager } from "@earendil-works/pi-coding-agent";
++import { getRpcSession } from "./rpc-manager";
++import { resolveSessionPath, readSessionHeader } from "./session-reader";
++import { remoteProjectMode } from "./remote-project-mode";
++
++export async function sessionProjectMode(sessionId: string): Promise<"local" | "remote"> {
++  const wrapper = getRpcSession(sessionId);
++  if (wrapper?.isAlive()) {
++    if (wrapper.inner.sessionId !== sessionId) throw new Error("Session identity changed");
++    return remoteProjectMode(wrapper.inner.sessionManager.getBranch());
++  }
++  const path = await resolveSessionPath(sessionId);
++  if (!path || readSessionHeader(path)?.id !== sessionId) throw new Error("Session not found");
++  return remoteProjectMode(SessionManager.open(path).getBranch());
++}
++
++export async function rejectRemoteProjectRequest(request: Request): Promise<Response | undefined> {
++  const params = new URL(request.url).searchParams;
++  // No session means explicit local picker/control use, not a remote workspace.
++  if (!params.has("sessionId")) return;
++  const ids = params.getAll("sessionId");
++  try {
++    if (ids.length !== 1 || !ids[0]) throw new Error("Missing session context");
++    if (await sessionProjectMode(ids[0]) === "local") return;
++    return Response.json({ error: "Available in Local mode; remote panels are off" }, { status: 409 });
++  } catch {
++    return Response.json({ error: "Cannot verify session project mode; local access blocked" }, { status: 409 });
++  }
++}
+--- a/lib/terminal-client.ts
++++ b/lib/terminal-client.ts
+@@ -1,3 +1,5 @@
++import { projectRequestUrl } from "./project-request";
++
+ export async function terminalRequest(path: string, options?: RequestInit): Promise<{ id?: string; cwd?: string }> {
+   const response = await fetch(path, { ...options, signal: AbortSignal.timeout(15_000) });
+   const data = await response.json();
+@@ -5,7 +7,7 @@
+   return data;
+ }
+ 
+-export function createTerminalWriter(id: string, onError: (error: Error) => void) {
++export function createTerminalWriter(id: string, onError: (error: Error) => void, sessionId: string | null = null) {
+   let pending = Promise.resolve();
+   let stopped = false;
+   let bufferedInput: { type: "input"; data: string } | null = null;
+@@ -14,7 +16,7 @@
+     pending = pending.then(async () => {
+       if (stopped) return;
+       if (body === bufferedInput) bufferedInput = null;
+-      await terminalRequest(`/api/terminal/${encodeURIComponent(id)}`, {
++      await terminalRequest(projectRequestUrl(`/api/terminal/${encodeURIComponent(id)}`, sessionId), {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify(body),
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "@agegr/pi-web",
+-  "version": "0.8.11",
++  "version": "0.9.0-remote.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "@agegr/pi-web",
+-      "version": "0.8.11",
++      "version": "0.9.0-remote.1",
+       "hasInstallScript": true,
+       "license": "MIT",
+       "dependencies": {
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@agegr/pi-web",
+-  "version": "0.8.11",
++  "version": "0.9.0-remote.1",
+   "description": "Web UI for the pi coding agent",
+   "homepage": "https://github.com/agegr/pi-web#readme",
+   "repository": {

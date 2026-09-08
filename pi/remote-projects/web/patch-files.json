@@ -1,0 +1,118 @@
+{
+  "app/api/file-index/route.ts": {
+    "before": "748bfda920f36623d3a0070eff5c9831b988de1e36fc6d08e0d51543a5a2b9a9",
+    "after": "0bcfdb7d51ee27aadd6e7d30f7c73d3a9bbf037bb33b462004d450eec4139944"
+  },
+  "app/api/files/[...path]/route.ts": {
+    "before": "2c3d2f895b27c6ed859047ab3d0c72f9d5f0cfcd4d612b835dcfe4ed720471d7",
+    "after": "5b3aebe70a656f1d92b0c8785900dd055209dbffb8040b91b2259bc7ba6f806c"
+  },
+  "app/api/git/diff/route.ts": {
+    "before": "29f9f291b8645a7bc1b1f7ed9dfe03bf2e4cf0132b2d8c663972f2cfb86bb95a",
+    "after": "606be4ab3adf287cf743834890b72e405fdb2bee3e1085a1fe0d21b7b206ada6"
+  },
+  "app/api/git/status/route.ts": {
+    "before": "128b10c0b52760a0bc878f40bb594f85e3cc01e69c0d82c9da89033f318c70c7",
+    "after": "d8b8fbe06e44bc09ff4b9c2de9af212b967f45098cc8ad9c23602c44d7e79d85"
+  },
+  "app/api/sessions/[id]/state/route.ts": {
+    "before": "00cac98caac31c5c791e08031d12542d6e7c1ca7182fc882c87f2e1e306b87ed",
+    "after": "c021060945d0fc0c6ae0849f06086b2291f77004ebd5b0572d2cf8789fd03af0"
+  },
+  "app/api/sessions/runtime-route.test.mjs": {
+    "before": "a53616d37b959c288c84f2f422244c4138b93345912f913dd46240254a54976f",
+    "after": "c1b0e3d39d4717d67df4e26aef509bd4099cbb78132bc4ac8c4b956cd7fb6247"
+  },
+  "app/api/terminal/[id]/events/route.ts": {
+    "before": "db2f197c1ddcf74391ecdfcd13a6f547b3a946ca48f6095e8ac0134920d00959",
+    "after": "615d7fd357aa5f53fa775991fc9942885990871f95b0b250b3728005d277c284"
+  },
+  "app/api/terminal/[id]/route.ts": {
+    "before": "a3e05ad53abb14f834f5b4463823e534488c5bb2fb0aadb5c44125680b8d4113",
+    "after": "5161cfa01ce5525757ecdf40baae9bebe328a9c0b848d1b367baaf78cc1c16f4"
+  },
+  "app/api/terminal/route.ts": {
+    "before": "c57e4d65572545f16af2b827449dcda5648603060de5ab10100cb972cc5e904a",
+    "after": "92c26286af2cc02393e7858988a0d79c79091909209c28ba10bedabbad9dde7f"
+  },
+  "app/api/worktrees/route.ts": {
+    "before": "62dc630322465d4091596bd2a440f37ae29fc06c4d89129af913acd42284ccd3",
+    "after": "2f3bfad51dade6e39f0d63a39b56dcc900ef41085bb880b5d1e7e62fce418c81"
+  },
+  "components/AppShell.file-viewer-state.test.mjs": {
+    "before": "d496f3c0e96dc240a07c382f3ac3299a04bc63adb8cc2e88b7fd02772813d09f",
+    "after": "08b32d82f4475833fe9824fafe1907782ef19afc2fb8f593f5590e7fca9c5750"
+  },
+  "components/AppShell.tsx": {
+    "before": "5ceaa6e537267fe2bfb9aa364c8eb3c837193a0048291e4146fc6a0d32610a54",
+    "after": "e408645bdfefdc9cf2790f0163eb14ede08487bf8334bcc6277a19abf80c8c12"
+  },
+  "components/ChatInput.tsx": {
+    "before": "88db00268d205efb0f9e2f6e32723b536ed93cd9c166b94e5c4725a420756895",
+    "after": "62f1cc68d4264254edd2318f615d52932df6af9aee78b842fd9465a3ff42d7f9"
+  },
+  "components/FileExplorer.tsx": {
+    "before": "c5301254d66a5f1dbfe4190f9a96dd19b904c6e56364a347d5bff54d0bd483b9",
+    "after": "aab27e118b33c629b75eb970957432de4f0a392f75234e80c305cb45202bbc1c"
+  },
+  "components/FileViewer.tsx": {
+    "before": "b4bed8249fe45811c880c569745724c73b58d4b3ebc50d52c5a0766bebeb9a97",
+    "after": "930e0c756024cbd1f38cbb9723df1ee4bae53100f7ce0b7a7b4c21f796fb2099"
+  },
+  "components/MarkdownBody.test.mjs": {
+    "before": "a84b1ed8066a40369de07fbfcbfb5d6e8fd9e17e81fbfea39eb26cef11636329",
+    "after": "9854aa31229bd1c2c362081011ccce730d02928d2ed59a615c6e89ecee75929c"
+  },
+  "components/MarkdownBody.tsx": {
+    "before": "af305b3182fcbb75e190fe970818118c3d2776545d9b1a8a5d539cd95cae2b0c",
+    "after": "4f0c226fc3f8f3725cfb655ba1bd10160530280e2932160339d78e679cfad672"
+  },
+  "components/ProjectMode.tsx": {
+    "before": null,
+    "after": "37f3dbb5c21ba2b0a9e21622d55f863d44f49747396cd4e92ccd564a31ed8828"
+  },
+  "components/SessionSidebar.tsx": {
+    "before": "d205b97f8f8d31dabea18875810026cb56180faa6b2d7374b90036626dca07e9",
+    "after": "63d9aa7761be89383c33418cc8e0458f5e78cc6d9af2281617453f79fa6d99a6"
+  },
+  "components/TerminalPanel.test.mjs": {
+    "before": "77177db795128f408635a3da5a012f941c0091ba6e9eff6e57be941bdfdb39be",
+    "after": "6379cd5d9ebc2dcbe1a7f45c6963163a9993e698756e587e67f1057813de4020"
+  },
+  "components/TerminalPanel.tsx": {
+    "before": "ec3d02fb3910e866e103b4a5c0e3ddcc6ecd9f2429a3168449ff4f26cb98603b",
+    "after": "eb864de3a67358b882a448e6f71f1e9f1804dd4c7fe67762f04591db7a4f2a2e"
+  },
+  "lib/pi-types.ts": {
+    "before": "6aae2a0c89bf3dedd67bb6ca3e8073b1465febd9a232e4567b72df2fea47036d",
+    "after": "2a059d5a3392ae37532a1ce98d823a081ef059268c4d4e17b5c15d20b3783779"
+  },
+  "lib/project-request.ts": {
+    "before": null,
+    "after": "bc6fd03d5ffa9a9685eaca5595a50d70f24d5bbf7b3bea6c22f19979b3a0be8b"
+  },
+  "lib/rpc-manager-shutdown.test.mjs": {
+    "before": "5671df6fa2d43d4b7bf5f543ac1ed8f1cf68aafa52434822257e373ddb504f64",
+    "after": "83980442d2bf3eeea5cdffb8d2827c5eb0af7bf2d165a4b3635cbed11570454a"
+  },
+  "lib/rpc-manager.ts": {
+    "before": "e8f862d827f515b53aa0a881afe241be5761ccc2d109edb70fb5661a6bdb5c94",
+    "after": "129e00b921ab433c1ac78725e8430ab804b8fc6089d86caa613ce397d3120139"
+  },
+  "lib/session-project-mode.ts": {
+    "before": null,
+    "after": "bea13b782ecca3dd850d6e5d2dd6536990f2a6a4010e1bcf3451056020eb29af"
+  },
+  "lib/terminal-client.ts": {
+    "before": "33411cf9ae552fe6d9f142a4f9348d3e023b859634bd863b30e512469ebbd509",
+    "after": "cc83dbee047a4fa5eb5ff3f12b764f376d603785c7430b45f553c54e31ba5474"
+  },
+  "package-lock.json": {
+    "before": "b48080b1ddd723be0a058f8747ee9f485df54b7000ea304f9d8e72ea67c5b2e6",
+    "after": "ebdb1411b3e4a47743a075f8a4389e953a66eb019089246e885d765e0cc8e013"
+  },
+  "package.json": {
+    "before": "bed19ef58420587ad0aa9460c45cf4eb834b996af8657e0585f2ad5aed451fd2",
+    "after": "22aa7e6501f41a8c99bfbc8c8747ffaeee0d358c404a08a9309386b9530e5028"
+  }
+}
