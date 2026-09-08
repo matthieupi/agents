@@ -17,17 +17,43 @@ link_resource() {
 }
 
 init_home() {
-    [[ "$(id -u)" != 0 && "$HOME" == /home/omp ]] || {
-        printf '[omp] init requires the non-root container account and HOME=/home/omp.\n' >&2; return 1;
+    local runtime_uid runtime_gid account account_name account_password account_uid account_gid account_rest
+    runtime_uid="$(id -u)"
+    runtime_gid="$(id -g)"
+    printf '[omp] Runtime UID=%s GID=%s (primary).\n' "$runtime_uid" "$runtime_gid" >&2
+    account="$(getent passwd omp)" || {
+        printf '[omp] Missing passwd account omp; rebuild the OMP image.\n' >&2; return 1;
+    }
+    IFS=: read -r account_name account_password account_uid account_gid account_rest <<< "$account"
+    [[ "$runtime_uid" != 0 && "$runtime_uid" == "$account_uid" && "$runtime_gid" == "$account_gid" ]] || {
+        printf '[omp] Account mismatch: runtime UID=%s GID=%s; passwd omp UID=%s primary GID=%s. Rebuild with matching OMP_UID/OMP_GID and recreate only the concerned container.\n' \
+            "$runtime_uid" "$runtime_gid" "$account_uid" "$account_gid" >&2
+        return 1
+    }
+    [[ "${HOME:-}" == /home/omp ]] || {
+        printf '[omp] init requires HOME=/home/omp.\n' >&2; return 1;
     }
     [[ ! -L "$HOME/.omp" && ! -L "$HOME/.omp/agent" ]] || {
         printf '[omp] Refusing redirected state directories.\n' >&2; return 1;
     }
-    mkdir -p "$HOME/.omp/agent"
-    [[ -w "$HOME" && -w "$HOME/.omp" && -w "$HOME/.omp/agent" && -w /workspace && -w /opt/agent ]] || {
-        printf '[omp] Home/state/workspace/resources must be writable by the configured UID/GID; fix only the concerned paths offline.\n' >&2
+    local path failed=0
+    if ! mkdir -p "$HOME/.omp/agent"; then
+        printf '[omp] Cannot prepare /home/omp/.omp/agent.\n' >&2
+        failed=1
+    fi
+    for path in "$HOME" "$HOME/.omp" "$HOME/.omp/agent" /workspace /opt/agent; do
+        if [[ ! -d "$path" || ! -w "$path" || ! -x "$path" ]]; then
+            printf '[omp] Required directory is missing, unwritable or unsearchable: %s (runtime UID=%s GID=%s).\n' \
+                "$path" "$runtime_uid" "$runtime_gid" >&2
+            stat -L --printf='[omp] Path metadata: type=%F uid=%u gid=%g mode=%a\n' -- "$path" >&2 || \
+                printf '[omp] Metadata unavailable for: %s\n' "$path" >&2
+            failed=1
+        fi
+    done
+    if (( failed )); then
+        printf '[omp] Rebuild/recreate for image-home ownership; review only concerned bind paths offline. Init never changes host ownership or permissions.\n' >&2
         return 1
-    }
+    fi
     local persona="${OMP_PERSONA:-build}"
     [[ "$persona" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || {
         printf '[omp] OMP_PERSONA must be a simple shared system Markdown basename.\n' >&2; return 1;

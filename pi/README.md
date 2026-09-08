@@ -241,9 +241,7 @@ pi/
 │       ├── extension-library/
 │       ├── themes/
 │       ├── settings.json
-│       ├── config.yml       # retained legacy OMP rollback sentinel
 │       ├── models.json
-│       ├── models.yml       # retained legacy OMP defaults
 │       └── sessions/
 └── ssh/
 ```
@@ -254,12 +252,20 @@ The harness mounts `./.pi` at `/home/pi/.pi` for vanilla Pi only.
 `settings.json`, `models.json`, `keybindings.json`, `auth.json`, extensions,
 themes and Pi sessions stay here. No OMP state is mounted by the new OMP component.
 
-**Legacy migration hold:** tracked `config.yml` and `models.yml`, their ignore
-exceptions, and all ignored OMP state are intentionally retained pending the
-[offline migration preflight](../omp/README.md#offline-migration-and-rollback).
-Keep `config.yml`: old OMP images may otherwise migrate/rename Pi settings on
-rollback. Legacy `agent.db` contains secrets; never commit it or copy the entire
-Pi state into OMP. Nothing performs an automatic migration.
+**Authorized default cleanup:** the unchanged tracked OMP `config.yml` and
+`models.yml` and their tracking exceptions were removed with user authorization.
+All ignored legacy credentials, databases, history and sessions remain protected
+and untouched. OMP uses its own tracked defaults and fresh credentials/state;
+migration and history continuity are out of scope, not acceptance blockers.
+Legacy `agent.db` contains secrets; never commit it or copy the entire Pi state
+into OMP. Nothing performs an automatic migration. Optional historical recovery
+is operator-owned work, not a deliverable. Do not launch old OMP images against
+Pi state expecting safe rollback: the removed `config.yml` sentinel previously
+prevented fallback migration/renaming of Pi settings. See
+[OMP state policy](../omp/README.md#fresh-state-and-retained-legacy-files).
+
+OMP source delivery is complete; automated test creation/execution is waived.
+Final OMP manual verification/validation remains user-owned and pending, not passed.
 
 This service persists that path from `./.pi`, including:
 
@@ -359,8 +365,8 @@ Configure local or self-hosted providers by editing:
 .pi/agent/models.json
 ```
 
-Use `models.json` for Pi. The retained OMP YAML is historical rollback state,
-not active Pi configuration.
+Use `models.json` for Pi. OMP YAML defaults belong only to the standalone OMP
+component, not Pi configuration.
 
 For the local stack, the default config uses the Ollama container directly:
 
@@ -442,7 +448,7 @@ If you are already inside the Pi container and want the raw Pi CLI, use the bund
 
 - Container runs as non-root user (`pi:1000`)
 - API keys are not baked into the image
-- Legacy `.pi/agent/agent.db` is ignored secret state, retained for offline migration/rollback
+- Legacy `.pi/agent/agent.db` is protected, ignored secret state; no migration or deletion is required
 - SSH keys are mounted read-only
 - Pi intentionally operates with minimal built-in safety rails; use container isolation as your boundary
 - This image keeps parity with the existing agent containers and allows sudo inside the container

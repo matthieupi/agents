@@ -9,6 +9,8 @@ Docker socket, published ports, or automatic migration. Pi/COO remain vanilla Pi
 By explicit request, no tests were added/run, no syntax checks or runtime probes
 were run, and no images were built or containers/deployments changed. Source
 compatibility findings below are not a claim of successful runtime validation.
+Automated test creation/execution is waived, not a deferred acceptance gate.
+Final manual verification/validation is user-owned and **pending**, not passed.
 
 ## Commands and prerequisites
 
@@ -27,6 +29,7 @@ needed. Existing Git configuration is optional (`/dev/null` by default).
 
 ```bash
 # From services/agents/omp, as the intended developer:
+export OMP_UID="$(id -u)" OMP_GID="$(id -g)"  # same values for build AND runtime
 mkdir -p ssh                 # empty read-only SSH bind is supported
 chmod 700 .omp .omp/agent ssh
 export SSH_DIR_PATH="$(realpath ssh)"
@@ -159,9 +162,22 @@ absolute paths everywhere; comma/newline mount paths are rejected by the runner.
 | `OMP_COMPONENT_DIR` | wrapper forces real component path; Compose operator must supply it |
 | Provider variables | exported allowlist in `.env.example`; values not passed as build arguments |
 
-The image's passwd account must match runtime IDs; changing Compose `user` alone
-is not a substitute for rebuilding with matching `OMP_UID/GID`. Init refuses root
-and checks writable home/state/workspace/resources. It never chowns host mounts.
+The image's passwd account must match runtime UID and **primary GID**; supplementary
+groups do not substitute for the configured primary GID. Defaults of `1000:1000`
+are not host-ID detection. Export the chosen `OMP_UID` and `OMP_GID` in the same
+shell for both wrapper build and launch (and again in later shells). For Compose,
+set the same numeric values in `.env` or export them; exported values take precedence.
+Changing Compose `user` alone is not a substitute for rebuilding with matching IDs.
+
+Root image-install tooling uses `HOME=/root` until `USER omp`. The passwd home is
+explicitly `/home/omp`, owned by `omp:omp` with mode `0750`; private `.omp` and
+`.omp/agent` remain `0700`. Final runtime HOME is `/home/omp`. Playwright browsers
+live at `/opt/ms-playwright` via `PLAYWRIGHT_BROWSERS_PATH`, with image-only
+read/traverse access for the non-root runtime, not in root's private cache.
+Init refuses root and mismatched account IDs, then checks home/state/workspace/
+resources for directory, write and traversal access. It reports each failing path,
+runtime UID/GID and available numeric stat ownership/mode/type, not file contents
+or provider values. It never chowns host mounts or changes their permissions.
 Provider environment changes require recreation; reuse intentionally does not
 compare or print secret values. For Git identity, use the read-only gitconfig.
 Model defaults are `providers: {}`; OMP's bundled provider catalog remains in use.
@@ -191,6 +207,51 @@ docker compose exec omp bash -c '/opt/harness/init.sh && exec /usr/local/bin/omp
 is external; this component does not create a network or join `proxy_net`. No proxy
 route, OAuth ports or Docker socket is needed for ordinary outbound API access.
 Compose refuses missing bind sources instead of creating root-owned directories.
+
+### Scoped home-ownership fix: rebuild and recreate
+
+Run only on the concerned Docker host/context, from the **original canonical OMP
+checkout**, as the intended non-root developer. Keep the existing chosen image,
+network, state, SSH, Git, persona and resource exports. The host-ID example below
+assumes those IDs are intended to access the existing binds; it does not repair
+bind ownership, ACLs, parent traversal, NFS mapping or a remote daemon's paths.
+No remote path permissions have been proven by source review.
+
+For a **wrapper-managed workspace container**:
+
+```bash
+export OMP_UID="$(id -u)" OMP_GID="$(id -g)"
+./omp build
+./omp list
+# Drain active sessions; replace this example with the exact selected name from list.
+OMP_CONTAINER=omp-project-HASH
+./omp stop "$OMP_CONTAINER"
+./omp remove "$OMP_CONTAINER"
+./omp /absolute/project
+```
+
+Use the same canonical workspace and bind settings when relaunching. Build must
+succeed before stopping/removing anything. `build` alone changes no container;
+`start` does not recreate it and stale-image reuse intentionally fails closed.
+Removal retains bind data. Do not use `all`, `fclean`, prune or a stack restart.
+
+For the **optional static Compose container**, use this alternative, not both
+interfaces against one state root:
+
+```bash
+export OMP_UID="$(id -u)" OMP_GID="$(id -g)"
+export OMP_COMPONENT_DIR="$(pwd -P)"
+export WORKSPACE_PATH="$(realpath /absolute/project)"
+docker compose build omp
+# After a successful build, drain sessions in this static container only.
+docker compose up -d --no-deps --no-build --force-recreate omp
+docker compose exec omp bash -c '/opt/harness/init.sh && exec /usr/local/bin/omp'
+```
+
+These are operator actions, not an executed rollout. Inspect init failures before
+retrying; a fixed image home does not establish that bind paths are writable.
+Do not bypass failures with runtime root, host chown or broader permissions.
+Runner startup-readiness behavior is unchanged in this fix.
 
 ## Shared resources and discovery evidence
 
@@ -298,57 +359,36 @@ old links explicitly. Editing through references edits the shared repository.
   dependencies are not hermetically locked. Terraform download retains the prior
   unchecked-archive pattern. These are residual supply-chain risks.
 
-## Offline migration and rollback
+## Fresh state and retained legacy files
 
-**Not performed, automated, or approved by launching this component.** Old tracked
-Pi `config.yml`/`models.yml` and their exceptions remain until preflight. All old
-ignored state remains operator-owned. Rebuilding source does not migrate data.
+**Fresh OMP credentials and state are the default.** Configure providers or log in
+independently in OMP; do not import Pi credentials or promise continuity with old
+OMP history. Credential/history migration, conversion and rollback exercises are
+explicitly out of scope, not acceptance blockers or required future deliverables.
 
-1. Obtain a separate migration approval/maintenance window. Inventory local YAML
-   modifications and record old image IDs/configuration privately. Save customized
-   YAML and especially the rollback `config.yml` sentinel outside Git; do not reset
-   or clean the checkout. Only then consider future tracked-default removal.
-2. Stop all old OMP processes **and every writer sharing old Pi state**, not the
-   whole infrastructure stack. Confirm no writers remain. Take a private, mode-0700
-   backup with restricted files; it may contain Pi secrets and must never be
-   committed, logged, or mounted into the new OMP container.
-3. Establish nonoverlapping canonical source, stage and destination directories.
-   Refuse symlink escapes or existing credentials/nonempty target state. Only
-   pristine starter YAML is replaceable after explicit confirmation; customized
-   target YAML is a conflict. Do not merge trees or overwrite credentials.
-4. Use an explicit OMP-only copy allowlist. Pinned `dirs.ts` identifies
-   `agent/config.yml`, `agent/models.yml`, `agent/agent.db` (auth/settings),
-   `agent/history.db` (session history), `agent/models.db` (model cache),
-   `agent/blobs` and `agent/sessions`. **Path existence does not prove old provenance**:
-   sessions in the former shared root require separate classification before copy.
-   Exclude Pi `auth.json`, JSON settings/models/keybindings, Pi sessions, extensions,
-   plugins, themes, ambiguous caches and installation identity. The pinned source
-   also identifies `secret-placeholder.key`; determine whether selected history
-   depends on it before enabling secret-placeholder history migration. Do not
-   blindly transfer or regenerate it for an existing archive.
-5. Copy, never move. For SQLite use an offline SQLite backup API or a proven
-   consistent snapshot accounting for WAL/SHM. Copying only a live main DB is not
-   safe. Run integrity checks without printing secret rows. Validate a private
-   staged copy and promote it without overwriting existing state. Restrict new
-   directories to 0700 and auth DB to 0600; adjust only destination ownership for
-   the configured UID/GID. Verify source checksums unchanged, privately.
-6. Before launching with real history, classify its format and saved absolute
-   paths for that source version. This pass verified path helpers and resume
-   argument arity, **not legacy session-format compatibility or path rewriting**.
-   Old `/home/pi` paths may need explicit mapping; both old and new Docker runs
-   use `/workspace`, which alone cannot identify the original host project.
-   Keep ambiguous history archived rather than attempting wholesale conversion.
-7. Validate only the new OMP container first: authentication without logging keys,
-   selected conversation/resume, resource discovery and persistence. Then validate
-   vanilla Pi independently. Do not use `fclean` as a migration shortcut.
-8. Rollback: stop only new OMP writers; preserve new state separately; restore old
-   image/config and YAML sentinel if needed; use untouched old state. Never merge
-   databases backward or overwrite newer Pi credentials. Post-cutover histories
-   diverge; rollback returns to the prior snapshot, not synchronized state.
+On 2026-09-08 the user authorized removing only the tracked legacy defaults
+`pi/.pi/agent/config.yml` and `pi/.pi/agent/models.yml` and their tracking exceptions.
+Git status/diff and content review found no local customizations before deletion.
+The new `omp/.omp/agent/{config.yml,models.yml}` defaults remain tracked and unchanged.
+On other checkouts, preserve customized legacy YAML and report the conflict rather
+than silently deleting it; never reset or clean local edits.
+
+All ignored legacy credentials, databases, history and sessions remain protected
+and operator-owned. This cleanup does not read, copy or delete them, and startup
+does not migrate them. Rebuilding or manager cleanup must not remove bind state.
+
+Optional historical recovery is separately authorized operator work, not this
+MVP's deliverable. Removing `config.yml` removes the old setup/migration sentinel:
+do not launch an old OMP image against Pi state expecting safe automatic rollback,
+since fallback migration can rename Pi settings. Any separately chosen recovery
+must protect private data, avoid overwriting current credentials or merging trees,
+and account for source-version/session-path and consistent database snapshot risks.
+No recovery procedure or migration fixture is required to accept this extraction.
 
 ## User validation handoff
 
-These are **suggested operator commands, not commands executed by the agent**.
+Final manual verification/validation is **owned by the user and pending**. These
+are **suggested operator commands, not commands executed by the agent**.
 Start with source-only checks from `services/agents`:
 
 ```bash
@@ -380,13 +420,15 @@ Separately render Compose with an explicit non-secret env file and canonical
 `OMP_COMPONENT_DIR`/`WORKSPACE_PATH` (do not print real provider secrets). Check
 static-container ownership and mount equivalence before using its lifecycle.
 
-Remaining acceptance work: shell/Python/Compose syntax; fake-Docker argv and
-ownership/failure/race checks; image install/bin/native workers; default-home
+Pending user-owned manual acceptance: shell/Python/Compose syntax; argument
+forwarding and ownership/failure/race behavior; image install/bin/native workers; default-home
 healthcheck side effects; non-root permissions; TTY/stdin/exit/signal behavior;
 actual SYSTEM/command/skill discovery and precedence (including native glob on
 the linked commands root with ignores); conflicts, same-basename workspaces,
 static/per-workspace lifecycle, and resource limit normalization; provider login,
-model reachability, DB concurrency/persistence, resumed cwd/history separation,
-offline snapshot/rollback and secret exclusions. No automated test coverage was
-added in this pass. No live migration or deployment should be inferred from the
-source implementation.
+model reachability, fresh-state DB concurrency/persistence, resume of newly created
+OMP sessions and cwd/history separation, private-state ignore protections, Pi-only
+image/presets and unchanged native Pi/COO behavior. Legacy credential/history
+continuity, offline recovery/rollback and migration fixtures are not acceptance
+requirements. Automated test creation/execution is waived. No successful manual
+validation, live migration or deployment should be inferred from source delivery.

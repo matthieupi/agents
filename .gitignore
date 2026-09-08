@@ -18,14 +18,12 @@ ssh/
 .claude
 .agents
 
-# Retain legacy OMP YAML and exceptions in Pi pending offline migration preflight.
-# Active OMP runtime now belongs to omp/; never delete legacy private state.
+# OMP defaults/runtime belong to omp/; legacy Pi private state stays ignored.
+# Keep Pi extension/theme sources allowed; no legacy OMP YAML exceptions.
 !pi/.pi/
 pi/.pi/*
 !pi/.pi/agent/
 pi/.pi/agent/*
-!pi/.pi/agent/config.yml
-!pi/.pi/agent/models.yml
 !pi/.pi/agent/extensions/
 !pi/.pi/agent/extensions/**
 !pi/.pi/agent/extension-library/

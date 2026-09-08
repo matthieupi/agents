@@ -12,7 +12,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     BUN_INSTALL=/opt/bun \
     BUN_INSTALL_GLOBAL_DIR=/opt/bun/install/global \
     BUN_INSTALL_BIN=/opt/bun/bin \
-    HOME=/home/omp \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    HOME=/root \
     PATH=/opt/bun/bin:/home/omp/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN test "$(dpkg --print-architecture)" = amd64 \
@@ -28,7 +29,8 @@ RUN userdel --remove node \
     && ( ! getent group node >/dev/null || groupdel node ) \
     && test "${OMP_UID}" -gt 0 && test "${OMP_GID}" -gt 0 \
     && groupadd -g "${OMP_GID}" omp \
-    && useradd -u "${OMP_UID}" -g omp -s /bin/bash -m omp \
+    && useradd -u "${OMP_UID}" -g omp -s /bin/bash -m -d /home/omp omp \
+    && install -d -m 0750 -o omp -g omp /home/omp \
     && install -d -o omp -g omp /workspace /home/omp/.ssh /home/omp/.ansible \
     && install -d -m 0700 -o omp -g omp /home/omp/.omp /home/omp/.omp/agent
 RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64-baseline.zip" -o /tmp/bun.zip \
@@ -41,9 +43,11 @@ RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERS
     && ln -s /opt/bun/bin/omp /usr/local/bin/omp \
     && chmod -R a+rX /opt/bun
 # General frontend tooling retained; no vanilla Pi, sudo or Docker socket tooling.
-RUN npm install -g playwright && playwright install --with-deps chromium
+RUN npm install -g playwright && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright
 
 USER omp
+ENV HOME=/home/omp
 WORKDIR /workspace
 # Do not inherit node's docker-entrypoint.sh: the harness owns startup exactly.
 ENTRYPOINT []
