@@ -22,6 +22,7 @@ import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { requireLocalProjectExecution } from "../remote-project-mode.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -259,6 +260,7 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 
+		requireLocalProjectExecution(ctx, "Pi expert launch");
 		state.status = "researching";
 		state.question = question;
 		state.elapsed = 0;
@@ -267,10 +269,6 @@ export default function (pi: ExtensionAPI) {
 		updateWidget();
 
 		const startTime = Date.now();
-		state.timer = setInterval(() => {
-			state.elapsed = Date.now() - startTime;
-			updateWidget();
-		}, 1000);
 
 		const model = ctx.model
 			? `${ctx.model.provider}/${ctx.model.id}`
@@ -291,10 +289,15 @@ export default function (pi: ExtensionAPI) {
 		const textChunks: string[] = [];
 
 		return new Promise((resolve) => {
+			requireLocalProjectExecution(ctx, "Pi expert launch");
 			const proc = spawn("pi", args, {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
+			state.timer = setInterval(() => {
+				state.elapsed = Date.now() - startTime;
+				updateWidget();
+			}, 1000);
 
 			let buffer = "";
 
@@ -414,6 +417,7 @@ Ask specific questions about what you need to BUILD. Each expert will return doc
 				};
 			}
 
+			requireLocalProjectExecution(ctx, "Pi expert launch");
 			const names = queries.map(q => displayName(q.expert)).join(", ");
 			if (onUpdate) {
 				onUpdate({

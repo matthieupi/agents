@@ -28,6 +28,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { requireLocalProjectExecution } from "../remote-project-mode.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -364,6 +365,7 @@ export default function (pi: ExtensionAPI) {
 		const state = stepStates[stepIndex];
 
 		return new Promise((resolve) => {
+			requireLocalProjectExecution(ctx, "Agent chain launch");
 			const proc = spawn("pi", args, {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
@@ -514,6 +516,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+			requireLocalProjectExecution(ctx, "Agent chain launch");
 			const { task } = params as { task: string };
 
 			if (onUpdate) {

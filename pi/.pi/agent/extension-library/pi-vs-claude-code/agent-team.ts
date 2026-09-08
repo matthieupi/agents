@@ -24,6 +24,7 @@ import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { requireLocalProjectExecution } from "../remote-project-mode.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -321,6 +322,7 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 
+		requireLocalProjectExecution(ctx, "Agent team launch");
 		state.status = "running";
 		state.task = task;
 		state.toolCount = 0;
@@ -330,10 +332,6 @@ export default function (pi: ExtensionAPI) {
 		updateWidget();
 
 		const startTime = Date.now();
-		state.timer = setInterval(() => {
-			state.elapsed = Date.now() - startTime;
-			updateWidget();
-		}, 1000);
 
 		const model = ctx.model
 			? `${ctx.model.provider}/${ctx.model.id}`
@@ -365,10 +363,15 @@ export default function (pi: ExtensionAPI) {
 		const textChunks: string[] = [];
 
 		return new Promise((resolve) => {
+			requireLocalProjectExecution(ctx, "Agent team launch");
 			const proc = spawn("pi", args, {
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
+			state.timer = setInterval(() => {
+				state.elapsed = Date.now() - startTime;
+				updateWidget();
+			}, 1000);
 
 			let buffer = "";
 
@@ -476,6 +479,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+			requireLocalProjectExecution(ctx, "Agent team launch");
 			const { agent, task } = params as { agent: string; task: string };
 
 			try {

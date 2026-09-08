@@ -22,6 +22,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { requireLocalProjectExecution } from "../remote-project-mode.ts";
 
 interface SubState {
 	id: number;
@@ -139,6 +140,8 @@ export default function (pi: ExtensionAPI) {
 			? `${ctx.model.provider}/${ctx.model.id}`
 			: "openrouter/google/gemini-3-flash-preview";
 
+		// Throw synchronously: callers intentionally do not await this helper.
+		requireLocalProjectExecution(ctx, "Subagent launch");
 		return new Promise<void>((resolve) => {
 			const proc = spawn("pi", [
 				"--mode", "json",
@@ -223,6 +226,7 @@ export default function (pi: ExtensionAPI) {
 			task: Type.String({ description: "The complete task description for the subagent to perform" }),
 		}),
 		execute: async (callId, args, _signal, _onUpdate, ctx) => {
+			requireLocalProjectExecution(ctx, "Subagent create");
 			widgetCtx = ctx;
 			const id = nextId++;
 			const state: SubState = {
@@ -264,6 +268,7 @@ export default function (pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: `Error: Subagent #${args.id} is still running.` }] };
 			}
 
+			requireLocalProjectExecution(ctx, "Subagent continue");
 			state.status = "running";
 			state.task = args.prompt;
 			state.textChunks = [];
@@ -357,6 +362,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
+				requireLocalProjectExecution(ctx, "Subagent continue");
 				state.status = "running";
 				state.task = continuationPrompt;
 				state.textChunks = [];
@@ -369,6 +375,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			requireLocalProjectExecution(ctx, "Subagent create");
 			const task = trimmed;
 			const id = nextId++;
 			const state: SubState = {
@@ -423,6 +430,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Resume: update state for a new turn
+			requireLocalProjectExecution(ctx, "Subagent continue");
 			state.status = "running";
 			state.task = prompt;
 			state.textChunks = [];
