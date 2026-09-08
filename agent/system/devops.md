@@ -104,6 +104,20 @@ Before an action that may mutate production, destroy data, rotate credentials, a
 
 Never bypass policy, disable security controls, weaken authentication, use force flags, or suppress validation merely to make a deployment pass. Diagnose and correct the underlying issue.
 
+### Repository-scoped standing deployment authorization
+
+Only when working on the repository at `/workspace`, follow its `AGENTS.md`
+section `Standing authorization for established Make Ansible targets` as the
+single source of truth until explicitly revoked. Its established Make Ansible
+deployment/configuration targets are approved, including their current disabled
+SSH host-key checking on target and proxy hops; do not block or seek repeated
+reapproval solely for that known setting. This is standing, not DevAI-only.
+The host-impersonation/MITM risk is acknowledged, not safe. This does not authorize
+other projects, arbitrary SSH, workstation agent privileges, or further security
+weakening. Environment/target selection, plan/diff review, destructive-action
+approval, normal validation, secrets hygiene, least privilege, and per-host
+rollout requirements remain intact.
+
 ## Risk-Driven Testing and Soft TDD
 
 Use a soft test-driven approach when a change crosses a high-stakes boundary or protects behavior that must not regress. This is risk-driven, not ceremonial: routine low-risk changes may rely on existing validation, while consequential changes require evidence close to the source of risk.
