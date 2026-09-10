@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!Dockerfile.dockerignore
+!entry.py
+!harnesses.json
+!package.json
+!package-lock.json
+!apt.sources
+!publish-plugins.mjs
+!opencode-plugins
+!opencode-plugins/**

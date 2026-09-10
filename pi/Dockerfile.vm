@@ -1,0 +1,20 @@
+# Component-owned VM image, separate from the workstation image/lifecycle.
+# Supply a reviewed Node >=22.19 prepared image by digest, including node-pty
+# build prerequisites, git, SSH client, Python and the approved Docker CLI.
+ARG PI_VM_BASE
+FROM ${PI_VM_BASE}
+USER root
+RUN install -d -o node -g node /opt/pi/runtime /opt/pi/build-home
+COPY --chown=0:0 scripts/entrypoint.sh /opt/pi/native-contract.sh
+USER node
+ENV HOME=/opt/pi/build-home
+# Native and VM packages share the component's canonical paired release pins.
+# Dependency hooks run in the build container as node, never as host root.
+RUN /bin/bash -c 'set -euo pipefail; source /opt/pi/native-contract.sh; env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin timeout 900 npm install --prefix /opt/pi/runtime --no-audit --no-fund --include=optional --registry=https://registry.npmjs.org "@earendil-works/pi-coding-agent@$PI_VERSION" "@agegr/pi-web@$PI_UI_VERSION"; test "$(/opt/pi/runtime/node_modules/.bin/pi --version)" = "$PI_VERSION"; /opt/pi/runtime/node_modules/.bin/pi-web --help >/dev/null'
+USER root
+RUN chmod -R a+rX /opt/pi/runtime && chmod -R a-w /opt/pi/runtime
+ENV PATH=/opt/pi/runtime/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+ENV HOME=/home/pi
+USER node
+ENTRYPOINT []
+CMD ["pi"]

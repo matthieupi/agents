@@ -1,0 +1,15 @@
+# Prepared Node base for the Pi and OpenCode component installers.
+# COMPONENT_BASE is the inspected local tag of t3code/Dockerfile --target base, built
+# with the existing runtime/pins.json arguments. Reuse its signed apt snapshot.
+ARG COMPONENT_BASE
+FROM ${COMPONENT_BASE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ openssh-client bash coreutils util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -x /usr/local/bin/node && test -x /usr/local/bin/npm \
+    && ln -s /usr/local/bin/node /usr/bin/node \
+    && ln -s /usr/local/bin/npm /usr/bin/npm
+USER node
+ENTRYPOINT []
+CMD []

@@ -1,0 +1,22 @@
+# VM release build reuses the native component installer, not workstation @latest.
+ARG OPENCODE_VM_BASE
+FROM ${OPENCODE_VM_BASE}
+ARG OPENCODE_VERSION
+USER root
+COPY --chown=0:0 opencode/scripts/entrypoint.sh /opt/opencode/native-contract.sh
+COPY --chown=node:node opencode/.opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
+COPY --chown=node:node opencode/.opencode/config/plugins/kdco-*.ts /opt/opencode/component/.opencode/config/plugins/
+COPY --chown=0:0 opencode/scripts/publish-plugins.mjs /opt/opencode-publish-plugins.mjs
+RUN install -d -o node -g node /opt/opencode/build-home /opt/opencode/component \
+    && test -x /usr/bin/node && test -x /usr/bin/npm
+USER node
+ENV HOME=/opt/opencode/build-home
+# The maintained installer owns version checks, native hooks and runtime layout.
+RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER=node OPENCODE_UID="$(id -u)" OPENCODE_HOME="$HOME" OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime OPENCODE_VERSION; install_runtime'
+USER root
+RUN ln -s /opt/opencode/component/.opencode/config /opt/opencode-defaults \
+    && chmod -R a+rX,a-w /opt/opencode/component
+ENV PATH=/opt/opencode/component/.runtime/bin:/usr/local/bin:/usr/bin:/bin
+USER node
+ENTRYPOINT []
+CMD ["opencode"]

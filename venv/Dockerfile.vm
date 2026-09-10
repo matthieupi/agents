@@ -1,0 +1,20 @@
+# VM-only overlay; upstream applications remain built by their component owners.
+# COMPONENT_IMAGE is an inspected local build tag (BuildKit FROM is a reference,
+# not a runtime image-ID interface); enrollment checks its ID before/after build.
+# DOCKER_CLI_IMAGE must be a reviewed repository@sha256 manifest reference.
+ARG DOCKER_CLI_IMAGE
+ARG COMPONENT_IMAGE
+FROM ${DOCKER_CLI_IMAGE} AS docker-cli
+FROM ${COMPONENT_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3 libnss-wrapper \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --chown=0:0 entry.py t3-start.sh /opt/venv/
+RUN chmod -R a+rX /opt/venv && chmod -R a-w /opt/venv
+# Existing component healthchecks may assume workstation HOME or startup env.
+# Enrollment verifies the actual managed server through the authenticated proxy.
+HEALTHCHECK NONE
+USER 10001:10001
+ENTRYPOINT []
+CMD []
