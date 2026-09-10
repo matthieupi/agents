@@ -34,10 +34,6 @@ pi/.pi/agent/*
 # IDE metadata
 .idea/
 
-# Python runtime bytecode
-__pycache__/
-*.py[cod]
-
 # Native Pi generated runtime and install evidence
 /pi/.runtime/
 /pi/.build.*/
@@ -52,3 +48,7 @@ omp/.omp/*
 omp/.omp/agent/*
 !omp/.omp/agent/config.yml
 !omp/.omp/agent/models.yml
+
+# Python bytecode: keep after allowlists so caches stay ignored everywhere.
+__pycache__/
+*.py[cod]

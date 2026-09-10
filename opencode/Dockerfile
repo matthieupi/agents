@@ -65,6 +65,12 @@ RUN mkdir -p /home/opencode/.config/opencode \
 RUN npm install -g opencode-ai@latest \
     && npm cache clean --force
 
+# Public defaults; a mounted config gets dependencies through init.sh instead.
+COPY .opencode/config/kdco /opt/opencode-defaults/kdco/
+COPY .opencode/config/plugins/kdco-*.ts /opt/opencode-defaults/plugins/
+COPY scripts/publish-plugins.mjs /opt/opencode-publish-plugins.mjs
+RUN npm ci --prefix /opt/opencode-defaults/kdco --ignore-scripts --no-audit --no-fund
+
 # Preinstall Playwright for frontend workflows
 RUN npm install -g playwright \
     && playwright install --with-deps chromium

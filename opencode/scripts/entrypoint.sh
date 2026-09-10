@@ -86,6 +86,7 @@ initialize_home() (
     while IFS= read -r -d '' file; do
         relative=${file#opencode/.opencode/config/}
         case "$relative" in
+            plugins/kdco-*.ts) continue ;; # Managed live source links below, not copied defaults.
             opencode.json|opencode.jsonc|tui.json|package.json|package-lock.json|plugins/*|plugin/*) ;;
             *) continue ;;
         esac
@@ -111,6 +112,7 @@ initialize_home() (
         fi
         rm -f -- "$pending"
     done < "$tracked"
+    node "$OPENCODE_ROOT/scripts/publish-plugins.mjs" "$OPENCODE_ROOT/.opencode/config" "$OPENCODE_CONFIG_DIR"
 )
 
 isolated_runtime() (
@@ -148,6 +150,16 @@ install_runtime() (
     mkdir -- "$stage/home"
     : > "$stage/npm-userrc"
     : > "$stage/npm-globalrc"
+    [[ -d "$OPENCODE_ROOT/.opencode/config/kdco" && \
+       "$(realpath -e -- "$OPENCODE_ROOT/.opencode/config/kdco")" == "$OPENCODE_ROOT/.opencode/config/kdco" ]] \
+        || die 'preserved redirected or missing KDCO package source'
+    # Reuse unchanged installed bytes without npm/network. The package-local lock
+    # also coordinates callers outside this native component lifecycle.
+    env -i HOME="$stage/home" PATH=/usr/bin:/bin \
+        NPM_CONFIG_USERCONFIG="$stage/npm-userrc" NPM_CONFIG_GLOBALCONFIG="$stage/npm-globalrc" \
+        timeout --kill-after=10 600 flock -x "$OPENCODE_ROOT/.opencode/config/kdco/.kdco-install.lock" \
+        /usr/bin/node "$OPENCODE_ROOT/scripts/publish-plugins.mjs" install "$OPENCODE_ROOT/.opencode/config/kdco" \
+        > "$stage/plugins.log" 2>&1 || die 'KDCO dependency install failed; executable unchanged, dependencies may be incomplete; retry while idle'
     if ! verify_runtime "$OPENCODE_PREFIX" "$stage/home" > "$stage/reuse.log" 2>&1; then
         mkdir -- "$stage/runtime"
         (

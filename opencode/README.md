@@ -1,5 +1,91 @@
 # OpenCode - Native and Container Workflows
 
+## Optional hub-only dispatch
+
+The standalone [dispatch plugin](dispatch/README.md) delegates to existing OpenCode
+v1.18.29 peers using native Basic authentication over verified HTTPS. It is **not
+installed or enabled automatically**. Its five `dispatch_*` tools provide public
+peer discovery, durable session-owned async task handles, follow-up prompts and
+explicit status/result retrieval. Task/reply approval also covers background polling
+and bounded queued-result context on future user turns in the original session and
+directory—never a transcript notification, forced model turn or local fallback.
+The package includes opt-in `/dispatch`, a public-config setup skill and local mock
+tests. Passwords stay in preexisting protected files, not chat or config. No peer
+callbacks, gateway, infrastructure changes or changes to KDCO enablement are involved.
+
+## KDCO plugins: enabled through normal discovery
+
+The committed [KDCO source and provenance](.opencode/config/kdco/README.md) provide
+background agents, worktrees and notifications. Three `plugins/kdco-*.ts` static
+re-exports are auto-discovered. Helpers and dependencies live in sibling `kdco/`,
+outside even recursive plugin scans. No custom loader, activation flag, OCX,
+source downloader, or inactive receipt remains.
+
+| Path | Dependency installation and publication |
+|---|---|
+| CPU/GPU workstation | Image installs defaults; `init.sh` checks/reuses the actual mounted `kdco/` graph under a shared lock, otherwise links installed image defaults |
+| Native | `install` checks/reuses checkout `.opencode/config/kdco` under the same package-local lock; `initialize-home` links that package and three entrypoints |
+| VM | Image installs the same package; enrollment explicitly publishes plugin-only shared resources and runs npm as their owner; private HOME links those resources |
+| Opt-in runtime | Image installs the package non-root and startup links it even without shared resources; all source bytes/lock are bound to the existing resolution/receipt |
+
+Private config, root package manifests, provider credentials and unrelated plugins
+are not overwritten. Conflicting managed names or redirected private directories
+fail with their contents preserved. Managed links receive later shared-source
+edits; unlike ordinary copied defaults, they are not first-write-only snapshots.
+Keep the source available wherever its HOME is mounted. Workstation init, native
+install and VM enrollment share a `flock` on `kdco/.kdco-install.lock`. Under that
+lock the existing helper compares both manifests and the actual installed tree's
+file contents, directory paths and symlink targets against `.kdco-install.json`.
+Unchanged launches do not invoke npm or use the network. Missing/changed inputs,
+missing/damaged dependencies or an absent/invalid stamp require `npm ci`; a marker
+alone never proves that dependencies are present. The stamp is a reuse check, not
+a signed security attestation. No plugin code is imported by these checks.
+
+**Real installs/updates still require all sessions using that shared graph to be
+idle.** This includes the first check of an older installation without a stamp.
+The lock serializes installers, not running sessions. An in-place npm failure may
+leave dependencies incomplete; the success stamp is invalidated before npm and
+only replaced atomically after success. Retry the normal installation while idle.
+Native failure before executable promotion preserves the executable, not the
+previous dependency graph. No dependency rollback or live-update safety is claimed.
+
+**Factories and hooks now run at OpenCode startup.** Installation itself only
+publishes files/links and installs dependencies; it does not import plugins.
+Worktree opens SQLite, delegation creates local storage, and notify inspects
+terminal state. Native worktree deletion automatically stages/commits changes and
+force-removes the worktree on idle, even if commit fails. Review project shell
+hooks before using it. Headless VM/container terminal launches and desktop
+notifications may be unavailable; no host sockets or extra permissions are added.
+
+OpenCode 1.18.29 loader/build source was reviewed; all three factories were smoke
+tested with Bun 1.3.11 and locked dependencies in disposable HOME without invoking
+tools/events/providers. This is not full OpenCode/provider/platform acceptance.
+`npm audit` reports two moderate findings (`uuid` and `node-notifier`); no breaking
+force-fix was applied. See package provenance for the approved artifact-read patch.
+No deployments or running sessions are updated by these edits. Quit/restart only
+the selected idle OpenCode session after its normal installation/reapply.
+Existing workstation images must be rebuilt before using the updated mounted
+`init.sh`, which expects the image's publication helper. VM enrollment requires
+normally regenerated inventory; do not hand-edit generated allowlists or receipts.
+
+### KDCO verification commands
+
+```sh
+flock -x opencode/.opencode/config/kdco/.kdco-install.lock node opencode/scripts/publish-plugins.mjs install opencode/.opencode/config/kdco
+node --test opencode/tests/plugins.test.mjs
+bun test opencode/tests/plugins-smoke.test.ts
+python3 -B -m unittest discover -s runtime/tests -p test_kdco_plugins.py -v
+python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
+# Optional real npm install/reuse/repair verification, entirely in disposable directories:
+KDCO_REAL_NPM_TEST=1 python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
+# From the infrastructure repository root:
+python3 -B -m unittest discover -s tests -p test_kdco_plugins.py -v
+```
+
+Bun is a test prerequisite, not an additional production installation. The Node
+test's dependency-resolution check requires the preceding npm install. Tests use
+temporary directories; no real provider, worktree deletion or desktop event runs.
+
 ## Native lifecycle
 
 Native OpenCode executes **locally as the supplied account**, not inside a sandbox
@@ -105,7 +191,9 @@ compatibility. Validate that pin's installation, version, loopback web/auth and
 CLI behavior on the concerned host before wider rollout.
 
 Package name/version and actual binary `--version` must match before reuse or
-promotion. Matching runtime reuse and installation allow dirty checkouts. Failed
+promotion. Plugin dependencies are independently checked/reused, or installed from
+the npm lock when their inputs or installed bytes differ.
+Matching runtime reuse and installation allow dirty checkouts. Failed
 build/verification preserves the previous runtime and retains the ignored stage
 and logs. Promotion is verified again; failure attempts to restore the previous
 runtime. The two renames are **not crash-atomic**: inspect `.build.*/previous`
@@ -125,7 +213,7 @@ refused, never followed to modify Docker or external state.
 
 Only missing committed defaults from `opencode/.opencode/config` are copied:
 `opencode.json`/`opencode.jsonc`, `tui.json`, package manifests/lockfile and
-`plugin/`/`plugins/` files, excluding caches/node_modules. Either existing config
+`plugin/`/`plugins/` files except managed `plugins/kdco-*.ts`, excluding caches/node_modules. Either existing config
 format prevents both formats being seeded; if neither exists, tracked JSON wins
 over JSONC. Complete temporary files are published exclusively, so existing or
 concurrently created files win. Existing plugin lists/config are never rewritten.

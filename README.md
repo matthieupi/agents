@@ -1,5 +1,13 @@
 # Shared Config Defaults
 
+An additive, explicit [runtime interface](runtime/README.md) has offline implementation.
+It does not replace any workstation command, image, manager, native path or default.
+Workstation installation/startup readiness, finite installer-to-protected-VM
+activation, protected control upgrades and gateway image replacement/recovery exist.
+No target is enabled by this work and no new-path image is runtime-accepted. Full
+legacy characterization, resource parity and online acceptance remain incomplete;
+read the runtime status and protected VM contract before attempting use.
+
 Native, non-Docker lifecycle documentation: [OpenCode](opencode/README.md#native-lifecycle)
 and [Pi](pi/README.md#native-lifecycle). Both execute locally as non-root
 accounts, not in a sandbox. Remote-only DevAI activation must remain disabled in

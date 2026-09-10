@@ -86,6 +86,16 @@ init_home() {
     ensure_real_dir "$HOME_ROOT/.config"
     ensure_real_dir "$opencode_root"
 
+    # A workstation bind hides image-layer node_modules. Install into the actual
+    # mounted nested package, not the user's config-root package.json.
+    if [[ -d "$opencode_root/kdco" && ! -L "$opencode_root/kdco" ]]; then
+        flock -x "$opencode_root/kdco/.kdco-install.lock" \
+            node /opt/opencode-publish-plugins.mjs install "$opencode_root/kdco"
+        node /opt/opencode-publish-plugins.mjs "$opencode_root" "$opencode_root"
+    else
+        node /opt/opencode-publish-plugins.mjs /opt/opencode-defaults "$opencode_root"
+    fi
+
     [[ -d "$DEFAULTS_ROOT/commands" ]] || return 0
     [[ -d "$DEFAULTS_ROOT/skills" ]] || return 0
     [[ -d "$DEFAULTS_ROOT/system" ]] || return 0

@@ -25,10 +25,14 @@ class NativeLifecycle(unittest.TestCase):
         self.root = self.repo / "opencode"
         self.root.mkdir(parents=True)
         self.prefix = self.root / ".runtime"
+        (self.root / 'scripts').mkdir()
+        shutil.copyfile(SCRIPTS / 'publish-plugins.mjs', self.root / 'scripts/publish-plugins.mjs')
         self.workspace = self.base / "project with spaces"
         self.workspace.mkdir()
         self.bin = self.base / "bin"
         self.bin.mkdir()
+        (self.bin / 'node').symlink_to(shutil.which('node'))
+        (self.bin / 'npm').symlink_to('npm-fixture')
         self.user = pwd.getpwuid(os.getuid()).pw_name
         self.env = dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin", OPENCODE_USER=self.user,
                         OPENCODE_REPO=str(self.repo), OPENCODE_ROOT=str(self.root),
@@ -43,6 +47,11 @@ class NativeLifecycle(unittest.TestCase):
             (path / "default.md").write_text("shared")
         defaults = self.root / ".opencode/config"
         (defaults / "plugins").mkdir(parents=True)
+        (defaults / 'kdco').mkdir()
+        (defaults / 'kdco/package.json').write_text('{"name":"fixture","version":"1.0.0","private":true}')
+        (defaults / 'kdco/package-lock.json').write_text('{"name":"fixture","lockfileVersion":3,"packages":{"":{"name":"fixture","version":"1.0.0"}}}')
+        for name in ('background-agents', 'worktree', 'notify'):
+            (defaults / f'plugins/kdco-{name}.ts').write_text('export default async () => ({})')
         for name in ("opencode.json", "opencode.jsonc", "tui.json", "plugins/example.ts"):
             (defaults / name).write_text("{}")
         self.git("init", "-q", "-b", "assigned")
@@ -92,6 +101,19 @@ class NativeLifecycle(unittest.TestCase):
         # Intercept env only to substitute npm's executable AFTER production has
         # constructed its actual env -i arguments. Node, env, Git and shell are real.
         self.mock("npm-fixture", r'''
+if [[ $1 == ci ]]; then
+    [[ " $* " == *" --ignore-scripts "* ]]
+    prefix=''
+    while (($#)); do if [[ $1 == --prefix ]]; then prefix=$2; shift; fi; shift; done
+    [[ -f "$prefix/package-lock.json" ]] || exit 42
+    mkdir -p "$prefix/node_modules"
+    if [[ -f "$prefix/fail-install" ]]; then
+        printf partial > "$prefix/node_modules/fixture"
+        exit 42
+    fi
+    printf locked > "$prefix/node_modules/fixture"
+    exit 0
+fi
 [[ $EUID != 0 && $HOME == "$PWD" && $HOME == */.build.*/home ]]
 [[ ${OPENCODE_SERVER_PASSWORD-unset} == unset && ${NODE_OPTIONS-unset} == unset ]]
 [[ ${OPENCODE_TEST_HOME-unset} == unset && ${OPENAI_API_KEY-unset} == unset ]]
@@ -119,6 +141,7 @@ env() {{
     for arg in "$@"; do
         [[ $arg != /usr/bin/npm ]] || arg="{self.bin / 'npm-fixture'}"
         [[ $arg != /usr/bin/node ]] || arg="{shutil.which('node')}"
+        [[ $arg != PATH=/usr/bin:/bin ]] || arg="PATH={self.bin}:/usr/bin:/bin"
         args+=("$arg")
     done
     /usr/bin/env "${{args[@]}}"
@@ -142,6 +165,56 @@ install_runtime
         for version in ("", "latest", "1.2", "1.2.3-beta", "01.2.3", "1.2.3;id"):
             self.assertNotEqual(self.run_script("entrypoint.sh", "install", OPENCODE_VERSION=version).returncode, 0)
         self.assertEqual(list(self.root.glob(".build.*")), [])
+
+    def test_missing_or_damaged_plugin_dependencies_reinstall_without_binary_rebuild(self):
+        for damaged in (False, True):
+            self.package()
+            marker = self.root / '.opencode/config/kdco/node_modules/fixture'
+            marker.parent.mkdir(exist_ok=True)
+            marker.write_text('locked')
+            if damaged:
+                marker.write_text("broken")
+            else:
+                marker.unlink()
+            self.ok(self.install("fail"))
+            self.assertTrue((self.prefix / "bin/opencode").exists())
+            self.ok(self.install())
+            self.assertEqual(marker.read_text(), "locked")
+
+    def test_plugin_install_failure_reports_only_executable_preservation(self):
+        self.package("1.0.0")
+        (self.root / '.opencode/config/kdco/package-lock.json').unlink()
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("executable unchanged, dependencies may be incomplete", result.stderr)
+        self.assertNotIn("existing runtime preserved", result.stderr)
+        self.assertIn('1.0.0', (self.prefix / "node_modules/opencode-ai/package.json").read_text())
+
+    def test_redirected_plugin_source_refused_before_dependency_install(self):
+        package = self.root / '.opencode/config/kdco'
+        outside = self.base / 'private-package'
+        package.rename(outside)
+        package.symlink_to(outside)
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('preserved redirected', result.stderr)
+        self.assertFalse((outside / 'node_modules').exists())
+
+    def test_failed_in_place_dependency_update_is_not_reported_as_runtime_rollback(self):
+        self.ok(self.install())
+        package = self.root / '.opencode/config/kdco'
+        lock = package / 'package-lock.json'
+        lock.write_text(lock.read_text() + '\n')
+        (package / 'fail-install').touch()
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('executable unchanged, dependencies may be incomplete', result.stderr)
+        self.assertEqual((package / 'node_modules/fixture').read_text(), 'partial')
+        self.assertFalse((package / '.kdco-install.json').exists())
+        self.assertEqual(json.loads((self.prefix / 'node_modules/opencode-ai/package.json').read_text())['version'], '2.3.4')
+        (package / 'fail-install').unlink()
+        self.ok(self.install())
+        self.assertEqual((package / 'node_modules/fixture').read_text(), 'locked')
 
     def test_failed_install_metadata_binary_and_relocation_restore(self):
         for mode in ("fail", "wrong", "binary", "relocation"):

@@ -1,0 +1,15 @@
+{
+  "name": "agents-kdco-plugins",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "1.3.13",
+    "@opencode-ai/sdk": "1.3.13",
+    "detect-terminal": "2.0.0",
+    "jsonc-parser": "3.3.1",
+    "node-notifier": "10.0.1",
+    "unique-names-generator": "4.7.1",
+    "zod": "4.3.5"
+  }
+}

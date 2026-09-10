@@ -20,3 +20,7 @@ docker-compose.override.yml
 /.runtime/
 /.build.*/
 /.lifecycle.lock
+
+# Vendored source is public; installed dependencies are not source.
+node_modules/
+.kdco-install.*
