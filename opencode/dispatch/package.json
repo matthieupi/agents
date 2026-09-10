@@ -1,0 +1,10 @@
+{
+  "name": "opencode-dispatch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test tests/*.test.js" },
+  "dependencies": { "@opencode-ai/plugin": "1.18.29" }
+}

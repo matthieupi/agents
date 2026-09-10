@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [["file:///absolute/path/to/agents/opencode/dispatch/index.js", {
+    "enabled": true,
+    "stateDirectory": "/absolute/private/path/dispatch-state",
+    "peers": [{
+      "alias": "reviewer",
+      "description": "Reviews code on the worker's configured project",
+      "url": "https://reviewer.example.invalid",
+      "username": "opencode",
+      "passwordFile": "/absolute/protected/path/reviewer-password"
+    }]
+  }]],
+  "permission": {
+    "dispatch_peers": "ask",
+    "dispatch_task": "ask",
+    "dispatch_reply": "ask",
+    "dispatch_status": "ask",
+    "dispatch_result": "ask"
+  }
+}
