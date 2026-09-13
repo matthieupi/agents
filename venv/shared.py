@@ -132,6 +132,20 @@ def selected(policy, harness):
     return policy['harnesses'][harness]['image'] in policy.get('shared_runtime', {}).get('images', {}).get(harness, {})
 
 
+def requested_interface(policy, harness, interface):
+    """Absent projection retains the protected legacy command-backed contract."""
+    spec = policy['harnesses'][harness]
+    requested = spec.get('requested_interfaces')
+    if requested is None:
+        return bool(spec.get(interface))
+    require(isinstance(requested, dict) and set(requested) == {'cli', 'web'}
+            and all(type(requested[key]) is bool for key in ('cli', 'web')),
+            'Exact requested interface projection required')
+    require(not requested[interface] or bool(spec.get(interface)),
+            'Requested interface lacks a protected command')
+    return requested[interface]
+
+
 def common(host, policy):
     controls = policy['shared_runtime']['controls']
     for item in controls.values():
@@ -148,6 +162,8 @@ def common(host, policy):
 def contract(host, policy, harness, account, *, web, name=None, requests=None):
     validate_extension(policy['shared_runtime'], policy)
     require(selected(policy, harness) and account in policy['accounts'], 'Reviewed image/account required')
+    require(requested_interface(policy, harness, 'web' if web else 'cli'),
+            'Shared runtime interface is disabled by the enrolled policy')
     spec, user = policy['harnesses'][harness], policy['accounts'][account]
     receipt = policy['shared_runtime']['images'][harness][spec['image']]
     home, _ = host.home_mount(policy, harness, account)

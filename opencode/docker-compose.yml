@@ -39,6 +39,8 @@ services:
       # OpenCode specific
       - OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json
       - OPENCODE_DISABLE_AUTOUPDATE=1
+      # Native same-TUI workspace switching via /warp (no terminal launcher).
+      - OPENCODE_EXPERIMENTAL_WORKSPACES=1
       - TERM=xterm-256color
 
       # Git config for commits

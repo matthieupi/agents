@@ -1,5 +1,33 @@
 # OpenCode - Native and Container Workflows
 
+## Native workspaces in the workstation container
+
+The workstation Compose environment enables `OPENCODE_EXPERIMENTAL_WORKSPACES=1`.
+In a fresh OpenCode process, enter `/warp` and select **Worktree** to create a
+native workspace and move the current conversation there in the same TUI. Select
+an existing workspace to reuse it. No fork or new terminal is required.
+
+This experimental workflow is separate from KDCO's `worktree_create` tool, which
+retains its terminal-launch behavior. The native creation dialog does not provide
+plan-derived branch names, the KDCO `/var/worktree` setting, or credential symlink
+setup. Do not rely on Warp to transfer uncommitted primary-checkout changes.
+
+Existing containers need recreation, not just `docker restart`, to receive the
+new environment. Coordinate an idle window for all sessions first. From
+`services/agents/opencode`, using the existing deployment environment/overrides:
+
+```sh
+docker compose config --quiet
+docker compose up -d --no-deps --force-recreate opencode
+docker compose exec opencode printenv OPENCODE_EXPERIMENTAL_WORKSPACES
+```
+
+The final command should print `1`. Start a fresh OpenCode process through the
+normal entrypoint. Before using Warp for real implementation, smoke-test it in a
+disposable credential-free repository: verify a relative file operation and a
+native subagent both use the selected worktree, and that the original checkout
+remains unchanged. Source configuration alone is not runtime verification.
+
 ## Optional hub-only dispatch
 
 The standalone [dispatch plugin](dispatch/README.md) delegates to existing OpenCode

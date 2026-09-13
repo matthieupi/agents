@@ -40,6 +40,17 @@ def path_value(value):
     return Path(value)
 
 
+def requested_interface(policy: dict, harness: str, interface: str) -> bool:
+    """Project an optional capability request without changing legacy policy."""
+    spec = policy['harnesses'][harness]
+    requested = spec.get('requested_interfaces')
+    return bool(spec.get(interface)) if requested is None else requested[interface]
+
+
+def capability_aware(policy: dict) -> bool:
+    return any('requested_interfaces' in spec for spec in policy['harnesses'].values())
+
+
 def validate_policy(policy: dict) -> None:
     require(isinstance(policy, dict), "Policy mapping required")
     require(policy.get("schema") in (1, 2) and policy.get("scope") == "vm", "VM policy required")
@@ -96,6 +107,14 @@ def validate_policy(policy: dict) -> None:
         for command in ("cli", "web"):
             argv = spec.get(command, [])
             require(isinstance(argv, list) and all(isinstance(a, str) and a and not any(ord(c) < 32 for c in a) for a in argv), "Invalid command array")
+        if 'requested_interfaces' in spec:
+            requested = spec['requested_interfaces']
+            require(isinstance(requested, dict) and set(requested) == {'cli', 'web'}
+                    and all(type(requested[key]) is bool for key in ('cli', 'web')),
+                    f'{name}: requested interfaces must be exact cli/web booleans')
+            for interface in ('cli', 'web'):
+                require(not requested[interface] or bool(spec.get(interface)),
+                        f'{name}: requested {interface} interface is unsupported')
         require(name == 't3' or spec["cli"], f"{name}: CLI command required")
         for command in ('cli', 'web'):
             if spec.get(command):
@@ -115,15 +134,27 @@ def validate_policy(policy: dict) -> None:
         require('default_harness' in policy and 'web' in policy, 'Explicit CLI/web defaults required')
         default = policy['default_harness']
         require(default in (None, 'native-pi', *HARNESSES), 'Invalid default harness')
-        require((not images and default in (None, 'native-pi')) or
-                (default in HARNESSES and installed(policy, default)), 'Default must be installed; native is initial only')
-        require(policy['web']['default_harness'] == (None if default == 'omp' else default),
-                'CLI/web defaults must agree; OMP has explicitly no web default')
-        if default == 'native-pi':
+        web_default = policy['web']['default_harness']
+        if capability_aware(policy):
+            require(default in (None, 'native-pi') or
+                    (installed(policy, default) and requested_interface(policy, default, 'cli')),
+                    'CLI default must be installed with its CLI interface requested')
+            require(web_default in (None, 'native-pi') or
+                    (installed(policy, web_default) and requested_interface(policy, web_default, 'web')),
+                    'Web default must be installed with its web interface requested')
+        else:
+            require((not images and default in (None, 'native-pi')) or
+                    (default in HARNESSES and installed(policy, default)), 'Default must be installed; native is initial only')
+            require(web_default == (None if default == 'omp' else default),
+                    'CLI/web defaults must agree; OMP has explicitly no web default')
+        if default == 'native-pi' or web_default == 'native-pi':
             argv = policy.get('native_pi', {}).get('cli')
             require(isinstance(argv, list) and argv and all(isinstance(a, str) and a and '\x00' not in a for a in argv),
                     'Explicit native Pi CLI required')
             path_value(argv[0])
+    elif capability_aware(policy):
+        require(requested_interface(policy, 'pi', 'cli') and requested_interface(policy, 'pi', 'web'),
+                'Schema-1 fixed Pi defaults require requested CLI and web interfaces')
     if 'resource_budget' in policy:
         budget = policy['resource_budget']
         require(isinstance(budget, dict) and set(budget) == {'memory_max_mb', 'cpu_quota_percent', 'tasks_max', 'full_containers', 'spare_mb'}, 'Explicit shared resource budget required')
@@ -206,7 +237,7 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
     require(os.getuid() > 0 and account in policy['accounts'], 'Enrolled non-root account required')
     user = policy['accounts'][account]
     require((os.getuid(), os.getgid()) == (user['uid'], user['gid']), 'Account identity drift')
-    default = policy.get('default_harness', 'pi')
+    default = policy['web']['default_harness'] if web else policy.get('default_harness', 'pi')
     if default == 'native-pi':
         if web:
             require(not arguments and policy['web_ready'], 'Prepared native frontend required')
@@ -216,8 +247,6 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
         # Preserve native package-bin symlinks. Only the verified non-root caller
         # executes this existing installation; root never executes guest code.
         return subprocess.call([*command, *arguments])
-    if web:
-        default = policy['web']['default_harness']
     require(default is not None, 'No web default (CLI-only install)' if web else 'No harness installed; run make pi|omp|opencode|t3')
     result = run_session(policy, default, web, arguments)
     if web and result == 0 and 'default_hostname' in policy['web']:
@@ -230,6 +259,8 @@ def session_command(policy: dict, harness: str, account: str, web: bool,
     validate_policy(policy)
     require(harness in HARNESSES and account in policy["accounts"], "Account/harness not enrolled")
     require(installed(policy, harness), f'{harness} is not installed; run make {harness} in the deployed agents-source/venv directory')
+    require(requested_interface(policy, harness, 'web' if web else 'cli'),
+            f'{harness}: requested {"web" if web else "CLI"} interface is disabled')
     if web:
         require(policy['web_ready'] and harness != 'omp' and not arguments, "Enrolled authenticated web required; no web arguments allowed")
     else:
@@ -408,6 +439,8 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
     validate_policy(policy)
     require(installed(policy, harness), f'{harness} is not installed; run make {harness}')
     require(action in ('start', 'status', 'stop'), 'Invalid web action')
+    require(action == 'stop' or requested_interface(policy, harness, 'web'),
+            f'{harness}: requested web interface is disabled')
     require(harness in HARNESSES - {'omp'} and (policy['web_ready'] or action != 'start'),
             'Authenticated frontend not enrolled; web blocked')
     account = pwd.getpwuid(os.getuid()).pw_name
@@ -502,6 +535,8 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
     require(os.getuid() > 0 and account in policy["accounts"], "Run as an enrolled non-root account")
     require(harness in HARNESSES, "Unknown harness")
     require(installed(policy, harness), f'{harness} is not installed; run make {harness}')
+    require(requested_interface(policy, harness, 'web' if web else 'cli'),
+            f'{harness}: requested {"web" if web else "CLI"} interface is disabled')
     user = policy["accounts"][account]
     record = pwd.getpwnam(account)
     require((record.pw_uid, record.pw_gid) == (user["uid"], user["gid"]), "Account database identity drift")
@@ -536,6 +571,12 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
 
 
 def run_session(policy: dict, harness: str, web: bool, arguments: list[str]) -> int:
+    validate_policy(policy)
+    require(harness in HARNESSES, 'Unknown harness')
+    if web:
+        require(requested_interface(policy, harness, 'web'), f'{harness}: requested web interface is disabled')
+    elif capability_aware(policy):
+        require(requested_interface(policy, harness, 'cli'), f'{harness}: requested CLI interface is disabled')
     if web or harness == 't3':
         require(not arguments, 'T3/web entry accepts no app arguments; T3 is web-oriented')
         if harness == 't3' and not web:
@@ -675,6 +716,8 @@ def activate(harness: str, image: str) -> int:
                 'Recover pending select-default before image activation')
         policy = load_policy(POLICY)
         require(policy['schema'] == 2, 'On-demand schema 2 enrollment required')
+        require(requested_interface(policy, harness, 'cli') or requested_interface(policy, harness, 'web'),
+                f'{harness}: activation refused because all requested interfaces are disabled')
         account = os.environ.get('SUDO_USER', '')
         require(account in policy['accounts'], 'Enrolled sudo caller required')
         user = policy['accounts'][account]
@@ -682,6 +725,11 @@ def activate(harness: str, image: str) -> int:
         require(os.environ.get('SUDO_UID') == str(user['uid']) and
                 (record.pw_uid, record.pw_gid) == (user['uid'], user['gid']), 'Sudo caller identity drift')
         if 'shared_runtime' in policy:
+            requested = policy['harnesses'][harness].get('requested_interfaces')
+            command_backed = {interface: bool(policy['harnesses'][harness].get(interface))
+                              for interface in ('cli', 'web')}
+            require(requested is None or requested == command_backed,
+                    'Partial-interface shared activation requires promoted capability-aware protected controls')
             return shared_module(policy).activate(shared_host(), config, policy, harness, image, fd)
         pending = POLICY.with_name('activation-pending.json')
         candidate_path = POLICY.with_name('activation-candidate.json')
@@ -709,7 +757,13 @@ def activate(harness: str, image: str) -> int:
             return 0
         candidate = copy.deepcopy(policy)
         candidate['harnesses'][harness]['image'] = image
-        if policy['default_harness'] in (None, 'native-pi'):
+        if capability_aware(policy):
+            if policy['default_harness'] in (None, 'native-pi') and requested_interface(policy, harness, 'cli'):
+                candidate['default_harness'] = harness
+            if (policy['web']['default_harness'] in (None, 'native-pi') and
+                    requested_interface(policy, harness, 'web')):
+                candidate['web']['default_harness'] = harness
+        elif policy['default_harness'] in (None, 'native-pi'):
             candidate['default_harness'] = harness
             candidate['web']['default_harness'] = None if harness == 'omp' else harness
         validate_policy(candidate)
@@ -794,7 +848,9 @@ def select_default(harness: str) -> int:
                 require(json.loads(path.read_text()).get('status') in ('complete', 'rolled-back'),
                         'Unfinished migration blocks default selection')
         policy = load_policy(POLICY)
-        require(policy['schema'] == 2 and policy['web_ready'], 'Prepared schema-2 enrollment required')
+        require(policy['schema'] == 2, 'Prepared schema-2 enrollment required')
+        require(not requested_interface(policy, harness, 'web') or policy['web_ready'],
+                'Selected web default requires a prepared frontend')
         if 'shared_runtime' in policy:
             shared_module(policy).validate_seal(shared_host(), policy)
         pending = POLICY.with_name('select-default-pending.json')
@@ -815,7 +871,15 @@ def select_default(harness: str) -> int:
             require(not candidate_path.exists() and not candidate_path.is_symlink(), 'Unowned activation candidate blocks selection')
         require(installed(policy, harness), 'Selected default must already be installed')
         candidate = copy.deepcopy(policy)
-        candidate['default_harness'] = candidate['web']['default_harness'] = harness
+        if capability_aware(policy):
+            require(requested_interface(policy, harness, 'cli') or requested_interface(policy, harness, 'web'),
+                    'Selected harness has no requested default interface')
+            if requested_interface(policy, harness, 'cli'):
+                candidate['default_harness'] = harness
+            if requested_interface(policy, harness, 'web'):
+                candidate['web']['default_harness'] = harness
+        else:
+            candidate['default_harness'] = candidate['web']['default_harness'] = harness
         validate_policy(candidate)
         transaction = dict(harness=harness, previous=policy, candidate=candidate)
         atomic_json(pending, transaction, 0o600)
@@ -879,7 +943,14 @@ def _resource_dispatch(argv: list[str] | None = None) -> int:
             if argv == ['validate-runtime']:
                 for harness in sorted(HARNESSES):
                     if installed(policy, harness):
-                        validate_runtime(policy, harness, pwd.getpwuid(os.getuid()).pw_name)
+                        account = pwd.getpwuid(os.getuid()).pw_name
+                        if 'requested_interfaces' not in policy['harnesses'][harness]:
+                            validate_runtime(policy, harness, account)
+                        else:
+                            if requested_interface(policy, harness, 'cli'):
+                                validate_runtime(policy, harness, account)
+                            if requested_interface(policy, harness, 'web'):
+                                validate_runtime(policy, harness, account, web=True)
             return 0
         except (OSError, ValueError, KeyError, TypeError) as error:
             print(f"venv-agents: {error}", file=sys.stderr)
