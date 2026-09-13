@@ -4,16 +4,17 @@
 Docker-build-accepted on this controller.** This leaf extends the existing VM
 launcher, not workstation wrappers or component deployment lifecycles.
 
-## SSH installation (on demand, not at bootstrap/login)
+## Selected Make installation (ordinary account, never login-time builds)
 
 After enrollment deploys the public source and root-owned build/activation policy,
-use the normal SSH account in `<agents-source>/venv`. For the existing DevAI native
-source location this is **`/srv/agents/venv`** (enrollment must retain/project the
-canonical `standalone_agents_repo`, not create a second source tree):
+use the normal SSH account in `<agents-source>/venv`. Current Dev/DevAI canonical
+enrollment source is `/var/lib/venv-agents/source`; retained native/editable checkouts
+are not imported as root. Infrastructure enrollment invokes this same target for an
+absent desired image on fresh and completed hosts:
 
 ```sh
-cd /srv/agents/venv
-make pi                 # or: make omp / make opencode / make t3
+make -C /var/lib/venv-agents/source/venv pi
+# Standalone alternatives: omp / opencode / t3
 ```
 
 Do **not** use `sudo make`. Make builds only the selected component/dependencies
@@ -24,11 +25,44 @@ no remote builder, prune, implicit latest lookup or all-harness target is added.
 OMP/OpenCode on x86 require SSE4.2 on every exposed processor before any Docker
 work; OMP remains amd64-only. Pi/T3's Node paths do not inherit the Bun gate.
 
+Each build holds a shared root-owned public build-source lock for exact manifest
+verification and the complete Docker source-reading phase, then verifies that same
+snapshot before releasing it. Activation happens afterward under the existing
+private activation lock; the two locks are never nested. Completed install-mode
+reapply takes the source lock exclusively and publishes a complete immutable source
+generation before atomically selecting it through the canonical Makefile.
+
+That generation transition keeps an already-running legacy builder on its unchanged
+old tree during the first refresh; it does not rely on process inspection or a quiet
+timing window. New Make invocations use the lock-aware immutable generation. Direct
+`python build.py` is not a supported update interface. Freshness remains warning-only:
+source changes emit an explicit warning and update a separate root-owned public
+maintenance receipt beside the configured source tree. Enrollment/shared-runtime
+seals, authorization, defaults, image IDs and activation records are not rewritten.
+Lock, generation and receipt paths derive from the configured source root, and the
+stable lock inode is created once rather than replaced. Drift in source artifacts
+corresponding to sealed launcher/login controls is warned and retained, never copied
+over or falsely resealed.
+
+Warning-only applies to the **old freshness bytes**, not to lock or custody checks.
+After validating the new immutable generation, reapply warns about and replaces an
+old/drifted dispatcher or malformed old maintenance receipt. A crash after dispatcher
+publication is recovered by recognizing the exact dispatcher for the fully verified
+generation and completing its receipt under the same source lock. Unsafe ownership,
+path structure, lock state, or new-generation integrity still fails closed, and the
+role refuses to continue to a build unless the fresh generation was selected.
+
+Build settings are read while the source lock is held and checked byte-for-byte again
+before releasing it. The resulting image ID remains governed by the existing image
+and activation contracts. The maintenance receipt is diagnostic provenance; it is
+not cryptographic image-to-source attestation and is not passed to privileged
+activation.
+
 Bootstrap creates no images. Schema 2 uses explicit `image: null` and initial
 `default_harness: native-pi` (null on a genuinely fresh host). Native CLI uses the
 existing installed binary as the non-root caller, not a bootstrap/build wrapper.
 Native web remains until new backend checks pass. First successful `make` selects
-the lasting CLI/web default; additive installs never change it. OMP-first means
+the initial CLI/web default; additive installs never change it. OMP-first means
 **no web default**, not Pi fallback. Bare T3 remains an honest managed-web URL.
 Provider files, original homes and native unit/environment recovery data survive.
 
@@ -39,6 +73,45 @@ are refused rather than pretending to support safe upgrades. Same-ID retry is a
 no-op. See `14-runtime-contract.md` in the agent-harness-reset feature handoff for
 exact enrollment inputs and gateway phase obligations. **Gateway phase wiring is
 required before activation can succeed; no live readiness is implied here.**
+
+## Controller-only default selection
+
+The protected launcher now accepts `select-default pi` or `select-default opencode`
+as **controller root**, only for an already-installed, healthy schema-2 harness.
+This is not granted by enrolled-user sudoers and never builds, replaces an image,
+starts/stops a container, changes service enablement, or edits credentials/HOME.
+The existing ordinary-account Make/image activation interface is unchanged.
+
+Selection holds the existing activation lock, verifies owned routing and the full
+gateway auth checks, then publishes gateway routing and the CLI/web policy defaults.
+The protected `select-default-pending.json` journal binds exact previous/candidate
+policies. Failure before policy publication restores the old routes without stopping
+either service. Publication is the commit point: interrupted finalization preserves
+the new default. Repeating the command recovers the journal before applying the
+requested selection; even an unchanged selection checks backend health.
+Foreign site/auth/policy drift is refused, not repaired. Failed recovery retains its
+journal and blocks image activation and enrollment maintenance. Candidate cleanup
+is durable before the journal is retired.
+
+Infrastructure install-mode reapply continuously enforces canonical
+`hosts.<host>.default_harness` (omitted=`pi`, allowed=`pi|opencode`). Shared policies
+retain their exact sealed adapter, grants and image receipts; selection uses the
+installed-policy status path, not replacement-candidate authorization. Normal
+reapply recovers a pending selection through the sealed launcher while lending only
+the exact existing activation lock. The selector cannot accept another lock inode.
+
+Matching maintained controls are promoted by the enrollment owner through its
+existing journal and overlay seal; do not copy over sealed files manually. The
+original bootstrap record is preserved. This is not an image/source upgrade API:
+installed replacement refusal, CPU gates and shared image evidence remain in force.
+
+An optional `web.default_hostname` separates the default URL from `base_hostname`,
+which remains the named-harness and certificate parent. The gateway translates only
+the exact Pi alias Origin/Host to the existing upstream identity, keeping installed
+Pi container environment/contract bytes unchanged. Foreign Origins are not rewritten.
+Hostname promotion preserves TLS scope and uses exact-file rollback plus TLS/auth
+acceptance. Shared hostname changes require a reviewed adapter version supporting
+the hostname seal. No live deployment or acceptance is implied by these source changes.
 
 ## Public commands
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://paseo.sh/schemas/paseo.config.v1.json",
+  "version": 1,
+  "daemon": {
+    "listen": "0.0.0.0:6767",
+    "auth": {"password": "REPLACE_WITH_NATIVE_SET_PASSWORD_BCRYPT_HASH"},
+    "relay": {"enabled": false},
+    "mcp": {"enabled": false}
+  },
+  "features": {"webUi": {"enabled": true}},
+  "worktrees": {"root": "/workspace/.paseo-worktrees"}
+}

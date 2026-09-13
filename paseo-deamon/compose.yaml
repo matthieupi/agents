@@ -1,0 +1,104 @@
+name: paseo-execution
+services:
+  paseo:
+    image: ${PASEO_IMAGE:?set a local built image tag}
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: paseo-deamon/Dockerfile
+      args:
+        PASEO_BASE: ${PASEO_BASE:?set reviewed official version and digest}
+        PASEO_VERSION: ${PASEO_VERSION:?set exact stable version}
+        OPENCODE_VERSION: ${OPENCODE_VERSION:?set exact stable version}
+    user: "${PASEO_UID:-1000}:${PASEO_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    pids_limit: 512
+    mem_limit: 4g
+    cpus: 2.0
+    stop_grace_period: 30s
+    environment:
+      PASEO_LISTEN: 0.0.0.0:6767
+      PASEO_RELAY_ENABLED: "false"
+      PASEO_WEB_UI_ENABLED: "true"
+    ports:
+      - "${PASEO_BIND_ADDRESS:-127.0.0.1}:${PASEO_PORT:-6767}:6767"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+      # Suppress the upstream image's otherwise anonymous HOME volume.
+      - /home/paseo:rw,nosuid,nodev,noexec,size=1m,mode=0700,uid=${PASEO_UID:-1000},gid=${PASEO_GID:-1000}
+      # Docker may create bind-target parents as root; make the writable root explicit.
+      - /home/paseo/.config/opencode:rw,nosuid,nodev,noexec,size=1m,mode=0700,uid=${PASEO_UID:-1000},gid=${PASEO_GID:-1000}
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH:?set reviewed workspace root}
+        target: /workspace
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PASEO_STATE_PATH:?set NEW dedicated Paseo state}
+        target: /state/paseo
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PASEO_PROVIDER_STATE_PATH:?set NEW dedicated provider state}
+        target: /state/provider
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PASEO_CONFIG_PATH:?set protected native bcrypt config file}
+        target: /state/paseo/config.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OPENCODE_CONFIG_PATH:?set managed OpenCode JSON file}
+        target: /home/paseo/.config/opencode/opencode.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OPENCODE_TUI_CONFIG_PATH:?set managed tui.json}
+        target: /home/paseo/.config/opencode/tui.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/commands
+        target: /home/paseo/.config/opencode/commands
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/skills
+        target: /home/paseo/.config/opencode/skills
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/system
+        target: /home/paseo/.config/opencode/system
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/gsd
+        target: /home/paseo/.config/opencode/gsd
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OPENCODE_PLUGINS_PATH:?set managed plugins directory}
+        target: /home/paseo/.config/opencode/plugins
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${SSH_DIR_PATH:?set least-privilege SSH identity directory}
+        target: /home/paseo/.ssh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GITCONFIG_PATH:?set reviewed git config file}
+        target: /home/paseo/.gitconfig
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [execution]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  execution:
+    driver: bridge
+    internal: false

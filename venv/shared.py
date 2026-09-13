@@ -348,10 +348,13 @@ def validate_seal(host, policy, *, recovery=None):
         value.pop('shared_runtime', None)
         value.pop('default_harness')
         value['web'].pop('default_harness')
+        value['web'].pop('default_hostname', None)
         for item in value['harnesses'].values():
             item['image'] = None
         return value
     require(shape(policy) == shape(record['bootstrap_policy']), 'Immutable enrolled policy drift')
+    require(policy['web'].get('default_hostname') == record.get('default_hostname', record['bootstrap_policy']['web'].get('default_hostname')),
+            'Default hostname is not bound to the enrollment seal')
     missing_profile = None
     for name, expected in dict(record['files'], **record['shared_runtime_seal']['files']).items():
         path = Path(name)

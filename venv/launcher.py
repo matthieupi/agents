@@ -48,7 +48,12 @@ def validate_policy(policy: dict) -> None:
     require(type(policy.get("web_ready")) is bool, "Explicit frontend readiness required")
     if policy.get("web_ready") or "web" in policy:
         web = policy.get("web", {})
-        require(set(web) == {"default_harness", "default_account", "base_hostname"}, "Public frontend web routing fields required; no secrets")
+        require(set(web) in ({"default_harness", "default_account", "base_hostname"},
+                            {"default_harness", "default_account", "base_hostname", "default_hostname"}), "Public frontend web routing fields required; no secrets")
+        if 'default_hostname' in web:
+            require(isinstance(web['default_hostname'], str) and
+                    re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*\.' + re.escape(web['base_hostname']), web['default_hostname'])
+                    and web['default_hostname'].split('.')[0] not in ('pi', 'opencode', 't3'), 'Invalid independent default hostname')
         require(web["default_account"] in policy.get("accounts", {}), "Enrolled default web owner required")
         require(web['default_harness'] in (None, 'native-pi', 'pi', 'opencode', 't3') if ondemand
                 else web['default_harness'] == 'pi', 'Invalid web default')
@@ -205,7 +210,7 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
     if default == 'native-pi':
         if web:
             require(not arguments and policy['web_ready'], 'Prepared native frontend required')
-            print(f'https://{policy["web"]["base_hostname"]}/ (native Pi)')
+            print(f'https://{policy["web"].get("default_hostname", policy["web"]["base_hostname"])}/ (native Pi)')
             return 0
         command = policy['native_pi']['cli']
         # Preserve native package-bin symlinks. Only the verified non-root caller
@@ -214,7 +219,10 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
     if web:
         default = policy['web']['default_harness']
     require(default is not None, 'No web default (CLI-only install)' if web else 'No harness installed; run make pi|omp|opencode|t3')
-    return run_session(policy, default, web, arguments)
+    result = run_session(policy, default, web, arguments)
+    if web and result == 0 and 'default_hostname' in policy['web']:
+        print(f'https://{policy["web"]["default_hostname"]}/ (default)')
+    return result
 
 
 def session_command(policy: dict, harness: str, account: str, web: bool,
@@ -592,7 +600,8 @@ def atomic_json(path: Path, value: dict, mode: int = 0o644) -> None:
 
 
 def activation_gateway(config: dict, phase: str, transaction: dict, *, lock_fd: int | None = None) -> None:
-    require(phase in ('install-prepare', 'install-stage', 'install-check', 'install-commit', 'install-rollback', 'install-finalize'), 'Invalid activation phase')
+    require(phase in ('install-prepare', 'install-stage', 'install-check', 'install-commit', 'install-rollback', 'install-finalize',
+                     'select-check', 'select-commit', 'select-rollback', 'select-finalize'), 'Invalid activation phase')
     gateway = path_value(config['gateway'])
     require(stat.S_ISREG(protected(gateway).st_mode), 'Protected maintained gateway helper required')
     result = subprocess.run(['/usr/bin/python3', '-I', str(gateway), phase, transaction['harness']],
@@ -659,6 +668,11 @@ def activate(harness: str, image: str) -> int:
                 and not info.st_mode & 0o077, 'Unsafe activation lock')
         # Bounded refusal rather than a sudo process waiting behind a long build.
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require(not POLICY.with_name('shared-runtime-upgrade.json').exists()
+                and not POLICY.with_name('shared-runtime-upgrade.json').is_symlink(), 'Protected control upgrade in progress')
+        require(not POLICY.with_name('select-default-pending.json').exists()
+                and not POLICY.with_name('select-default-pending.json').is_symlink(),
+                'Recover pending select-default before image activation')
         policy = load_policy(POLICY)
         require(policy['schema'] == 2, 'On-demand schema 2 enrollment required')
         account = os.environ.get('SUDO_USER', '')
@@ -725,8 +739,117 @@ def activate(harness: str, image: str) -> int:
         os.close(fd)
 
 
+def finish_default_selection(pending: Path, candidate: Path) -> None:
+    """Retire candidate durably before its recovery authority, the journal."""
+    fd = os.open(pending.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        candidate.unlink(missing_ok=True)
+        os.fsync(fd)
+        pending.unlink()
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def select_default(harness: str) -> int:
+    """Controller-root-only route transaction; never build or change service state.
+
+    No sudoers grant is added for this command. Enrolled callers retain only the
+    existing finite image activation interface. Same-policy retries check health.
+    """
+    require(os.getuid() == 0 and os.geteuid() == 0, 'Default selection requires controller root')
+    require(harness in ('pi', 'opencode'), 'Default selection requires pi or opencode')
+    require(stat.S_ISREG(protected(Path(__file__)).st_mode), 'Protected deployed launcher required')
+    protected(POLICY.parent)
+    require(stat.S_ISREG(protected(ACTIVATION).st_mode), 'Protected activation configuration required')
+    config = json.loads(ACTIVATION.read_text())
+    require(isinstance(config, dict) and set(config) == {'gateway'}, 'Exact activation configuration required')
+    lock = POLICY.with_name('activation.lock')
+    inherited = os.environ.get('VENV_DEFAULT_LOCK_FD')
+    if inherited is None:
+        fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
+    else:
+        # Only controller root can invoke this operation. A parent may lend the
+        # already-held exact lock for sealed reapply recovery, never another path.
+        require(inherited.isdecimal(), 'Invalid inherited default lock')
+        identity = protected(lock, private=True)
+        fd = os.dup(int(inherited))
+        actual = os.fstat(fd)
+        if (actual.st_dev, actual.st_ino) != (identity.st_dev, identity.st_ino):
+            os.close(fd)
+            raise ValueError('Inherited default lock identity differs')
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
+                and not info.st_mode & 0o077, 'Unsafe activation lock')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for name in ('bootstrap-pending.json', 'activation-pending.json', 'shared-replacement.json',
+                     'shared-runtime-upgrade.json', 'resource-update-pending.json'):
+            path = POLICY.with_name(name)
+            require(not path.exists() and not path.is_symlink(), 'Pending maintenance blocks default selection')
+        for name in ('resource-migration.json', 'workspace-migration.json'):
+            path = POLICY.with_name(name)
+            if path.exists() or path.is_symlink():
+                require(stat.S_ISREG(protected(path, private=True).st_mode), 'Protected migration journal required')
+                require(json.loads(path.read_text()).get('status') in ('complete', 'rolled-back'),
+                        'Unfinished migration blocks default selection')
+        policy = load_policy(POLICY)
+        require(policy['schema'] == 2 and policy['web_ready'], 'Prepared schema-2 enrollment required')
+        if 'shared_runtime' in policy:
+            shared_module(policy).validate_seal(shared_host(), policy)
+        pending = POLICY.with_name('select-default-pending.json')
+        candidate_path = POLICY.with_name('activation-candidate.json')
+        if pending.exists() or pending.is_symlink():
+            require(stat.S_ISREG(protected(pending, private=True).st_mode), 'Private default journal required')
+            transaction = json.loads(pending.read_text())
+            require(set(transaction) == {'harness', 'previous', 'candidate'}
+                    and transaction['harness'] in ('pi', 'opencode'), 'Invalid default journal')
+            validate_policy(transaction['previous'])
+            validate_policy(transaction['candidate'])
+            require(policy in (transaction['previous'], transaction['candidate']), 'Policy drift during default selection')
+            atomic_json(candidate_path, transaction['candidate'])
+            phase = 'select-finalize' if policy == transaction['candidate'] else 'select-rollback'
+            activation_gateway(config, phase, transaction, lock_fd=fd)
+            finish_default_selection(pending, candidate_path)
+        else:
+            require(not candidate_path.exists() and not candidate_path.is_symlink(), 'Unowned activation candidate blocks selection')
+        require(installed(policy, harness), 'Selected default must already be installed')
+        candidate = copy.deepcopy(policy)
+        candidate['default_harness'] = candidate['web']['default_harness'] = harness
+        validate_policy(candidate)
+        transaction = dict(harness=harness, previous=policy, candidate=candidate)
+        atomic_json(pending, transaction, 0o600)
+        try:
+            atomic_json(candidate_path, candidate)
+            activation_gateway(config, 'select-check', transaction, lock_fd=fd)
+            if candidate != policy:
+                activation_gateway(config, 'select-commit', transaction, lock_fd=fd)
+                require(load_policy(POLICY) == policy, 'Policy changed during default selection')
+                atomic_json(POLICY, candidate)
+            activation_gateway(config, 'select-finalize', transaction, lock_fd=fd)
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            # Publication is the commit point, including rename-before-fsync errors.
+            # Never revert a published candidate. Leave its journal for finalization.
+            if load_policy(POLICY) == policy and candidate != policy:
+                activation_gateway(config, 'select-rollback', transaction, lock_fd=fd)
+                finish_default_selection(pending, candidate_path)
+            raise
+        finish_default_selection(pending, candidate_path)
+        print(f'default={harness}; changed={str(candidate != policy).lower()}')
+        return 0
+    finally:
+        os.close(fd)
+
+
 def _resource_dispatch(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ['select-default']:
+        try:
+            require(len(argv) == 2, 'select-default requires exactly one harness')
+            return select_default(argv[1])
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            print(f'venv-agents default selection: {error}', file=sys.stderr)
+            return 1
     if argv[:1] == ['shared-run']:
         try:
             policy = load_policy(POLICY)
@@ -836,7 +959,7 @@ def resource_web_contract(policy: dict, harness: str, account: str, identity: st
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments in (['validate'], ['validate-runtime']) or arguments[:1] == ['activate']:
+    if arguments in (['validate'], ['validate-runtime']) or arguments[:1] in (['activate'], ['select-default']):
         return _resource_dispatch(arguments)
     try:
         # Launch/lifecycle entrypoints, including candidate-web, serialize here.

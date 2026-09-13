@@ -1,11 +1,15 @@
 #!/usr/bin/python3
 """Maintained component build flow. Runs as SSH user; root only activates an ID."""
 import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import stat
 import subprocess
 import sys
 import uuid
@@ -13,6 +17,96 @@ import uuid
 
 SETTINGS = Path('/etc/venv-agents/build.json')
 HARNESSES = ('pi', 'omp', 'opencode', 't3')
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _safe_relative(value: object) -> Path:
+    if not isinstance(value, str) or not value or value.startswith('/'):
+        raise ValueError('Invalid build manifest path')
+    path = Path(value)
+    if '..' in path.parts or any(part in ('', '.') for part in path.parts):
+        raise ValueError('Invalid build manifest path')
+    return path
+
+
+def _protected_directory(path: Path) -> None:
+    for item in (path, *path.parents):
+        info = item.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('Root-controlled maintained source path required')
+
+
+def _read_settings() -> tuple[dict, bytes]:
+    _protected_directory(SETTINGS.parent)
+    info = SETTINGS.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+            or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644):
+        raise ValueError('Unsafe maintained build settings')
+    data = SETTINGS.read_bytes()
+    return json.loads(data), data
+
+
+def _verify_source(root: Path, record: dict) -> None:
+    if set(record) != {'schema', 'canonical_root', 'lock', 'source_sha256', 'files'} or record['schema'] != 1:
+        raise ValueError('Invalid maintained source manifest')
+    if not re.fullmatch(r'[a-f0-9]{64}', record['source_sha256']):
+        raise ValueError('Invalid maintained source identity')
+    files = record['files']
+    if not isinstance(files, list) or not files:
+        raise ValueError('Empty maintained source manifest')
+    seen = set()
+    for entry in files:
+        if set(entry) != {'path', 'mode', 'sha256'}:
+            raise ValueError('Invalid maintained source entry')
+        relative = _safe_relative(entry['path'])
+        if str(relative) in seen or not re.fullmatch(r'[a-f0-9]{64}', entry['sha256']):
+            raise ValueError('Duplicate or invalid maintained source entry')
+        seen.add(str(relative))
+        path = root / relative
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != int(entry['mode'], 8)
+                or _digest(path) != entry['sha256']):
+            raise ValueError(f'Maintained source drift: {relative}')
+
+
+@contextmanager
+def source_snapshot(root: Path):
+    """Hold the public source lock and prove source/settings before release."""
+    record_path = root / 'build-record.json'
+    record_info = record_path.lstat()
+    if (not stat.S_ISREG(record_info.st_mode) or record_info.st_uid != 0 or record_info.st_gid != 0
+            or record_info.st_nlink != 1 or stat.S_IMODE(record_info.st_mode) != 0o644):
+        raise ValueError('Unsafe maintained source manifest')
+    record = json.loads(record_path.read_text())
+    lock_path = Path(record['lock'])
+    canonical = Path(record['canonical_root'])
+    if (not lock_path.is_absolute() or '..' in lock_path.parts or not canonical.is_absolute()
+            or '..' in canonical.parts or lock_path.parent != canonical.parent):
+        raise ValueError('Invalid maintained source lock binding')
+    _protected_directory(canonical)
+    _protected_directory(root)
+    generations = canonical.parent / ('.' + canonical.name + '.build-generations')
+    if root != canonical and (root.parent != generations or root.name != record.get('source_sha256')):
+        raise ValueError('Build script is outside its maintained source generation')
+    fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644):
+            raise ValueError('Unsafe maintained source lock')
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        _verify_source(root, record)
+        settings, settings_bytes = _read_settings()
+        yield settings
+        _verify_source(root, record)
+        if _read_settings()[1] != settings_bytes:
+            raise ValueError('Maintained build settings changed during build')
+    finally:
+        os.close(fd)
 
 
 def prerequisites(harness: str, machine: str, cpuinfo: str) -> None:
@@ -113,8 +207,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('harness', choices=HARNESSES)
     args = parser.parse_args(argv)
     try:
-        settings = json.loads(SETTINGS.read_text())
-        identity = build(args.harness, Path(__file__).resolve().parents[1], settings)
+        root = Path(__file__).resolve().parents[1]
+        # Activation takes its private lock only after this shared lock is released.
+        with source_snapshot(root) as settings:
+            identity = build(args.harness, root, settings)
         # Root executes its protected deployed launcher, never this checkout.
         command = settings['command']
         if not re.fullmatch(r'/[A-Za-z0-9_./-]+', command) or '..' in Path(command).parts:

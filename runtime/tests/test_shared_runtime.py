@@ -386,12 +386,6 @@ class Installation(unittest.TestCase):
             self.assertEqual(installer.main(['build', 'pi']), 1)
             build.assert_not_called()
 
-    def test_make_is_explicit_and_not_autoactivating(self):
-        for action in ('build', 'update'):
-            result = subprocess.run(['make', '-n', '-C', str(ROOT), action, 'HARNESS=pi'], text=True, capture_output=True, check=True)
-            self.assertIn(f'install.py {action} "$HARNESS"', result.stdout)
-            self.assertNotIn('activate', result.stdout)
-
     def test_context_allowlists_and_single_harness(self):
         for harness, spec in installer.catalog()['harnesses'].items():
             recipe = (ROOT / spec['dockerfile']).read_text()

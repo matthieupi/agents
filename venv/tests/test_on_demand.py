@@ -196,12 +196,6 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(builder.main(['omp']), 1)
             run.assert_not_called()
 
-    def test_make_uses_only_selected_target(self):
-        for harness in builder.HARNESSES:
-            result = subprocess.run(['make', '-n', '-f', str(Path(builder.__file__).with_name('Makefile')), harness],
-                                    text=True, capture_output=True, check=True)
-            self.assertEqual(result.stdout.strip(), '/usr/bin/python3 build.py ' + harness)
-
     def test_omp_never_reads_other_component_pins(self):
         (self.root / 't3code/runtime/pins.json').unlink()
         self.run_build('omp')

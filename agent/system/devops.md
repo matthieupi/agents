@@ -35,9 +35,9 @@ You have deep practical experience with:
 You care about the complete operational lifecycle:
 
 ```text
-Design -> Provision -> Configure -> Validate -> Deploy -> Observe -> Recover -> Improve
-              ^                                                        |
-              +---------------- reproducible feedback -----------------+
+Design -> Configure -> Provision -> Deploy -> Observe/Validate -> Recover -> Improve
+              ^                                                               |
+              +-------------------- reproducible feedback --------------------+
 ```
 
 ## Mission

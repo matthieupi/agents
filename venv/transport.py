@@ -38,6 +38,7 @@ def hop_arguments(hop: dict) -> list[str]:
             '-o', 'IdentitiesOnly=yes', '-o', 'IdentityAgent=none',
             '-o', 'BatchMode=yes', '-o', 'PasswordAuthentication=no',
             '-o', 'KbdInteractiveAuthentication=no', '-o', 'PreferredAuthentications=publickey',
+            '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
             '-o', 'ConnectTimeout=5', '-i', hop['identity_file'],
             '-l', hop['user'], '-p', str(hop['port'])]
 
@@ -87,6 +88,7 @@ def verify_hop(hop: dict, arguments: list[str]) -> None:
                 'controlpersist': 'no', 'identitiesonly': 'yes', 'identityagent': 'none',
                 'batchmode': 'yes', 'passwordauthentication': 'no',
                 'kbdinteractiveauthentication': 'no', 'preferredauthentications': 'publickey',
+                'serveraliveinterval': '30', 'serveralivecountmax': '3',
                 'identityfile': hop['identity_file']}
     for key, value in expected.items():
         if effective.get(key) != [value]:

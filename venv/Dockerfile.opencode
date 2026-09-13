@@ -6,7 +6,7 @@ USER root
 COPY --chown=0:0 opencode/scripts/entrypoint.sh /opt/opencode/native-contract.sh
 COPY --chown=node:node opencode/.opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
 COPY --chown=node:node opencode/.opencode/config/plugins/kdco-*.ts /opt/opencode/component/.opencode/config/plugins/
-COPY --chown=0:0 opencode/scripts/publish-plugins.mjs /opt/opencode-publish-plugins.mjs
+COPY --chown=0:0 opencode/scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
 RUN install -d -o node -g node /opt/opencode/build-home /opt/opencode/component \
     && test -x /usr/bin/node && test -x /usr/bin/npm
 USER node
