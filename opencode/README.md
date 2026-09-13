@@ -2,7 +2,14 @@
 
 ## Native workspaces in the workstation container
 
-The workstation Compose environment enables `OPENCODE_EXPERIMENTAL_WORKSPACES=1`.
+The workstation Compose environment and `opencode-run` launcher enable
+`OPENCODE_EXPERIMENTAL_WORKSPACES=1`. The launcher passes it on container creation
+and every TUI/web attach, including reused containers. After pulling the updated
+launcher, quit and relaunch `opencode .`; no rebuild or container recreation is
+needed solely for this flag when using that launcher.
+`opencode shell <container>` also supplies the flag to the new shell, including
+for older containers; OpenCode launched from that shell inherits it. Already
+running processes are unchanged.
 In a fresh OpenCode process, enter `/warp` and select **Worktree** to create a
 native workspace and move the current conversation there in the same TUI. Select
 an existing workspace to reuse it. No fork or new terminal is required.
@@ -12,8 +19,9 @@ retains its terminal-launch behavior. The native creation dialog does not provid
 plan-derived branch names, the KDCO `/var/worktree` setting, or credential symlink
 setup. Do not rely on Warp to transfer uncommitted primary-checkout changes.
 
-Existing containers need recreation, not just `docker restart`, to receive the
-new environment. Coordinate an idle window for all sessions first. From
+For direct Compose launches (rather than `opencode-run`), existing containers need
+recreation, not just `docker restart`, to receive the new container environment.
+Coordinate an idle window for all sessions first. From
 `services/agents/opencode`, using the existing deployment environment/overrides:
 
 ```sh

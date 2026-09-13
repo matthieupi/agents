@@ -314,13 +314,14 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
                     log_info "Workspace: ${WORKSPACE_PATH}"
                     log_info "Port: ${WEB_BIND_HOST}:${WEB_PORT}"
                     exec docker exec -it \
+                        -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 \
                         -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
                         -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
                         "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
                 fi
             log_info "Attaching to existing session: ${CONTAINER_NAME}"
             log_info "Workspace: ${WORKSPACE_PATH}"
-            exec docker exec -it "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
+            exec docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
             fi
         else
             log_warn "Container uses old image (${CONTAINER_IMAGE}), recreating..."
@@ -436,6 +437,7 @@ docker run -d \
     -e "NVIDIA_DRIVER_CAPABILITIES=compute,utility" \
     -e "OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json" \
     -e "OPENCODE_DISABLE_AUTOUPDATE=1" \
+    -e "OPENCODE_EXPERIMENTAL_WORKSPACES=1" \
     -e "TERM=xterm-256color" \
     -e "GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-opencode-xmist}" \
     -e "GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-opencode@xmist.dev}" \
@@ -472,6 +474,7 @@ if [[ -n "${WEB_MODE}" ]]; then
     log_info "Starting browser session..."
     log_info "Port: ${WEB_BIND_HOST}:${WEB_PORT}"
     exec docker exec -it \
+        -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 \
         -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
         -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
         "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
@@ -479,4 +482,4 @@ fi
 
 # Attach to the new container
 log_info "Attaching to TUI..."
-exec docker exec -it "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
+exec docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}

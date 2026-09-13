@@ -136,7 +136,7 @@ open_shell() {
         exit 1
     fi
 
-    docker exec -it "$name" /bin/bash
+    docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "$name" /bin/bash
 }
 
 rebuild_cpu_image() {
