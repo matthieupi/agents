@@ -2,8 +2,28 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "openai/gpt-6",
   "small_model": "openai/gpt-5-mini",
+  "lsp": true,
   "plugin": [],
   "agent": {
+    "Orchestrator": {
+      "prompt": "{file:./system/orchestrator.md}",
+      "model": "openai/gpt-6-astra",
+      "mode": "primary",
+      "description": "Accountable delivery lead coordinating subagents, dependencies, reviews, and evidence-based acceptance",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "question": "allow",
+        "todowrite": "allow",
+        "task": "allow",
+        "skill": "allow",
+        "webfetch": "allow",
+        "edit": "allow",
+        "bash": "allow"
+      }
+    },
     "explore": {
       "prompt": "{file:./system/explore.md}",
       "temperature": 0.1,
@@ -57,9 +77,26 @@
     },
     "DevOps": {
       "prompt": "{file:./system/devops.md}",
+      "model": "openai/gpt-6-astra",
       "temperature": 0.2,
-      "mode": "all",
+      "mode": "primary",
       "description": "Gilfoyle: secure infrastructure, deployment, reliability, and operations engineering"
+    },
+    "DevOps Medium": {
+      "prompt": "{file:./system/devops.md}",
+      "model": "openai/gpt-5.6-sol",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "hidden": true,
+      "description": "DevOps specialist for delegated, moderately complex infrastructure and operations tasks that require some thinking and analysis"
+    },
+    "DevOps Low": {
+      "prompt": "{file:./system/devops.md}",
+      "model": "openai/gpt-5.6-terra",
+      "temperature": 0.2,
+      "mode": "subagent",
+      "hidden": true,
+      "description": "DevOps specialist for delegated simple, narrowly scoped infrastructure and operations tasks that can be executed quickly"
     },
     "SecOps": {
       "prompt": "{file:./system/secops.md}",

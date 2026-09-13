@@ -1,4 +1,5 @@
 {
   "$schema": "https://opencode.ai/tui.json",
-  "theme": "opencode"
+  "theme": "opencode",
+  "plugin": ["./tui-plugins/session-title.mjs"]
 }
