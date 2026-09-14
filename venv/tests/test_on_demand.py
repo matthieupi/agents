@@ -21,9 +21,8 @@ runtime, builder = load('launcher'), load('build')
 def bootstrap(root: Path) -> dict:
     account = pwd.getpwuid(os.getuid()).pw_name
     value = policy(root, account)
-    value.update(schema=2, default_harness='native-pi', native_pi={'cli': ['/usr/local/bin/native-pi']})
-    value['web']['default_harness'] = 'native-pi'
-    value['accounts'][account]['autoentry'] = 'default'
+    value['default_harness'] = None
+    value['web']['default_harness'] = None
     for spec in value['harnesses'].values():
         spec['image'] = None
     return value
@@ -47,31 +46,6 @@ class PolicyTests(unittest.TestCase):
             socket.assert_not_called()
             docker.assert_not_called()
 
-    def test_native_default_cli_preserves_environment_and_arguments(self):
-        with patch.object(runtime.subprocess, 'call', return_value=23) as call:
-            self.assertEqual(runtime.run_default(self.data, False, ['--version']), 23)
-            call.assert_called_once_with(['/usr/local/bin/native-pi', '--version'])
-
-    def test_native_web_url_and_omp_first_no_fallback(self):
-        with patch('sys.stdout', new_callable=io.StringIO) as output:
-            runtime.run_default(self.data, True, [])
-            self.assertIn('https://coo.example.org/ (native Pi)', output.getvalue())
-        self.data['harnesses']['omp']['image'] = 'sha256:' + 'a' * 64
-        self.data['default_harness'] = 'omp'
-        self.data['web']['default_harness'] = None
-        with patch.object(runtime, 'run_session') as session:
-            with self.assertRaisesRegex(ValueError, 'No web default'):
-                runtime.run_default(self.data, True, [])
-            session.assert_not_called()
-        self.data['web']['default_harness'] = 'pi'
-        with self.assertRaises(ValueError):
-            runtime.validate_policy(self.data)
-
-    def test_installed_policy_cannot_retain_native_default(self):
-        self.data['harnesses']['pi']['image'] = 'sha256:' + 'a' * 64
-        with self.assertRaisesRegex(ValueError, 'native is initial only'):
-            runtime.validate_policy(self.data)
-
     def test_default_dispatch_reads_current_policy(self):
         from contextlib import nullcontext
         with patch.object(runtime, 'load_policy', return_value=self.data), \
@@ -93,13 +67,11 @@ class PolicyTests(unittest.TestCase):
                 runtime.run_candidate('pi', 'start')
             load_policy.assert_not_called()
 
-    def test_native_cli_never_executes_as_root_and_fresh_has_no_fallback(self):
+    def test_default_dispatch_never_executes_as_root_and_has_no_fallback(self):
         with patch.object(runtime.os, 'getuid', return_value=0), patch.object(runtime.subprocess, 'call') as call:
             with self.assertRaisesRegex(ValueError, 'non-root'):
                 runtime.run_default(self.data, False, [])
             call.assert_not_called()
-        self.data['default_harness'] = self.data['web']['default_harness'] = None
-        del self.data['native_pi']
         with patch.object(runtime.subprocess, 'call') as call:
             with self.assertRaisesRegex(ValueError, 'No harness installed'):
                 runtime.run_default(self.data, False, [])
@@ -274,7 +246,7 @@ class ActivationTests(unittest.TestCase):
                 self.assertEqual(later['web'], value['web'])
                 self.assertEqual(self.marker.read_bytes(), b'unchanged-provider-fixture')
 
-    def test_check_and_commit_failure_restore_native_and_retry(self):
+    def test_check_and_commit_failure_restore_previous_policy_and_retry(self):
         original = self.path.read_bytes()
         for failure in ('install-check', 'install-commit'):
             def gateway(config, phase, transaction, *, lock_fd=None):
@@ -298,7 +270,7 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(self.phases, ['install-rollback', 'install-check', 'install-commit'])
         self.assertEqual(json.loads(self.path.read_text())['default_harness'], 't3')
 
-    def test_published_candidate_journal_does_not_restore_native(self):
+    def test_published_candidate_journal_does_not_restore_previous_policy(self):
         candidate = copy.deepcopy(self.data)
         candidate['harnesses']['omp']['image'] = 'sha256:' + 'a' * 64
         candidate['default_harness'] = 'omp'
@@ -342,7 +314,7 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text()), self.data)
         self.assertFalse(self.path.with_name('activation-candidate.json').exists())
 
-    def test_fsync_failure_after_publication_never_restores_native(self):
+    def test_fsync_failure_after_publication_never_restores_previous_policy(self):
         atomic = runtime.atomic_json
         def fail_after_publish(path, value, mode=0o644):
             atomic(path, value, mode)

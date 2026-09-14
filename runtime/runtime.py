@@ -7,6 +7,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import signal
 import stat
@@ -20,7 +21,7 @@ IMAGE = re.compile(r'sha256:[a-f0-9]{64}')
 CATALOG = json.loads((ROOT / 'harnesses.json').read_text())
 CAPABILITIES = set(CATALOG['capabilities'])
 MODES = {name: set(spec['modes']) for name, spec in CATALOG['harnesses'].items()}
-KEYS = {'schema', 'harness', 'mode', 'image', 'platform', 'uid', 'gid', 'name', 'workspace',
+KEYS = {'schema', 'harness', 'account', 'mode', 'image', 'platform', 'uid', 'gid', 'name', 'workspace',
         'home', 'resources', 'source', 'grants', 'limits', 'port', 'endpoint', 'receipt'}
 
 
@@ -49,6 +50,8 @@ def validate_contract(contract: dict) -> None:
     require(isinstance(contract, dict) and set(contract) == KEYS and contract['schema'] == 1, 'Exact runtime schema required')
     c = contract
     require(c['harness'] in MODES and c['mode'] in MODES[c['harness']], 'Unsupported harness mode')
+    require(isinstance(c['account'], str) and re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', c['account'])
+            and c['account'] != 'root', 'Explicit ordinary owner account required')
     require(c['platform'] in CATALOG['harnesses'][c['harness']]['platforms'], 'Unsupported platform')
     require(isinstance(c['image'], str) and IMAGE.fullmatch(c['image']), 'Local immutable image ID required')
     require(isinstance(c['receipt'], str) and re.fullmatch(r'[a-f0-9]{64}', c['receipt']), 'Bound receipt digest required')
@@ -103,7 +106,7 @@ def validate_contract(contract: dict) -> None:
 def mounts(c):
     result = [(c['workspace'], c['workspace'], not c['grants']['root_user'])]
     if not c['grants']['root_user']:
-        result.append((c['home'], '/home/agent', True))
+        result.append((c['home'], c['home'], True))
     if c['resources']:
         result.append((c['resources'], '/opt/agent', False))
     if c['source']['mode'] == 'live':
@@ -115,7 +118,10 @@ def mounts(c):
 
 
 def environment(c):
-    result = {'HOME': '/home/agent', 'USER': 'agent', 'LOGNAME': 'agent',
+    result = {'HOME': c['home'], 'XDG_CONFIG_HOME': c['home'] + '/.config',
+              'XDG_DATA_HOME': c['home'] + '/.local/share',
+              'XDG_STATE_HOME': c['home'] + '/.local/state',
+              'XDG_CACHE_HOME': c['home'] + '/.cache', 'USER': c['account'], 'LOGNAME': c['account'],
               'AGENTS_RUNTIME_SOURCE_MODE': c['source']['mode'],
               'OPENCODE_DISABLE_AUTOUPDATE': '1', 'PI_WEB_SKIP_VERSION_CHECK': '1',
               'DISABLE_AUTOUPDATER': '1', 'DISABLE_INSTALLATION_CHECKS': '1'}
@@ -351,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
             info = Path('/var/run/docker.sock').stat()
             require(stat.S_ISSOCK(info.st_mode), 'Real Docker socket required')
             socket = dict(path='/var/run/docker.sock', gid=info.st_gid)
-        c = dict(schema=1, harness=args.harness, mode='web' if args.web else 'cli', image=receipt['image'],
+        c = dict(schema=1, harness=args.harness, account=pwd.getpwuid(os.getuid()).pw_name,
+                 mode='web' if args.web else 'cli', image=receipt['image'],
                  platform=receipt['platform'], uid=os.getuid(), gid=os.getgid(),
                  name=f'agents-runtime-{os.getuid()}-{args.harness}-{uuid.uuid4().hex}', workspace=str(workspace),
                  home=str(home), resources=resources, source=source, receipt=install.digest(install.encoded(receipt)),
