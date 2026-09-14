@@ -66,8 +66,8 @@ def validate_extension(extension, policy):
     require(checkout['public_paths'] == ['runtime/entry.py', 'runtime/harnesses.json'],
             'Only reviewed public startup files may be exposed; no broad checkout mount')
     grants = extension['grants']
-    require(set(grants) == {'docker_socket', 'root_user', 'checkout_write', 'cap_add'}
-            and all(type(grants[k]) is bool for k in ('docker_socket', 'root_user', 'checkout_write')),
+    require(set(grants) == {'docker_socket', 'root_user', 'checkout_write', 'live_source', 'cap_add'}
+            and all(type(grants[k]) is bool for k in ('docker_socket', 'root_user', 'checkout_write', 'live_source')),
             'Explicit independent capability policy required')
     require(isinstance(grants['cap_add'], list) and len(set(grants['cap_add'])) == len(grants['cap_add'])
             and set(grants['cap_add']) <= {'NET_BIND_SERVICE'}, 'Unsupported VM capability allowance')
@@ -119,9 +119,10 @@ def transition(previous, candidate, harness):
     expected = copy.deepcopy(previous)
     image = candidate['harnesses'][harness]['image']
     expected['harnesses'][harness]['image'] = image
-    if previous['default_harness'] in (None, 'native-pi'):
+    if previous['default_harness'] is None and requested_interface(candidate, harness, 'cli'):
         expected['default_harness'] = harness
-        expected['web']['default_harness'] = None if harness == 'omp' else harness
+    if previous['web']['default_harness'] is None and requested_interface(candidate, harness, 'web'):
+        expected['web']['default_harness'] = harness
     require(expected == candidate, 'Only selected image and first-install defaults may change')
     pair = (harness, previous['harnesses'][harness]['image'], image)
     require(any((t['harness'], t['from'], t['to']) == pair for t in extension['transitions']),
@@ -133,11 +134,9 @@ def selected(policy, harness):
 
 
 def requested_interface(policy, harness, interface):
-    """Absent projection retains the protected legacy command-backed contract."""
+    """Read the required canonical interface projection."""
     spec = policy['harnesses'][harness]
-    requested = spec.get('requested_interfaces')
-    if requested is None:
-        return bool(spec.get(interface))
+    requested = spec['requested_interfaces']
     require(isinstance(requested, dict) and set(requested) == {'cli', 'web'}
             and all(type(requested[key]) is bool for key in ('cli', 'web')),
             'Exact requested interface projection required')
@@ -154,6 +153,8 @@ def common(host, policy):
                 and hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256'], 'Protected runtime control drift')
     path = controls['runtime']['path']
     spec = importlib.util.spec_from_file_location('protected_agents_runtime', path)
+    if spec is None or spec.loader is None:
+        raise ValueError('Cannot load protected runtime control')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -161,7 +162,8 @@ def common(host, policy):
 
 def contract(host, policy, harness, account, *, web, name=None, requests=None):
     validate_extension(policy['shared_runtime'], policy)
-    require(selected(policy, harness) and account in policy['accounts'], 'Reviewed image/account required')
+    require(selected(policy, harness) and account == policy['harnesses'][harness]['account']
+            and account in policy['accounts'], 'Reviewed image and shared execution account required')
     require(requested_interface(policy, harness, 'web' if web else 'cli'),
             'Shared runtime interface is disabled by the enrolled policy')
     spec, user = policy['harnesses'][harness], policy['accounts'][account]
@@ -172,8 +174,7 @@ def contract(host, policy, harness, account, *, web, name=None, requests=None):
     allowance = policy['shared_runtime']['grants']
     for key in ('root_user', 'docker_socket', 'checkout_write', 'live_source'):
         require(type(requests[key]) is bool, 'Boolean VM privilege requests required')
-        if key != 'live_source':
-            require(not requests[key] or allowance[key], 'VM capability request exceeds protected target allowance')
+        require(not requests[key] or allowance[key], 'VM capability request exceeds protected target allowance')
     require(isinstance(requests['cap_add'], list) and set(requests['cap_add']) <= set(allowance['cap_add']), 'VM capability not allowed')
     require(not requests['root_user'] or not requests['live_source'], 'Root cannot execute mutable checkout startup')
     require(not web or not any(requests.values()), 'Managed VM web always uses the baked default capability contract')
@@ -196,7 +197,7 @@ def contract(host, policy, harness, account, *, web, name=None, requests=None):
     if requests['docker_socket']:
         host.validate_socket(Path(policy['socket']))
         socket = dict(path=policy['socket'], gid=os.stat(policy['socket']).st_gid)
-    return dict(schema=1, harness=harness, mode='web' if web else 'cli', image=spec['image'],
+    return dict(schema=1, harness=harness, account=account, mode='web' if web else 'cli', image=spec['image'],
                 platform=receipt['platform'], uid=user['uid'], gid=user['gid'],
                 name=name or ('agents-runtime-' + hashlib.sha256(policy['target'].encode()).hexdigest()[:16]
                               + '-' + harness + ('-web' if web else '-' + uuid.uuid4().hex)),
@@ -283,7 +284,8 @@ def run_cli(host, argv):
 
 def inspect_instance(host, policy, harness, instance):
     owner = instance['Config'].get('Labels', {}).get('io.venv-agents.account')
-    require(owner in policy['accounts'], 'Foreign shared-runtime owner')
+    require(owner == policy['harnesses'][harness]['account'] and owner in policy['accounts'],
+            'Foreign shared-runtime owner')
     user = policy['accounts'][owner]
     record = host.pwd.getpwnam(owner)
     require((record.pw_uid, record.pw_gid) == (user['uid'], user['gid']), 'Shared-runtime NSS identity drift')
@@ -325,34 +327,6 @@ def validate_recovery_journal(host, policy, journal):
         require(journal['old'] is None, 'Unexpected retained container in first-install/CLI journal')
 
 
-def validate_native_retirement(host, policy, record, journal, profile):
-    """One narrowly recorded missing control, never blanket missing-file admission."""
-    require(journal is not None, 'Missing native profile requires exact protected recovery evidence')
-    validate_recovery_journal(host, policy, journal)
-    previous, candidate, harness = journal['previous'], journal['candidate'], journal['harness']
-    require(policy == previous and previous['default_harness'] == 'native-pi'
-            and previous['harnesses'][harness]['image'] is None and candidate['default_harness'] == harness,
-            'Missing native profile is not part of this first-install transition')
-    config_path = host.POLICY.with_name('gateway.json')
-    info = host.protected(config_path, private=True)
-    require(stat.S_ISREG(info.st_mode) and hashlib.sha256(config_path.read_bytes()).hexdigest()
-            == dict(record['files'], **record['shared_runtime_seal']['files']).get(str(config_path)), 'Unsealed native recovery configuration')
-    config = json.loads(config_path.read_text())
-    require(config['target'] == policy['target'] and config.get('native_profile') == str(profile)
-            and config['activation_lock'] == str(host.POLICY.with_name('activation.lock')), 'Native recovery target/path mismatch')
-    path = Path(config['web']['paths']['recovery_dir']) / ('install-' + harness + '.json')
-    info = host.protected(path, private=True)
-    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, 'Protected first-install gateway journal required')
-    snapshot = json.loads(path.read_text())
-    require(snapshot['transaction'] == journal['signature'] and snapshot['native_active'] is True
-            and snapshot['native_enabled'] is True and isinstance(snapshot.get('profile'), dict), 'Native retirement journal mismatch')
-    saved = snapshot['profile']
-    require(set(saved) == {'content', 'mode'} and isinstance(saved['content'], str)
-            and hashlib.sha256(saved['content'].encode()).hexdigest() == record['files'][str(profile)]
-            and type(saved['mode']) is int and 0 <= saved['mode'] <= 0o777 and not saved['mode'] & 0o022,
-            'Native recovery bytes must match the original enrollment seal')
-
-
 def validate_seal(host, policy, *, recovery=None):
     marker = absolute(policy['shared_runtime']['enrollment_marker'])
     host.protected(marker, private=True)
@@ -371,53 +345,16 @@ def validate_seal(host, policy, *, recovery=None):
     require(shape(policy) == shape(record['bootstrap_policy']), 'Immutable enrolled policy drift')
     require(policy['web'].get('default_hostname') == record.get('default_hostname', record['bootstrap_policy']['web'].get('default_hostname')),
             'Default hostname is not bound to the enrollment seal')
-    missing_profile = None
     for name, expected in dict(record['files'], **record['shared_runtime_seal']['files']).items():
         path = Path(name)
         if path == host.POLICY:
             continue  # Runtime owns selected IDs/defaults, never its static shape.
-        if name == record.get('retired_profile') and not path.exists() and not path.is_symlink() and policy['default_harness'] not in (None, 'native-pi'):
-            continue
-        if name == record.get('retired_profile') and not path.exists() and not path.is_symlink() and recovery is not None:
-            missing_profile = path
-            continue
         info = host.protected(path)
         require(hashlib.sha256(path.read_bytes()).hexdigest() == expected, 'Enrollment control drift before replacement')
         metadata = record['shared_runtime_seal'].get('metadata', {}).get(name)
         if metadata:
             require((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (metadata['uid'], metadata['gid'], metadata['mode']),
                     'Promoted control metadata drift before activation')
-    if missing_profile is not None:
-        validate_native_retirement(host, policy, record, recovery, missing_profile)
-
-
-def validate_state_layout(host, policy, harness):
-    """No implicit legacy HOME conversion. Inspect directory metadata, not secrets.
-
-    The old entrypoint writes absolute resource links and a different Pi agents
-    root. Until a reviewed layout migration exists, only absent/empty managed
-    roots can enter the new contract. Check every identity affected by the image
-    pointer, including CLI-only OMP accounts.
-    """
-    if selected(policy, harness):
-        return
-    relative = {'pi': '.pi/agent', 'omp': '.omp/agent', 'opencode': '.config/opencode', 't3': 'base'}[harness]
-    for account, user in policy['accounts'].items():
-        home = Path(host.home_mount(policy, harness, account)[0])
-        info = host.protected(home, owner=user['uid'], private=True)
-        require(stat.S_ISDIR(info.st_mode) and info.st_gid == user['gid'], 'Private HOME layout custody mismatch')
-        current = home
-        for part in Path(relative).parts:
-            current = current / part
-            try:
-                info = current.lstat()
-            except FileNotFoundError:
-                break
-            require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode), 'Redirected legacy state layout refused; no repair')
-            require((info.st_uid, info.st_gid) == (user['uid'], user['gid']) and not info.st_mode & 0o022
-                    and info.st_mode & 0o200, 'Legacy state layout directory custody/permissions mismatch')
-        else:
-            require(not any(current.iterdir()), 'Populated legacy state layout requires an explicit migration; state preserved')
 
 
 def check_image(host, policy, harness, image):
@@ -439,7 +376,8 @@ def check_image(host, policy, harness, image):
             and not config.get('Volumes'), 'Reviewed image receipt/volume mismatch')
     forbidden = {'DOCKER_HOST', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'PYTHONPATH', 'PYTHONHOME', 'BASH_ENV', 'ENV'}
     require(not any(item.split('=', 1)[0] in forbidden for item in config.get('Env') or []), 'Image execution override refused')
-    user = policy['accounts'][policy['web']['default_account']]
+    owner = policy['harnesses'][harness]['account']
+    user = policy['accounts'][owner]
     executable = '/opt/agents-runtime/packages/node_modules/.bin/' + {'pi': 'pi', 'omp': 'omp', 'opencode': 'opencode', 't3': 't3'}[harness]
     created = host.docker_call(policy, ['create', '--pull=never', '--network', 'none', '--read-only',
         '--user', f'{user["uid"]}:{user["gid"]}', '--cap-drop=ALL', '--security-opt=no-new-privileges',
@@ -476,8 +414,8 @@ def mutate(host, policy, argv):
 
 def stage_contract(host, journal):
     candidate, harness = journal['candidate'], journal['harness']
-    c = contract(host, candidate, harness, candidate['web']['default_account'], web=True, name=journal['stage_name'])
-    c.update(home='/disposable-home', workspace='/tmp', resources=None, port=candidate['shared_runtime']['staging_ports'][harness])
+    c = contract(host, candidate, harness, candidate['harnesses'][harness]['account'], web=True, name=journal['stage_name'])
+    c.update(workspace='/tmp', resources=None, port=candidate['shared_runtime']['staging_ports'][harness])
     c['limits'] = candidate['shared_runtime']['staging_limits']
     return c
 
@@ -507,9 +445,10 @@ def stage_instance(host, journal, value):
             and options['NanoCpus'] == int(c['limits']['cpus'] * 10**9) and options['PidsLimit'] == c['limits']['pids'],
             'Staging resource drift')
     require(options.get('Tmpfs') == {'/tmp': 'rw,nosuid,nodev,size=256m',
-            '/home/agent': f'rw,nosuid,nodev,mode=0700,uid={c["uid"]},gid={c["gid"]},size=256m'}, 'Unknown staging tmpfs')
+            c['home']: f'rw,nosuid,nodev,mode=0700,uid={c["uid"]},gid={c["gid"]},size=256m'}, 'Unknown staging tmpfs')
     environment = dict(item.split('=', 1) for item in config.get('Env') or [])
-    require(environment.get('HOME') == '/home/agent' and 'DOCKER_HOST' not in environment
+    require(environment.get('HOME') == c['home'] and environment.get('USER') == c['account']
+            and environment.get('LOGNAME') == c['account'] and 'DOCKER_HOST' not in environment
             and 'AGENTS_RUNTIME_RESOURCES' not in environment, 'Staging must not expose providers/resources')
 
 
@@ -537,7 +476,7 @@ def stage(host, config, journal, lock_fd):
         del argv[index:index + 2]
     argv[argv.index('--network') + 1] = candidate['network']
     argv[1:1] = ['--cgroup-parent', candidate['cgroup_parent'], '--label', 'io.venv-agents.transaction=' + journal['token'],
-                 '--tmpfs', f'/home/agent:rw,nosuid,nodev,mode=0700,uid={c["uid"]},gid={c["gid"]},size=256m']
+                 '--tmpfs', f'{c["home"]}:rw,nosuid,nodev,mode=0700,uid={c["uid"]},gid={c["gid"]},size=256m']
     if h == 'pi':
         argv[1:1] = ['--env', 'PI_WEB_ALLOWED_HOSTS=' + host.pi_allowed_hosts(candidate)]
     require(inspect(host, candidate, journal['stage_name']) is None, 'Staging identity already exists')
@@ -554,7 +493,8 @@ def stage(host, config, journal, lock_fd):
 def quiet_writers(host, policy, harness, old):
     result = host.docker_call(policy, ['container', 'ls', '--quiet', '--no-trunc'])
     require(result.returncode == 0, 'Cannot inspect active writers')
-    homes = [Path(host.home_mount(policy, harness, account)[0]) for account in policy['accounts']]
+    account = policy['harnesses'][harness]['account']
+    homes = [Path(host.home_mount(policy, harness, account)[0])]
     for identity in result.stdout.split():
         require(re.fullmatch(r'[a-f0-9]{64}', identity), 'Unknown active container identity')
         if old and identity == old['Id']:
@@ -587,8 +527,8 @@ def stage_budget(host, policy):
 
 def validate_launch(host, policy, harness, account):
     """Under the selected ordinary-account session lock, refuse a second HOME writer."""
-    require(not (harness == 'pi' and policy['accounts'][account].get('native_pi_home')),
-            'Native Pi HOME cannot start a shared writer without supported quiescence')
+    require(account == policy['harnesses'][harness]['account'],
+            'Only the shared execution account may start a shared writer')
     selected_policy = copy.deepcopy(policy)
     selected_policy['accounts'] = {account: policy['accounts'][account]}
     quiet_writers(host, selected_policy, harness, None)
@@ -708,31 +648,27 @@ def activate(host, config, policy, harness, image, lock_fd):
     validate_seal(host, policy)
     if policy['harnesses'][harness]['image'] == image:
         return 0
-    require(policy['default_harness'] != 'native-pi'
-            and not (harness == 'pi' and any(u.get('native_pi_home') for u in policy['accounts'].values())),
-            'Native-to-shared admission is blocked until exact native quiescence and HOME migration are supported')
     candidate = copy.deepcopy(policy)
     candidate['harnesses'][harness]['image'] = image
-    if policy['default_harness'] in (None, 'native-pi'):
+    if policy['default_harness'] is None and requested_interface(candidate, harness, 'cli'):
         candidate['default_harness'] = harness
-        candidate['web']['default_harness'] = None if harness == 'omp' else harness
+    if policy['web']['default_harness'] is None and requested_interface(candidate, harness, 'web'):
+        candidate['web']['default_harness'] = harness
     transition(policy, candidate, harness)  # Before image execution or HOME access.
     host.validate_policy(candidate)
     check_image(host, candidate, harness, image)
     with host.maintenance_lock(host.POLICY, exclusive=True):
-        require(not host.POLICY.with_name('activation-pending.json').exists(), 'Legacy activation pending')
         old = None if harness == 'omp' else host.inspect_web(policy, harness)
         if old is not None:
-            require(host.validate_web_instance(policy, harness, old) == policy['web']['default_account'],
+            require(host.validate_web_instance(policy, harness, old) == policy['harnesses'][harness]['account'],
                     'Replacement must retain the configured private-state owner')
             require(old['HostConfig'].get('RestartPolicy', {}).get('Name', '') in ('', 'no'), 'Unknown container restart authority')
             require(not old['State'].get('Paused') and not old['State'].get('Restarting')
                     and old['State']['Status'] in ('running', 'exited', 'created'), 'Unstable old container; preserve for explicit recovery')
         quiet_writers(host, policy, harness, old)
-        validate_state_layout(host, policy, harness)
         if harness != 'omp':
             stage_budget(host, policy)
-        owner = policy['web']['default_account']
+        owner = policy['harnesses'][harness]['account']
         user = policy['accounts'][owner]
         home = Path(host.home_mount(policy, harness, owner)[0])
         info = host.protected(home, owner=user['uid'], private=True)
@@ -759,10 +695,9 @@ def activate(host, config, policy, harness, image, lock_fd):
                 mutate(host, policy, ['container', 'stop', '--time', '30', old['Id']])
             require(not old_instance(host, journal)['State']['Running'], 'Old selected writer did not quiesce')
             mutate(host, policy, ['container', 'rename', old['Id'], journal['rollback_name']])
-        validate_state_layout(host, policy, harness)  # Recheck after old writers are quiesced, also for OMP.
         if harness != 'omp':
             require(inspect(host, candidate, host.web_name(candidate, harness)) is None, 'Candidate name occupied; no adoption')
-            argv = session_command(host, candidate, harness, policy['web']['default_account'], True, [], False)[3:]
+            argv = session_command(host, candidate, harness, candidate['harnesses'][harness]['account'], True, [], False)[3:]
             argv[1:1] = ['--label', 'io.venv-agents.transaction=' + token]
             identity = mutate(host, candidate, argv)
             require(re.fullmatch(r'[a-f0-9]{64}', identity), 'Invalid canonical candidate identity')

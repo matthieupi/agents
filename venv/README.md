@@ -7,7 +7,7 @@ launcher, not workstation wrappers or component deployment lifecycles.
 ## Selected Make installation (ordinary account, never login-time builds)
 
 After enrollment deploys the public source and root-owned build/activation policy,
-use the normal SSH account in `<agents-source>/venv`. Current Dev/DevAI canonical
+use the shared `agents` execution account in `<agents-source>/venv`. Current Dev/DevAI canonical
 enrollment source is `/var/lib/venv-agents/source`; retained native/editable checkouts
 are not imported as root. Infrastructure enrollment invokes this same target for an
 absent desired image on fresh and completed hosts:
@@ -28,11 +28,11 @@ work; OMP remains amd64-only. Pi/T3's Node paths do not inherit the Bun gate.
 Each build holds a shared root-owned public build-source lock for exact manifest
 verification and the complete Docker source-reading phase, then verifies that same
 snapshot before releasing it. Activation happens afterward under the existing
-private activation lock; the two locks are never nested. Completed install-mode
+private activation lock; the two locks are never nested. Completed enrollment
 reapply takes the source lock exclusively and publishes a complete immutable source
 generation before atomically selecting it through the canonical Makefile.
 
-That generation transition keeps an already-running legacy builder on its unchanged
+That generation transition keeps an already-running builder on its unchanged
 old tree during the first refresh; it does not rely on process inspection or a quiet
 timing window. New Make invocations use the lock-aware immutable generation. Direct
 `python build.py` is not a supported update interface. Freshness remains warning-only:
@@ -58,17 +58,17 @@ and activation contracts. The maintenance receipt is diagnostic provenance; it i
 not cryptographic image-to-source attestation and is not passed to privileged
 activation.
 
-Bootstrap creates no images. Schema 2 uses explicit `image: null` and initial
-`default_harness: native-pi` (null on a genuinely fresh host). Native CLI uses the
-existing installed binary as the non-root caller, not a bootstrap/build wrapper.
-Native web remains until new backend checks pass. First successful `make` selects
-the initial CLI/web default; additive installs never change it. OMP-first means
-**no web default**, not Pi fallback. Bare T3 remains an honest managed-web URL.
-Provider files, original homes and native unit/environment recovery data survive.
+Bootstrap creates no images. Schema 2 uses explicit `image: null` and null initial
+CLI/web defaults. First successful activation selects each still-null default only
+when that harness owns the corresponding requested interface; additive installs
+never change an established default. OMP is CLI-only and T3 is web-only. Provider
+files and the shared agents HOME are never copied or deleted by activation.
 
-Activation uses a protected lock, durable pending journal, candidate policy and
-atomic installed-policy replacement. Failed backend checks preserve native/current
-defaults; failed rollback retains recovery evidence for retry. Installed-ID changes
+Activation uses a protected lock, the private `image-install.json` journal, a
+candidate policy and atomic installed-policy replacement. Recovery validates that
+only the selected image and still-null interface defaults changed; an already
+published policy is gateway-finalized rather than rolled back. Failed backend checks
+preserve current defaults; failed rollback retains recovery evidence for retry. Installed-ID changes
 are refused rather than pretending to support safe upgrades. Same-ID retry is a
 no-op. See `14-runtime-contract.md` in the agent-harness-reset feature handoff for
 exact enrollment inputs and gateway phase obligations. **Gateway phase wiring is
@@ -93,8 +93,9 @@ Foreign site/auth/policy drift is refused, not repaired. Failed recovery retains
 journal and blocks image activation and enrollment maintenance. Candidate cleanup
 is durable before the journal is retired.
 
-Infrastructure install-mode reapply continuously enforces canonical
-`hosts.<host>.default_harness` (omitted=`pi`, allowed=`pi|opencode`). Shared policies
+Infrastructure reapply continuously enforces the first ordered
+`venv_agents.targets.<host>.harnesses` entry as the canonical routing default; it must be Pi or
+OpenCode because the routing default owns both CLI and web interfaces. Shared policies
 retain their exact sealed adapter, grants and image receipts; selection uses the
 installed-policy status path, not replacement-candidate authorization. Normal
 reapply recovers a pending selection through the sealed launcher while lending only
@@ -121,7 +122,7 @@ venv-agents pi|opencode|t3 --web
 venv-agents pi|opencode|t3 --web-status
 venv-agents pi|opencode|t3 --web-stop
 venv-agents t3                 # honest managed web entry, not a conversational CLI
-venv-agents default [--web]    # dynamic default for original/default SSH account
+venv-agents default [--web]    # dynamic default for the shared execution account
 venv-agents validate           # public JSON stdin; no mutation
 venv-agents validate-runtime   # public JSON stdin; current non-root account checks
 ```
@@ -137,29 +138,32 @@ The launcher loads root-owned `/etc/venv-agents/policy.json`, validates protecte
 ancestors, exact account UID/GID, physical shared binds, private state, immutable
 images, approved socket and existing memory/CPU/PID/cgroup limits. Image/network
 enrollment and aggregate resource-slice installation remain infrastructure-owned.
-No implicit pull/build, provider login, token copy or repair. Native is an explicit
-initial default only, never a fallback for an uninstalled/broken selected harness.
+No implicit pull/build, provider login, token copy, historical default, or repair.
 
 `web_ready: true` is accepted only as part of a valid root-owned policy containing
-the explicit `web.default_harness`, enrolled `web.default_account`, and
-`web.base_hostname`. Enrollment sets it **after** owned proxy/auth preparation;
-each activation separately gates new backend/API/WebSocket acceptance. Schema 1
-remains readable for existing all-installed policies, but cannot activate images.
+the explicit `web.default_harness` and `web.base_hostname`. Every selected harness
+points to the same explicit execution account, and policy `accounts` contains only
+that owner.
+Enrollment sets readiness **after** owned proxy/auth preparation; each activation
+separately gates new backend/API/WebSocket acceptance. Only schema 2 is accepted.
 Runtime does not infer authentication from `/`, read
 secret env files, or claim that a boolean verifies a gateway. Public policy carries
 no provider/web credentials.
 
-Each account normally uses `<state>/<harness>/home`. Optional `native_pi_home`
-must equal the account's physical NSS HOME and match its UID/GID, with safe modes
-and ancestors. Only Pi mounts that original HOME at the original absolute path;
-no application state or provider tokens are copied. Native HOME, state and shared
-binds cannot overlap. No account HOME or its ancestor is a shared bind.
+Every selected harness uses the shared execution account's physical NSS HOME at
+the same absolute path inside its containers. Harness lifecycle locks live under
+one separate private state root. HOME identity must match the shared UID/GID and
+cannot overlap workspace, resources or lifecycle state. No application state or
+provider tokens are copied.
 
 Resources are read-only at the original absolute path, also supplied as
 `VENV_AGENT_RESOURCES`. Preserve the existing Pi AGENTS.md symlink's target by
 enrolling that same resource directory. The adapter refuses a broken legacy
 AGENTS.md link instead of replacing it. Workspace is a narrow, physical same-path
-bind; neither a host checkout ancestor nor a broad HOME mount is added.
+bind; neither a host checkout ancestor nor a broad HOME mount is added. When the
+controller policy includes the configuration-owned `worktree` path, it is a
+separate writable identical-path bind and part of web-container drift detection.
+Its absence adds no fallback or inferred mount.
 
 ## Managed web lifecycle
 
@@ -178,10 +182,9 @@ harness, mode, account, UID/GID and configuration fingerprint. Existing containe
 must also match actual image/user/argv, environment, resource limits, mounts and
 loopback publication. Foreign or drifted containers are never adopted/restarted.
 
-An existing valid instance owned by another enrolled account can report its URL,
-but the caller cannot stop it, replace it or initialize its private state. New
-Pi and selected-default web creation is restricted to `web.default_account`. Concurrent create
-losers inspect the winner without starting/removing it. A `created` state is
+New web creation is restricted to the sole shared execution account recorded in
+`harnesses.<name>.account`. Concurrent create losers inspect the winner without
+starting/removing it. A `created` state is
 reported as such, not falsely called application-ready. Exited instances require
 explicit owner stop/removal before another start.
 
@@ -195,7 +198,7 @@ semantics still need canary acceptance; the launcher does not rewrite app stores
 ## VM image adapters and auth boundary
 
 - **Pi:** existing paired component release build. Numeric UID/HOME works through
-  container-private libnss-wrapper files; existing native state is preserved.
+  container-private libnss-wrapper files; activation does not migrate native state.
   Web argv is `pi-web --hostname 0.0.0.0 --port <port> --no-open`.
 - **OMP:** existing component application image, VM-only resource references to
   its native `.omp/agent` layout. The workstation init's fixed passwd identity and
@@ -246,13 +249,15 @@ not a replacement. Its API/WS header/cookie/Origin composition needs actual pinn
 release acceptance. No TLS disabling. See the integration contract for exact
 build commands, image-ID capture and cross-role handoff.
 
-## SSH behavior preserved
+## Restricted SSH aliases
 
-`login_shell.py` and `transport.py` are unchanged. Arbitrary SSH commands use
-`bash --noprofile --norc -c` with original bytes/status; forced TTY does not turn a
-command into autoentry. Infra's root-owned profile handles interactive login once,
-then returns to the normal shell. Enrollment must retire legacy hooks to avoid a
-second autoentry loop. Sysops remains an ordinary shell account.
+Selected CLI-capable harness names are distinct locked, home-less SSH aliases.
+`login_shell.py` accepts only an interactive SSH session with no original command,
+loads the physical root-owned schema-2 policy and executes the exact alias harness
+as `agents` through a finite sudoers rule. Arbitrary commands, SFTP, forwarding,
+tunnels, user rc and direct `agents` SSH are denied. Alias UIDs remain distinct and
+receive neither Docker membership nor runtime policy ownership. Sysops remains a
+separate administrative shell account.
 
 ## 🧪 Verification and remaining acceptance
 

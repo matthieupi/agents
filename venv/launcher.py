@@ -41,33 +41,44 @@ def path_value(value):
 
 
 def requested_interface(policy: dict, harness: str, interface: str) -> bool:
-    """Project an optional capability request without changing legacy policy."""
-    spec = policy['harnesses'][harness]
-    requested = spec.get('requested_interfaces')
-    return bool(spec.get(interface)) if requested is None else requested[interface]
+    """Return the required canonical interface projection."""
+    return policy['harnesses'][harness]['requested_interfaces'][interface]
 
 
-def capability_aware(policy: dict) -> bool:
-    return any('requested_interfaces' in spec for spec in policy['harnesses'].values())
+def harness_account(policy: dict, harness: str) -> str:
+    account = policy['harnesses'][harness]['account']
+    require(account == policy['execution_account'] and account in policy['accounts'],
+            f'{harness}: shared execution account is not enrolled')
+    return account
 
 
 def validate_policy(policy: dict) -> None:
     require(isinstance(policy, dict), "Policy mapping required")
-    require(policy.get("schema") in (1, 2) and policy.get("scope") == "vm", "VM policy required")
-    ondemand = policy['schema'] == 2
+    required_keys = {
+        'schema', 'scope', 'docker_access', 'web_ready', 'target',
+        'default_harness', 'workspace', 'container_workspace', 'services_root',
+        'resources', 'socket', 'network', 'cgroup_parent', 'web',
+        'execution_account', 'command', 'ssh_aliases', 'accounts', 'harnesses',
+    }
+    optional_keys = {'resource_budget', 'shared_runtime', 'resource_container_origins', 'worktree'}
+    require(required_keys <= set(policy) and not set(policy) - required_keys - optional_keys,
+            'Exact current VM policy fields required')
+    require(policy.get("schema") == 2 and policy.get("scope") == "vm", "Current VM policy schema required")
     require(policy.get("docker_access") is True, "Explicit VM-root Docker authorization required")
+    execution_account = policy.get('execution_account')
+    require(isinstance(execution_account, str) and re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', execution_account)
+            and execution_account != 'root', 'Explicit non-root shared execution account required')
+    path_value(policy.get('command'))
     require(type(policy.get("web_ready")) is bool, "Explicit frontend readiness required")
     if policy.get("web_ready") or "web" in policy:
         web = policy.get("web", {})
-        require(set(web) in ({"default_harness", "default_account", "base_hostname"},
-                            {"default_harness", "default_account", "base_hostname", "default_hostname"}), "Public frontend web routing fields required; no secrets")
+        require(set(web) in ({"default_harness", "base_hostname"},
+                             {"default_harness", "base_hostname", "default_hostname"}), "Public frontend web routing fields required; no secrets")
         if 'default_hostname' in web:
             require(isinstance(web['default_hostname'], str) and
                     re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*\.' + re.escape(web['base_hostname']), web['default_hostname'])
                     and web['default_hostname'].split('.')[0] not in ('pi', 'opencode', 't3'), 'Invalid independent default hostname')
-        require(web["default_account"] in policy.get("accounts", {}), "Enrolled default web owner required")
-        require(web['default_harness'] in (None, 'native-pi', 'pi', 'opencode', 't3') if ondemand
-                else web['default_harness'] == 'pi', 'Invalid web default')
+        require(web['default_harness'] in (None, 'pi', 'opencode', 't3'), 'Invalid web default')
         require(re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)+", web["base_hostname"]), "Invalid base hostname")
     require(re.fullmatch(r"[a-z0-9-]+:[a-z0-9-]+", policy.get("target", "")), "Exact target required")
     require(set(policy.get("harnesses", {})) == HARNESSES, "All four independent harnesses required")
@@ -76,46 +87,50 @@ def validate_policy(policy: dict) -> None:
     workspace, resources = Path(policy['workspace']), Path(policy['resources'])
     require(workspace != resources and workspace not in resources.parents and resources not in workspace.parents,
             "Shared binds must not overlap")
-    require(('container_workspace' in policy) == ('services_root' in policy), 'Complete optional mount extension required')
-    if 'container_workspace' in policy:
-        require(path_value(policy['container_workspace']) == workspace, 'Identical VM/container workspace required')
-        services = path_value(policy['services_root'])
-        require(workspace != services and workspace not in services.parents and services not in workspace.parents,
-                'Workspace and services must differ')
-        require(resources != services and services in resources.parents, 'Resources must be a narrow services subtree')
-    if 'legacy_workspace' in policy:
-        legacy = path_value(policy['legacy_workspace'])
-        require('services_root' in policy and legacy != workspace and workspace not in legacy.parents
-                and legacy not in workspace.parents, 'Distinct legacy workspace alias required')
-        require(legacy != resources and legacy not in resources.parents and resources not in legacy.parents,
-                'Legacy workspace must not overlap resources')
+    require(path_value(policy['container_workspace']) == workspace, 'Identical VM/container workspace required')
+    services = path_value(policy['services_root'])
+    require(workspace != services and workspace not in services.parents and services not in workspace.parents,
+            'Workspace and services must differ')
+    require(resources != services and services in resources.parents, 'Resources must be a narrow services subtree')
+    if 'worktree' in policy:
+        worktree = path_value(policy['worktree'])
+        require(all(worktree != path and worktree not in path.parents and path not in worktree.parents
+                    for path in (workspace, resources, services)),
+                'Worktree must not overlap other shared binds')
     shared = [Path(source) for source, _, _ in shared_mounts(policy)]
     require(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]+", policy["network"])
             and policy["network"] not in ("host", "none", "container", "bridge"), "Dedicated bridge required")
     require(policy.get('cgroup_parent') == 'venv-agents.slice', "Shared bounded VM cgroup required")
     ports = []
     for name, spec in policy["harnesses"].items():
-        require((ondemand and 'image' in spec and spec['image'] is None)
-                or (isinstance(spec.get('image'), str) and IMAGE.fullmatch(spec['image'])),
+        expected_spec = {'memory_mb', 'cpus', 'pids', 'image', 'cli', 'web',
+                         'requested_interfaces', 'account'}
+        if name != 'omp':
+            expected_spec |= {'hostname', 'port', 'container_port'}
+        require(set(spec) == expected_spec, f'{name}: exact harness policy fields required')
+        require(spec.get('image') is None or (isinstance(spec.get('image'), str) and IMAGE.fullmatch(spec['image'])),
                 f"{name}: verified immutable image or explicit uninstalled null required")
-        if ondemand and spec['image'] is not None:
+        if spec['image'] is not None:
             require(re.fullmatch(r'sha256:[a-f0-9]{64}', spec['image']), 'On-demand installations require local image IDs')
         require(type(spec["memory_mb"]) is int and 128 <= spec["memory_mb"] <= (4096 if 'resource_budget' in policy else 1024), "Bounded memory limit required")
         require(type(spec["cpus"]) in (int, float) and 0 < spec["cpus"] <= (4 if 'resource_budget' in policy else 2), "CPU limit required")
         require(type(spec["pids"]) is int and 16 <= spec["pids"] <= 512, "PID limit required")
-        path_value(spec["home"])
         for command in ("cli", "web"):
             argv = spec.get(command, [])
             require(isinstance(argv, list) and all(isinstance(a, str) and a and not any(ord(c) < 32 for c in a) for a in argv), "Invalid command array")
-        if 'requested_interfaces' in spec:
-            requested = spec['requested_interfaces']
-            require(isinstance(requested, dict) and set(requested) == {'cli', 'web'}
-                    and all(type(requested[key]) is bool for key in ('cli', 'web')),
-                    f'{name}: requested interfaces must be exact cli/web booleans')
-            for interface in ('cli', 'web'):
-                require(not requested[interface] or bool(spec.get(interface)),
-                        f'{name}: requested {interface} interface is unsupported')
-        require(name == 't3' or spec["cli"], f"{name}: CLI command required")
+        requested = spec.get('requested_interfaces')
+        require(isinstance(requested, dict) and set(requested) == {'cli', 'web'}
+                and all(type(requested[key]) is bool for key in ('cli', 'web')),
+                f'{name}: requested interfaces must be exact cli/web booleans')
+        for interface in ('cli', 'web'):
+            require(requested[interface] == bool(spec.get(interface)) if any(requested.values()) else not requested[interface],
+                    f'{name}: requested interfaces must match maintained capabilities')
+        account = spec.get('account')
+        require((account == execution_account and account in policy.get('accounts', {})) if any(requested.values())
+                else account is None, f'{name}: explicit selected harness ownership required')
+        require(any(requested.values()) or spec['image'] is None,
+                f'{name}: an unselected harness cannot retain an image')
+        require(bool(spec.get('cli')) == (name != 't3'), f"{name}: exact CLI support required")
         for command in ('cli', 'web'):
             if spec.get(command):
                 path_value(spec[command][0])
@@ -130,31 +145,13 @@ def validate_policy(policy: dict) -> None:
     require(len(ports) == len(set(ports)), "Web ports must be distinct")
     images = [s['image'] for s in policy['harnesses'].values() if s['image'] is not None]
     require(len(set(images)) == len(images), "Harness images must remain independent")
-    if ondemand:
-        require('default_harness' in policy and 'web' in policy, 'Explicit CLI/web defaults required')
-        default = policy['default_harness']
-        require(default in (None, 'native-pi', *HARNESSES), 'Invalid default harness')
-        web_default = policy['web']['default_harness']
-        if capability_aware(policy):
-            require(default in (None, 'native-pi') or
-                    (installed(policy, default) and requested_interface(policy, default, 'cli')),
-                    'CLI default must be installed with its CLI interface requested')
-            require(web_default in (None, 'native-pi') or
-                    (installed(policy, web_default) and requested_interface(policy, web_default, 'web')),
-                    'Web default must be installed with its web interface requested')
-        else:
-            require((not images and default in (None, 'native-pi')) or
-                    (default in HARNESSES and installed(policy, default)), 'Default must be installed; native is initial only')
-            require(web_default == (None if default == 'omp' else default),
-                    'CLI/web defaults must agree; OMP has explicitly no web default')
-        if default == 'native-pi' or web_default == 'native-pi':
-            argv = policy.get('native_pi', {}).get('cli')
-            require(isinstance(argv, list) and argv and all(isinstance(a, str) and a and '\x00' not in a for a in argv),
-                    'Explicit native Pi CLI required')
-            path_value(argv[0])
-    elif capability_aware(policy):
-        require(requested_interface(policy, 'pi', 'cli') and requested_interface(policy, 'pi', 'web'),
-                'Schema-1 fixed Pi defaults require requested CLI and web interfaces')
+    require('default_harness' in policy and 'web' in policy, 'Explicit CLI/web defaults required')
+    default = policy['default_harness']
+    require(default is None or (default in HARNESSES and installed(policy, default)
+            and requested_interface(policy, default, 'cli')), 'CLI default must be installed and CLI-capable')
+    web_default = policy['web']['default_harness']
+    require(web_default is None or (web_default in HARNESSES and installed(policy, web_default)
+            and requested_interface(policy, web_default, 'web')), 'Web default must be installed and web-capable')
     if 'resource_budget' in policy:
         budget = policy['resource_budget']
         require(isinstance(budget, dict) and set(budget) == {'memory_max_mb', 'cpu_quota_percent', 'tasks_max', 'full_containers', 'spare_mb'}, 'Explicit shared resource budget required')
@@ -167,19 +164,26 @@ def validate_policy(policy: dict) -> None:
     resource_validate_origins(policy)
     require(policy.get("accounts"), "Explicit account policy required")
     for account, spec in policy["accounts"].items():
+        require(set(spec) == {'uid', 'gid', 'state', 'home', 'home_mounted', 'autoentry'},
+                'Exact shared account policy fields required')
         require(re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", account) and account != "root", "Non-root account required")
         require(type(spec["uid"]) is int and 0 < spec["uid"] < 2**32 - 1 and type(spec["gid"]) is int and 0 < spec["gid"] < 2**32 - 1, "Discovered nonzero UID/GID required")
         path_value(spec["state"])
+        path_value(spec["home"])
+        require(type(spec.get('home_mounted')) is bool, 'Explicit account HOME mount policy required')
         state = Path(spec["state"])
-        if 'native_pi_home' in spec:
-            native = path_value(spec['native_pi_home'])
-            for source in (*shared, state):
-                require(native != source and native not in source.parents and source not in native.parents,
-                        "Native Pi HOME must not overlap state/shared binds")
         for source in shared:
             require(state != source and state not in source.parents and source not in state.parents, "Private state must not overlap shared binds")
-        require(spec.get("autoentry") in (None, *HARNESSES, *(('default',) if ondemand else ())), "Invalid autoentry")
-        require(account != "sysops" or spec.get("autoentry") is None, "Sysops must retain ordinary shell")
+        require(spec.get("autoentry") == 'default', "Shared execution account requires default autoentry")
+        require(account == execution_account, "Administrative and alias accounts are excluded from runtime policy")
+    selected_accounts = {spec['account'] for spec in policy['harnesses'].values() if spec['account'] is not None}
+    require(set(policy['accounts']) == selected_accounts == {execution_account},
+            'Policy must contain only the shared execution account')
+    aliases = policy.get('ssh_aliases')
+    expected_aliases = {name: name for name, spec in policy['harnesses'].items()
+                        if spec['account'] is not None and requested_interface(policy, name, 'cli')}
+    require(isinstance(aliases, dict) and aliases == expected_aliases and execution_account not in aliases,
+            'SSH aliases must exactly match selected CLI-capable harnesses')
     require(len({s["uid"] for s in policy["accounts"].values()}) == len(policy["accounts"]), "Accounts must have distinct UIDs")
     states = [Path(s['state']) for s in policy['accounts'].values()]
     require(all(a != b and a not in b.parents and b not in a.parents
@@ -195,6 +199,8 @@ def shared_module(policy):
     require(stat.S_ISREG(protected(path).st_mode) and path.name == 'shared.py'
             and hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256'], 'Unsealed shared adapter refused')
     spec = importlib.util.spec_from_file_location('venv_shared_runtime', path)
+    if spec is None or spec.loader is None:
+        raise ValueError('Cannot load protected shared adapter')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -238,15 +244,6 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
     user = policy['accounts'][account]
     require((os.getuid(), os.getgid()) == (user['uid'], user['gid']), 'Account identity drift')
     default = policy['web']['default_harness'] if web else policy.get('default_harness', 'pi')
-    if default == 'native-pi':
-        if web:
-            require(not arguments and policy['web_ready'], 'Prepared native frontend required')
-            print(f'https://{policy["web"].get("default_hostname", policy["web"]["base_hostname"])}/ (native Pi)')
-            return 0
-        command = policy['native_pi']['cli']
-        # Preserve native package-bin symlinks. Only the verified non-root caller
-        # executes this existing installation; root never executes guest code.
-        return subprocess.call([*command, *arguments])
     require(default is not None, 'No web default (CLI-only install)' if web else 'No harness installed; run make pi|omp|opencode|t3')
     result = run_session(policy, default, web, arguments)
     if web and result == 0 and 'default_hostname' in policy['web']:
@@ -257,7 +254,8 @@ def run_default(policy: dict, web: bool, arguments: list[str]) -> int:
 def session_command(policy: dict, harness: str, account: str, web: bool,
                     arguments: list[str], tty: bool) -> list[str]:
     validate_policy(policy)
-    require(harness in HARNESSES and account in policy["accounts"], "Account/harness not enrolled")
+    require(harness in HARNESSES and account == harness_account(policy, harness),
+            "Only the shared execution account may launch a selected harness")
     require(installed(policy, harness), f'{harness} is not installed; run make {harness} in the deployed agents-source/venv directory')
     require(requested_interface(policy, harness, 'web' if web else 'cli'),
             f'{harness}: requested {"web" if web else "CLI"} interface is disabled')
@@ -284,6 +282,10 @@ def session_command(policy: dict, harness: str, account: str, web: bool,
                "--memory", f'{spec["memory_mb"]}m', "--memory-swap", f'{spec["memory_mb"]}m',
                "--cpus", str(spec["cpus"]), "--pids-limit", str(spec["pids"]),
                "--workdir", policy.get("container_workspace", policy['workspace']), "--env", "HOME=" + container_home,
+               "--env", "XDG_CONFIG_HOME=" + str(Path(container_home) / '.config'),
+               "--env", "XDG_DATA_HOME=" + str(Path(container_home) / '.local/share'),
+               "--env", "XDG_STATE_HOME=" + str(Path(container_home) / '.local/state'),
+               "--env", "XDG_CACHE_HOME=" + str(Path(container_home) / '.cache'),
                "--env", "USER=" + account, "--env", "LOGNAME=" + account,
                "--env", "VENV_AGENT_RESOURCES=" + policy['resources'],
                "--mount", f'type=bind,src={source_home},dst={container_home}',
@@ -315,23 +317,19 @@ def session_command(policy: dict, harness: str, account: str, web: bool,
 
 
 def shared_mounts(policy: dict) -> list[tuple[str, str, bool]]:
-    """Optional schema-2 extension; absent fields retain the exact legacy contract."""
+    """Return the exact current shared mount contract."""
     result = [(policy['workspace'], policy.get('container_workspace', policy['workspace']), True)]
+    if 'worktree' in policy:
+        result.append((policy['worktree'], policy['worktree'], True))
     if 'services_root' in policy:
         result.append((policy['services_root'], policy['services_root'], True))
-    if 'legacy_workspace' in policy and not Path(policy['legacy_workspace']).is_relative_to(policy['services_root']):
-        result.append((policy['legacy_workspace'], policy['legacy_workspace'], True))
     result.append((policy['resources'], policy['resources'], False))
     return result
 
 
 def home_mount(policy: dict, harness: str, account: str) -> tuple[str, str]:
     user = policy['accounts'][account]
-    if harness == 'pi' and user.get('native_pi_home'):
-        source_home = container_home = user['native_pi_home']
-    else:
-        source_home = str(Path(user['state']) / harness / 'home')
-        container_home = policy['harnesses'][harness]['home']
+    source_home = container_home = user['home']
     home = Path(container_home)
     for source in [Path(p) for p, _, _ in shared_mounts(policy)] + [Path(policy['socket'])]:
         require(home != source and home not in source.parents and source not in home.parents,
@@ -354,7 +352,7 @@ def web_name(policy: dict, harness: str) -> str:
 
 def web_contract(policy: dict, harness: str, account: str) -> str:
     data = {k: policy[k] for k in ('target', 'workspace', 'resources', 'socket', 'network', 'cgroup_parent')}
-    data.update({k: policy[k] for k in ('container_workspace', 'services_root', 'legacy_workspace') if k in policy})
+    data.update({k: policy[k] for k in ('container_workspace', 'services_root', 'worktree') if k in policy})
     data.update(spec=policy['harnesses'][harness], account=account, user=policy['accounts'][account])
     if shared_selected(policy, harness):
         data['shared_runtime'] = policy['shared_runtime']['images'][harness][policy['harnesses'][harness]['image']]
@@ -383,12 +381,13 @@ def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
         return shared_module(policy).inspect_instance(shared_host(), policy, harness, instance)
     labels = instance['Config'].get('Labels') or {}
     owner = labels.get('io.venv-agents.account')
-    require(owner in policy['accounts'], 'Foreign web container; no takeover')
+    require(isinstance(owner, str) and owner == harness_account(policy, harness),
+            'Foreign web container; no takeover')
+    if not isinstance(owner, str):
+        raise ValueError('Foreign web container; no takeover')
     user, spec = policy['accounts'][owner], policy['harnesses'][harness]
     record = pwd.getpwnam(owner)
     require((record.pw_uid, record.pw_gid) == (user['uid'], user['gid']), 'Web owner identity drift')
-    if harness == 'pi' and user.get('native_pi_home'):
-        require(record.pw_dir == user['native_pi_home'], 'Native Pi web owner HOME drift')
     require(instance['Name'] == '/' + web_name(policy, harness), 'Web container name drift')
     for key, value in {'target': policy['target'], 'harness': harness, 'mode': 'web',
                        'uid': str(user['uid']), 'gid': str(user['gid']),
@@ -418,7 +417,10 @@ def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
     source, destination = home_mount(policy, harness, owner)
     environment = dict(value.split('=', 1) for value in config.get('Env', []) if '=' in value)
     require(all(environment.get(k) == v for k, v in {
-        'HOME': destination, 'USER': owner, 'LOGNAME': owner,
+        'HOME': destination, 'XDG_CONFIG_HOME': destination + '/.config',
+        'XDG_DATA_HOME': destination + '/.local/share',
+        'XDG_STATE_HOME': destination + '/.local/state',
+        'XDG_CACHE_HOME': destination + '/.cache', 'USER': owner, 'LOGNAME': owner,
         'VENV_AGENT_RESOURCES': policy['resources'], 'VENV_AGENT_PORT': str(spec['container_port']),
         'DOCKER_HOST': 'unix://' + policy['socket']}.items()), 'Web environment drift')
     if harness == 'pi':
@@ -427,7 +429,7 @@ def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
         require(all(environment.get(k) == v for k, v in {
             'T3CODE_UID': str(user['uid']), 'T3CODE_GID': str(user['gid']),
             'T3CODE_PORT': str(spec['container_port']), 'T3CODE_PROVIDER': 'none'}.items()),
-            'T3 native environment drift')
+            'T3 runtime environment drift')
     expected = set(shared_mounts(policy)) | {(source, destination, True), (policy['socket'], policy['socket'], True)}
     actual = {(m['Source'], m['Destination'], m['RW']) for m in instance['Mounts'] if m['Type'] == 'bind'}
     require(actual == expected and len(instance['Mounts']) == len(expected), 'Web private/shared mount drift')
@@ -444,7 +446,8 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
     require(harness in HARNESSES - {'omp'} and (policy['web_ready'] or action != 'start'),
             'Authenticated frontend not enrolled; web blocked')
     account = pwd.getpwuid(os.getuid()).pw_name
-    require(os.getuid() > 0 and account in policy['accounts'], 'Enrolled non-root account required')
+    require(os.getuid() > 0 and account == harness_account(policy, harness),
+            'Web must run as the shared execution account')
     user = policy['accounts'][account]
     require((os.getuid(), os.getgid()) == (user['uid'], user['gid']), 'Account identity drift')
     validate_socket(Path(policy['socket']))
@@ -472,8 +475,6 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
     if action != 'start':
         print('No managed web instance')
         return 0
-    require((harness != 'pi' and harness != policy['web']['default_harness']) or account == policy['web']['default_account'],
-            'Default Pi web must retain the policy legacy owner; no private-state replacement')
     # No other account's state is read or prepared on the existing-instance path.
     validate_runtime(policy, harness, account, web=True)
     state = Path(user['state']) / harness
@@ -532,8 +533,9 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
     """
     validate_policy(policy)
     require(not web or (policy['web_ready'] and harness != 'omp'), 'Authenticated frontend not enrolled; web blocked')
-    require(os.getuid() > 0 and account in policy["accounts"], "Run as an enrolled non-root account")
     require(harness in HARNESSES, "Unknown harness")
+    require(os.getuid() > 0 and account == harness_account(policy, harness),
+            "Run as the shared execution account")
     require(installed(policy, harness), f'{harness} is not installed; run make {harness}')
     require(requested_interface(policy, harness, 'web' if web else 'cli'),
             f'{harness}: requested {"web" if web else "CLI"} interface is disabled')
@@ -543,19 +545,20 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
     require((os.getuid(), os.getgid()) == (user["uid"], user["gid"]), "Account identity drift")
     home = path_value(record.pw_dir)
     require(stat.S_ISDIR(protected(home, owner=os.getuid()).st_mode), "Account HOME must be a directory")
-    if user.get('native_pi_home'):
-        require(Path(user['native_pi_home']) == home and home.stat().st_gid == os.getgid(), 'Native Pi HOME identity/path drift')
+    require(not user['home_mounted'] or os.path.ismount(home), 'Required persistent account HOME is not mounted')
     account_homes = [path_value(pwd.getpwnam(name).pw_dir) for name in policy['accounts']]
-    for key in ("workspace", "resources"):
+    for key in ("workspace", "worktree", "resources"):
+        if key not in policy:
+            continue
         path = path_value(policy[key])
         require(path.resolve(strict=True) == path and path.is_dir(), "Existing physical bind directory required")
         require(all(path != h and path not in h.parents for h in account_homes), "Do not mount an account home or its ancestors")
-        require(os.access(path, os.R_OK | os.X_OK | (os.W_OK if key == 'workspace' else 0)), "Account cannot access required bind")
+        require(os.access(path, os.R_OK | os.X_OK | (os.W_OK if key in ('workspace', 'worktree') else 0)), "Account cannot access required bind")
     validate_socket(Path(policy['socket']))
     state = Path(user["state"]) / harness
     home_mount(policy, harness, account)
-    homes = () if harness == 'pi' and user.get('native_pi_home') else (state / 'home',)
-    for path in (Path(user['state']), state, *homes):
+    require(Path(user['home']) == home, 'Policy and NSS HOME drift')
+    for path in (Path(user['state']), state):
         info = protected(path, owner=os.getuid(), private=True)
         require(stat.S_ISDIR(info.st_mode) and info.st_gid == os.getgid(), "Private state/HOME must be matching UID/GID directories")
         require(os.access(path, os.R_OK | os.W_OK | os.X_OK), "Private directory is inaccessible")
@@ -575,7 +578,7 @@ def run_session(policy: dict, harness: str, web: bool, arguments: list[str]) -> 
     require(harness in HARNESSES, 'Unknown harness')
     if web:
         require(requested_interface(policy, harness, 'web'), f'{harness}: requested web interface is disabled')
-    elif capability_aware(policy):
+    else:
         require(requested_interface(policy, harness, 'cli'), f'{harness}: requested CLI interface is disabled')
     if web or harness == 't3':
         require(not arguments, 'T3/web entry accepts no app arguments; T3 is web-oriented')
@@ -669,7 +672,8 @@ def check_image(policy: dict, harness: str, image: str) -> None:
         return shared_module(policy).check_image(shared_host(), policy, harness, image)
     result = docker_call(policy, ['image', 'inspect', '--format', '{{.Id}}', image])
     require(result.returncode == 0 and result.stdout.strip() == image, 'Exact image must exist in local Docker store')
-    user = policy['accounts'][policy['web']['default_account']]
+    account = harness_account(policy, harness)
+    user = policy['accounts'][account]
     executable = {'pi': '/opt/pi/runtime/node_modules/.bin/pi', 'omp': '/usr/local/bin/omp',
                   'opencode': '/opt/opencode/component/.runtime/bin/opencode',
                   't3': '/opt/t3/runtime/node_modules/.bin/t3'}[harness]
@@ -689,6 +693,25 @@ def check_image(policy: dict, harness: str, image: str) -> None:
     finally:
         require(docker_call(policy, ['container', 'rm', '--force', container]).returncode == 0,
                 'Failed to remove exact version-check container; no activation')
+
+
+def validate_image_install(previous: dict, candidate: dict, harness: str) -> None:
+    """Admit only one current-policy first image and its interface-valid defaults."""
+    require(harness in HARNESSES, 'Invalid image-install harness')
+    validate_policy(previous)
+    validate_policy(candidate)
+    require(previous['harnesses'][harness]['image'] is None,
+            'Image-install journal must begin with an uninstalled harness')
+    image = candidate['harnesses'][harness]['image']
+    require(isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image),
+            'Image-install journal requires one local immutable image ID')
+    expected = copy.deepcopy(previous)
+    expected['harnesses'][harness]['image'] = image
+    if previous['default_harness'] is None and requested_interface(candidate, harness, 'cli'):
+        expected['default_harness'] = harness
+    if previous['web']['default_harness'] is None and requested_interface(candidate, harness, 'web'):
+        expected['web']['default_harness'] = harness
+    require(expected == candidate, 'Image-install journal changes fields outside the selected image/defaults')
 
 
 def activate(harness: str, image: str) -> int:
@@ -719,54 +742,46 @@ def activate(harness: str, image: str) -> int:
         require(requested_interface(policy, harness, 'cli') or requested_interface(policy, harness, 'web'),
                 f'{harness}: activation refused because all requested interfaces are disabled')
         account = os.environ.get('SUDO_USER', '')
-        require(account in policy['accounts'], 'Enrolled sudo caller required')
+        require(account == harness_account(policy, harness), 'Harness activation requires the shared execution account')
         user = policy['accounts'][account]
         record = pwd.getpwnam(account)
         require(os.environ.get('SUDO_UID') == str(user['uid']) and
                 (record.pw_uid, record.pw_gid) == (user['uid'], user['gid']), 'Sudo caller identity drift')
+        requested = policy['harnesses'][harness]['requested_interfaces']
+        command_backed = {interface: bool(policy['harnesses'][harness].get(interface))
+                          for interface in ('cli', 'web')}
+        require(requested == command_backed,
+                'Requested interfaces differ from promoted protected controls')
         if 'shared_runtime' in policy:
-            requested = policy['harnesses'][harness].get('requested_interfaces')
-            command_backed = {interface: bool(policy['harnesses'][harness].get(interface))
-                              for interface in ('cli', 'web')}
-            require(requested is None or requested == command_backed,
-                    'Partial-interface shared activation requires promoted capability-aware protected controls')
             return shared_module(policy).activate(shared_host(), config, policy, harness, image, fd)
-        pending = POLICY.with_name('activation-pending.json')
+        pending = POLICY.with_name('image-install.json')
         candidate_path = POLICY.with_name('activation-candidate.json')
         if pending.exists() or pending.is_symlink():
-            require(stat.S_ISREG(protected(pending, private=True).st_mode), 'Private activation journal required')
+            require(stat.S_ISREG(protected(pending, private=True).st_mode), 'Private image-install journal required')
             transaction = json.loads(pending.read_text())
             require(set(transaction) == {'harness', 'previous', 'candidate'} and transaction['harness'] in HARNESSES,
-                    'Invalid activation journal')
-            validate_policy(transaction['previous'])
-            validate_policy(transaction['candidate'])
-            require(policy in (transaction['previous'], transaction['candidate']), 'Policy drift during interrupted activation')
-            if policy == transaction['previous']:
-                atomic_json(candidate_path, transaction['candidate'])
-                activation_gateway(config, 'install-rollback', transaction, lock_fd=fd)
-            # A matching candidate policy is the durable commit point. Do not
-            # undo it if killed after atomic publication but before journal unlink.
+                    'Invalid image-install journal')
+            validate_image_install(transaction['previous'], transaction['candidate'], transaction['harness'])
+            require(policy in (transaction['previous'], transaction['candidate']), 'Policy drift during interrupted image install')
+            atomic_json(candidate_path, transaction['candidate'])
+            phase = 'install-rollback' if policy == transaction['previous'] else 'install-finalize'
+            activation_gateway(config, phase, transaction, lock_fd=fd)
             pending.unlink()
         if candidate_path.exists() or candidate_path.is_symlink():
             require(stat.S_ISREG(protected(candidate_path).st_mode), 'Protected candidate file required')
             candidate_path.unlink()
         if installed(policy, harness):
             require(policy['harnesses'][harness]['image'] == image,
-                    'Installed image replacement requires a separate reviewed upgrade; state preserved')
+                    'Installed image replacement requires protected shared-runtime controls')
             print(f'{harness} already installed; defaults unchanged')
             return 0
         candidate = copy.deepcopy(policy)
         candidate['harnesses'][harness]['image'] = image
-        if capability_aware(policy):
-            if policy['default_harness'] in (None, 'native-pi') and requested_interface(policy, harness, 'cli'):
-                candidate['default_harness'] = harness
-            if (policy['web']['default_harness'] in (None, 'native-pi') and
-                    requested_interface(policy, harness, 'web')):
-                candidate['web']['default_harness'] = harness
-        elif policy['default_harness'] in (None, 'native-pi'):
+        if policy['default_harness'] is None and requested_interface(policy, harness, 'cli'):
             candidate['default_harness'] = harness
-            candidate['web']['default_harness'] = None if harness == 'omp' else harness
-        validate_policy(candidate)
+        if policy['web']['default_harness'] is None and requested_interface(policy, harness, 'web'):
+            candidate['web']['default_harness'] = harness
+        validate_image_install(policy, candidate, harness)
         check_image(candidate, harness, image)
         transaction = dict(harness=harness, previous=policy, candidate=candidate)
         atomic_json(pending, transaction, 0o600)
@@ -774,12 +789,9 @@ def activate(harness: str, image: str) -> int:
             atomic_json(candidate_path, candidate)
             activation_gateway(config, 'install-check', transaction, lock_fd=fd)
             activation_gateway(config, 'install-commit', transaction, lock_fd=fd)
-            # Gateway work must not have changed policy under this transaction.
-            require(load_policy(POLICY) == policy, 'Policy changed during activation')
+            require(load_policy(POLICY) == policy, 'Policy changed during image install')
             atomic_json(POLICY, candidate)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-            # Rename may have succeeded before fsync failed: never restore native
-            # over a published installed default. Leave journal for retry instead.
             if load_policy(POLICY) == policy:
                 activation_gateway(config, 'install-rollback', transaction, lock_fd=fd)
                 pending.unlink()
@@ -837,11 +849,11 @@ def select_default(harness: str) -> int:
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
                 and not info.st_mode & 0o077, 'Unsafe activation lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for name in ('bootstrap-pending.json', 'activation-pending.json', 'shared-replacement.json',
+        for name in ('bootstrap-pending.json', 'shared-replacement.json',
                      'shared-runtime-upgrade.json', 'resource-update-pending.json'):
             path = POLICY.with_name(name)
             require(not path.exists() and not path.is_symlink(), 'Pending maintenance blocks default selection')
-        for name in ('resource-migration.json', 'workspace-migration.json'):
+        for name in ('resource-migration.json',):
             path = POLICY.with_name(name)
             if path.exists() or path.is_symlink():
                 require(stat.S_ISREG(protected(path, private=True).st_mode), 'Protected migration journal required')
@@ -871,15 +883,9 @@ def select_default(harness: str) -> int:
             require(not candidate_path.exists() and not candidate_path.is_symlink(), 'Unowned activation candidate blocks selection')
         require(installed(policy, harness), 'Selected default must already be installed')
         candidate = copy.deepcopy(policy)
-        if capability_aware(policy):
-            require(requested_interface(policy, harness, 'cli') or requested_interface(policy, harness, 'web'),
-                    'Selected harness has no requested default interface')
-            if requested_interface(policy, harness, 'cli'):
-                candidate['default_harness'] = harness
-            if requested_interface(policy, harness, 'web'):
-                candidate['web']['default_harness'] = harness
-        else:
-            candidate['default_harness'] = candidate['web']['default_harness'] = harness
+        require(requested_interface(policy, harness, 'cli') and requested_interface(policy, harness, 'web'),
+                'Routing default must provide both CLI and web')
+        candidate['default_harness'] = candidate['web']['default_harness'] = harness
         validate_policy(candidate)
         transaction = dict(harness=harness, previous=policy, candidate=candidate)
         atomic_json(pending, transaction, 0o600)
@@ -941,16 +947,14 @@ def _resource_dispatch(argv: list[str] | None = None) -> int:
             policy = json.load(sys.stdin)
             validate_policy(policy)
             if argv == ['validate-runtime']:
+                account = pwd.getpwuid(os.getuid()).pw_name
+                require(account == policy['execution_account'], 'Shared execution caller required')
                 for harness in sorted(HARNESSES):
                     if installed(policy, harness):
-                        account = pwd.getpwuid(os.getuid()).pw_name
-                        if 'requested_interfaces' not in policy['harnesses'][harness]:
+                        if requested_interface(policy, harness, 'cli'):
                             validate_runtime(policy, harness, account)
-                        else:
-                            if requested_interface(policy, harness, 'cli'):
-                                validate_runtime(policy, harness, account)
-                            if requested_interface(policy, harness, 'web'):
-                                validate_runtime(policy, harness, account, web=True)
+                        if requested_interface(policy, harness, 'web'):
+                            validate_runtime(policy, harness, account, web=True)
             return 0
         except (OSError, ValueError, KeyError, TypeError) as error:
             print(f"venv-agents: {error}", file=sys.stderr)

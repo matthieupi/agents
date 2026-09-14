@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def load(name):
     spec = importlib.util.spec_from_file_location('vm_' + name, ROOT / (name + '.py'))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'cannot load {name} fixture')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -29,17 +31,23 @@ def load(name):
 runtime, entry = load('launcher'), load('entry')
 
 
-def policy(root, account):
-    result = dict(schema=1, scope='vm', docker_access=True, target='devai:agent-coo',
-                  workspace=str(root / 'workspace'), resources=str(root / 'resources'),
+def policy(root, account) -> dict:
+    result: dict = dict(schema=2, scope='vm', docker_access=True, target='devai:agent-coo',
+                   workspace=str(root / 'workspace'), container_workspace=str(root / 'workspace'),
+                   worktree=str(root / 'worktree'),
+                   services_root=str(root / 'services'), resources=str(root / 'services/agent'),
                   socket=str(root / 'docker.sock'), network='venv-agents', cgroup_parent='venv-agents.slice',
-                  web_ready=True, web=dict(default_harness='pi', default_account=account, base_hostname='coo.example.org'),
-                  accounts={account: dict(uid=os.getuid(), gid=os.getgid(), state=str(root / 'state'), autoentry=None)},
+                  web_ready=True, web=dict(default_harness='pi', base_hostname='coo.example.org'),
+                  execution_account=account, command='/usr/local/bin/venv-agents',
+                  ssh_aliases={name: name for name in ('pi', 'omp', 'opencode')},
+                  accounts={account: dict(uid=os.getuid(), gid=os.getgid(), home=str(root / 'home'),
+                                         home_mounted=True, state=str(root / 'state'), autoentry='default')},
+                  default_harness='pi',
                   harnesses={})
     for i, name in enumerate(sorted(runtime.HARNESSES)):
         spec = dict(image='sha256:' + str(i + 1) * 64, memory_mb=512, cpus=0.5, pids=128,
-                    home='/home/t3code' if name == 't3' else '/home/vm-' + name,
-                    cli=[] if name == 't3' else ['/usr/bin/python3', '/opt/venv/entry.py', name])
+                    cli=[] if name == 't3' else ['/usr/bin/python3', '/opt/venv/entry.py', name],
+                    requested_interfaces={'cli': name != 't3', 'web': name != 'omp'}, account=account)
         if name != 'omp':
             spec.update(web=['/usr/bin/python3', '/opt/venv/entry.py', name, '--web'], port=4100 + i,
                         container_port=5100 + i, hostname=name + '.coo.example.org')
@@ -117,7 +125,7 @@ class RuntimeTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.account = pwd.getpwuid(os.getuid()).pw_name
         self.data = policy(self.root, self.account)
-        for relative in ['workspace', 'resources', 'state', *[f'state/{h}/home' for h in runtime.HARNESSES]]:
+        for relative in ['workspace', 'worktree', 'services/agent', 'home', 'state', *[f'state/{h}' for h in runtime.HARNESSES]]:
             (self.root / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
         for h in runtime.HARNESSES:
             (self.root / 'state' / h).chmod(0o700)
@@ -179,22 +187,6 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.run_web(self.data, 'pi')
             self.assertEqual(len(self.docker.calls), before + 1)
-
-    def test_other_account_can_report_but_not_stop_or_replace_state(self):
-        other = 'vmother'
-        user = dict(uid=12345, gid=12345, state=str(self.root / 'other-state'), autoentry=None)
-        self.data['accounts'][other] = user
-        getpwnam = pwd.getpwnam
-        with patch.object(runtime.pwd, 'getpwnam', side_effect=lambda n: SimpleNamespace(pw_uid=12345, pw_gid=12345, pw_dir='/home/vmother') if n == other else getpwnam(n)):
-            args = runtime.session_command(self.data, 'opencode', other, True, [], False)
-            self.docker.call(self.data, args[3:])
-            self.docker.call(self.data, ['container', 'start', 'a' * 64])
-            with patch.object(runtime, 'validate_runtime') as private:
-                self.assertEqual(runtime.run_web(self.data, 'opencode'), 0)
-                private.assert_not_called()
-                with self.assertRaisesRegex(ValueError, 'Another account'):
-                    runtime.run_web(self.data, 'opencode', 'stop')
-            self.assertFalse((self.root / 'other-state').exists())
 
     def test_failed_create_never_cleans_up_foreign_id(self):
         self.docker.fail_create = True
@@ -261,36 +253,6 @@ class RuntimeTests(unittest.TestCase):
                 runtime.run_web(self.data, 'pi')
         self.assertFalse(any(c[0] == 'create' for c in self.docker.calls))
 
-    def test_native_pi_home_only_exact_identity_no_token_copy(self):
-        user = self.data['accounts'][self.account]
-        native = self.root / 'native-home'
-        native.mkdir(mode=0o750)
-        marker = native / 'auth.json'
-        marker.write_bytes(b'preserved-native-fixture')
-        user['native_pi_home'] = str(native)
-        record = SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(native))
-        with patch.object(runtime.pwd, 'getpwnam', return_value=record):
-            runtime.validate_runtime(self.data, 'pi', self.account)
-            args = self.command()
-            self.assertIn(f'type=bind,src={native},dst={native}', args)
-            self.assertIn('HOME=' + str(native), args)
-            self.assertNotIn('HOME=' + str(native), self.command('opencode'))
-            record.pw_dir = str(self.root / 'workspace')
-            with self.assertRaisesRegex(ValueError, 'Native Pi HOME'):
-                runtime.validate_runtime(self.data, 'pi', self.account)
-        self.assertEqual(marker.read_bytes(), b'preserved-native-fixture')
-        self.assertEqual(list((self.root / 'state/pi/home').iterdir()), [])
-
-    def test_native_symlink_and_shared_ancestor_are_rejected(self):
-        user = self.data['accounts'][self.account]
-        user['native_pi_home'] = self.data['workspace']
-        with self.assertRaises(ValueError):
-            runtime.validate_policy(self.data)
-        del user['native_pi_home']
-        self.data['resources'] = str(Path(pwd.getpwuid(os.getuid()).pw_dir).parent)
-        with self.assertRaises(ValueError):
-            runtime.validate_runtime(self.data, 'pi', self.account)
-
     def test_readiness_and_omp_web_block_before_docker_or_state(self):
         for ready, harness in [(False, 'pi'), (False, 'opencode'), (False, 't3'), (True, 'omp')]:
             self.data['web_ready'] = ready
@@ -311,7 +273,7 @@ class RuntimeTests(unittest.TestCase):
         for mutate in [lambda p: p['harnesses']['pi'].update(image='pi:latest'),
                        lambda p: p['accounts'][self.account].update(uid=0),
                        lambda p: p['accounts'][self.account].update(uid=2**32),
-                       lambda p: p['harnesses']['pi'].update(home=p['workspace'])]:
+                       lambda p: p['accounts'][self.account].update(home=p['workspace'])]:
             self.data = copy.deepcopy(original)
             mutate(self.data)
             with self.assertRaises(ValueError):
@@ -333,13 +295,6 @@ class RuntimeTests(unittest.TestCase):
         self.data['web_ready'] = False
         self.assertEqual(runtime.run_web(self.data, 'pi', 'stop'), 0)
         self.assertIsNone(self.docker.instance)
-
-    def test_new_pi_web_requires_legacy_owner(self):
-        self.data['accounts']['legacy'] = dict(uid=12345, gid=12345, state='/var/lib/venv/legacy', autoentry=None)
-        self.data['web']['default_account'] = 'legacy'
-        with self.assertRaisesRegex(ValueError, 'legacy owner'):
-            runtime.run_web(self.data, 'pi')
-        self.assertFalse(any(c[0] == 'create' for c in self.docker.calls))
 
     def test_t3_is_web_oriented_and_sets_native_identity(self):
         self.assertEqual(runtime.run_session(self.data, 't3', False, []), 0)
