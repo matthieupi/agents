@@ -41,13 +41,13 @@ def policy(root, account) -> dict:
                   execution_account=account, command='/usr/local/bin/venv-agents',
                   ssh_aliases={name: name for name in ('pi', 'omp', 'opencode')},
                   accounts={account: dict(uid=os.getuid(), gid=os.getgid(), home=str(root / 'home'),
-                                         home_mounted=True, state=str(root / 'state'), autoentry='default')},
+                                         home_mounted=False, state=str(root / 'state'), autoentry='default')},
                   default_harness='pi',
                   harnesses={})
     for i, name in enumerate(sorted(runtime.HARNESSES)):
         spec = dict(image='sha256:' + str(i + 1) * 64, memory_mb=512, cpus=0.5, pids=128,
                     cli=[] if name == 't3' else ['/usr/bin/python3', '/opt/venv/entry.py', name],
-                    requested_interfaces={'cli': name != 't3', 'web': name != 'omp'}, account=account)
+                    web=[], requested_interfaces={'cli': name != 't3', 'web': name != 'omp'}, account=account)
         if name != 'omp':
             spec.update(web=['/usr/bin/python3', '/opt/venv/entry.py', name, '--web'], port=4100 + i,
                         container_port=5100 + i, hostname=name + '.coo.example.org')
@@ -116,8 +116,25 @@ class Docker:
             return subprocess.CompletedProcess(args, status, out, error)
 
 
-class RuntimeTests(unittest.TestCase):
+class IdentityFixture(unittest.TestCase):
+    """Model a shared account distinct from aliases, retaining real kernel IDs."""
     def setUp(self):
+        super().setUp()
+        getuid, getname = pwd.getpwuid, pwd.getpwnam
+        uid = os.getuid()
+        fields = list(getuid(uid))
+        fields[0] = 'agents'
+        record = pwd.struct_passwd(fields)
+        for name, replacement in (
+                ('getpwuid', lambda value: record if value == uid else getuid(value)),
+                ('getpwnam', lambda value: record if value == 'agents' else getname(value))):
+            mocked = patch.object(pwd, name, side_effect=replacement)
+            mocked.start(); self.addCleanup(mocked.stop)
+
+
+class RuntimeTests(IdentityFixture):
+    def setUp(self):
+        super().setUp()
         if os.getuid() == 0:
             self.skipTest('real non-root fixture required')
         self.temp = tempfile.TemporaryDirectory(dir=Path.home(), prefix='vm-runtime-')
@@ -125,6 +142,14 @@ class RuntimeTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.account = pwd.getpwuid(os.getuid()).pw_name
         self.data = policy(self.root, self.account)
+        # Keep real UID/GID/path permission checks, but give this fixture its own
+        # NSS HOME rather than reading the controller's actual account HOME.
+        fields = list(pwd.getpwnam(self.account))
+        fields[5] = str(self.root / 'home')
+        record = pwd.struct_passwd(fields)
+        getname = pwd.getpwnam
+        nss = patch.object(runtime.pwd, 'getpwnam', side_effect=lambda name: record if name == self.account else getname(name))
+        nss.start(); self.addCleanup(nss.stop)
         for relative in ['workspace', 'worktree', 'services/agent', 'home', 'state', *[f'state/{h}' for h in runtime.HARNESSES]]:
             (self.root / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
         for h in runtime.HARNESSES:
@@ -163,7 +188,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('https://pi.coo.example.org/', self.output.getvalue())
 
     def test_stop_exact_id_and_preserve_home(self):
-        marker = self.root / 'state/pi/home/provider.json'
+        marker = self.root / 'home/provider.json'
         marker.write_bytes(b'private-fixture-do-not-copy')
         runtime.run_web(self.data, 'pi')
         runtime.run_web(self.data, 'pi', 'stop')
@@ -285,7 +310,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_root_web_never_reads_private_state_or_spawns_docker(self):
         with patch.object(runtime.os, 'getuid', return_value=0), patch.object(runtime, 'validate_runtime') as private:
-            with self.assertRaisesRegex(ValueError, 'non-root'):
+            with self.assertRaisesRegex(ValueError, 'shared execution account'):
                 runtime.run_web(self.data, 'pi')
             private.assert_not_called()
         self.assertEqual(self.docker.calls, [])
@@ -304,6 +329,25 @@ class RuntimeTests(unittest.TestCase):
             self.assertIn(value, args)
         with self.assertRaises(ValueError):
             runtime.run_session(self.data, 't3', False, ['--version'])
+
+    def test_required_home_mount_fails_before_docker(self):
+        self.data['accounts'][self.account]['home_mounted'] = True
+        with self.assertRaisesRegex(ValueError, 'HOME is not mounted'):
+            runtime.run_web(self.data, 'pi')
+        self.assertFalse(any(c[0] == 'create' for c in self.docker.calls))
+
+    def test_execution_account_cannot_be_an_ssh_alias(self):
+        self.data['ssh_aliases'][self.account] = 'pi'
+        with self.assertRaisesRegex(ValueError, 'SSH aliases must exactly match'):
+            runtime.run_web(self.data, 'pi')
+        self.assertEqual(self.docker.calls, [])
+
+    def test_disabled_t3_web_refuses_before_docker(self):
+        spec = self.data['harnesses']['t3']
+        spec.update(account=None, image=None, requested_interfaces={'cli': False, 'web': False})
+        with self.assertRaisesRegex(ValueError, 'web interface is disabled'):
+            runtime.run_session(self.data, 't3', False, [])
+        self.assertEqual(self.docker.calls, [])
 
     def test_user_docker_flags_stay_after_image_but_web_flags_refused(self):
         arguments = ['--mount', 'type=bind,src=/,dst=/host', '--privileged', '$(false)']
@@ -392,7 +436,10 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((root / 'agents/system-build.md').resolve(), self.resources / 'system/build.md')
 
     def test_opencode_no_provider_or_default_config_copy(self):
-        entry.initialize('opencode', self.home, self.resources)
+        with patch.object(entry.subprocess, 'run') as publish:
+            entry.initialize('opencode', self.home, self.resources)
+        self.assertEqual(publish.call_args.args[0][0], 'node')
+        self.assertEqual(publish.call_args.args[0][-1], str(self.home / '.config/opencode'))
         root = self.home / '.config/opencode'
         self.assertEqual((root / 'commands').resolve(), self.resources / 'commands')
         self.assertFalse((root / 'opencode.json').exists())
@@ -415,7 +462,8 @@ class AdapterTests(unittest.TestCase):
         for harness, expected in [('pi', ['--hostname', '0.0.0.0', '--port', '5102', '--no-open']),
                                   ('opencode', ['web', '--hostname', '0.0.0.0', '--port', '5102'])]:
             with patch.dict(os.environ, HOME=str(self.home), VENV_AGENT_RESOURCES=str(self.resources), VENV_AGENT_PORT='5102'), \
-                    patch.object(entry, 'identity'), patch.object(entry.os, 'execvpe') as execute:
+                    patch.object(entry, 'identity'), patch.object(entry.subprocess, 'run'), \
+                    patch.object(entry.os, 'execvpe') as execute:
                 entry.main([harness, '--web'])
                 self.assertEqual(execute.call_args.args[1][1:], expected)
 

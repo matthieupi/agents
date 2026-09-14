@@ -576,7 +576,9 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
 def run_session(policy: dict, harness: str, web: bool, arguments: list[str]) -> int:
     validate_policy(policy)
     require(harness in HARNESSES, 'Unknown harness')
-    if web:
+    # T3's command is a web-entry convenience, never a conversational CLI.
+    # Admit its web capability before dispatch; do not manufacture CLI support.
+    if web or harness == 't3':
         require(requested_interface(policy, harness, 'web'), f'{harness}: requested web interface is disabled')
     else:
         require(requested_interface(policy, harness, 'cli'), f'{harness}: requested CLI interface is disabled')
@@ -828,6 +830,9 @@ def activate(harness: str, image: str) -> int:
                 pending.unlink()
                 candidate_path.unlink(missing_ok=True)
             raise
+        # The gateway retains its first-install snapshot until publication is
+        # proven. Keep our recovery authority if its finalization is interrupted.
+        activation_gateway(config, 'install-finalize', transaction, lock_fd=fd)
         pending.unlink()
         candidate_path.unlink()
         print(f'{harness} activated; default={candidate["default_harness"]}; web={candidate["web"]["default_harness"]}')

@@ -1,5 +1,6 @@
 """Real policy files/flock/build subprocess boundaries; no live Docker or gateway."""
 import copy
+from contextlib import nullcontext
 import io
 import json
 import os
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from test_runtime import load, policy
+from test_runtime import IdentityFixture, load, policy
 
 
 runtime, builder = load('launcher'), load('build')
@@ -28,8 +29,9 @@ def bootstrap(root: Path) -> dict:
     return value
 
 
-class PolicyTests(unittest.TestCase):
+class PolicyTests(IdentityFixture):
     def setUp(self):
+        super().setUp()
         self.data = bootstrap(Path('/var/lib/test-venv'))
 
     def test_explicit_empty_policy_and_missing_images(self):
@@ -164,6 +166,7 @@ class BuildTests(unittest.TestCase):
         path = self.root / 'build.json'
         path.write_text(json.dumps(self.settings))
         with patch.object(builder, 'SETTINGS', path), patch.object(builder, 'build', side_effect=ValueError('failed')), \
+                patch.object(builder, 'source_snapshot', return_value=nullcontext(self.settings)), \
                 patch.object(builder.subprocess, 'run') as run, patch('sys.stderr', new_callable=io.StringIO):
             self.assertEqual(builder.main(['omp']), 1)
             run.assert_not_called()
@@ -183,14 +186,16 @@ class BuildTests(unittest.TestCase):
         path.write_text(json.dumps(self.settings))
         image = 'sha256:' + 'a' * 64
         with patch.object(builder, 'SETTINGS', path), patch.object(builder, 'build', return_value=image), \
+                patch.object(builder, 'source_snapshot', return_value=nullcontext(self.settings)), \
                 patch.object(builder.subprocess, 'run') as run, patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(builder.main(['omp']), 0)
             run.assert_called_once_with(['/usr/bin/sudo', '--', '/usr/local/bin/venv-agents', 'activate', 'omp', image],
                                         check=True, timeout=1200)
 
 
-class ActivationTests(unittest.TestCase):
+class ActivationTests(IdentityFixture):
     def setUp(self):
+        super().setUp()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -224,7 +229,8 @@ class ActivationTests(unittest.TestCase):
     def gateway(self, config, phase, transaction, *, lock_fd=None):
         self.phases.append(phase)
         # No policy publication or provider mutation before successful gateway commit.
-        self.assertEqual(json.loads(self.path.read_text()), transaction['previous'])
+        committed = phase == 'install-finalize'
+        self.assertEqual(json.loads(self.path.read_text()), transaction['candidate' if committed else 'previous'])
         self.assertEqual(self.marker.read_bytes(), b'unchanged-provider-fixture')
         self.assertEqual(json.loads(self.path.with_name('activation-candidate.json').read_text()), transaction['candidate'])
 
@@ -237,13 +243,15 @@ class ActivationTests(unittest.TestCase):
                 self.path.write_text(json.dumps(self.data))
                 self.install(first)
                 value = json.loads(self.path.read_text())
-                self.assertEqual(value['default_harness'], first)
+                self.assertEqual(value['default_harness'], None if first == 't3' else first)
                 self.assertEqual(value['web']['default_harness'], None if first == 'omp' else first)
                 addition = next(h for h in sorted(runtime.HARNESSES) if h != first)
                 self.install(addition, 'b')
                 later = json.loads(self.path.read_text())
-                self.assertEqual(later['default_harness'], first)
-                self.assertEqual(later['web'], value['web'])
+                expected_cli = value['default_harness'] or (addition if addition != 't3' else None)
+                expected_web = value['web']['default_harness'] or (addition if addition != 'omp' else None)
+                self.assertEqual(later['default_harness'], expected_cli)
+                self.assertEqual(later['web']['default_harness'], expected_web)
                 self.assertEqual(self.marker.read_bytes(), b'unchanged-provider-fixture')
 
     def test_check_and_commit_failure_restore_previous_policy_and_retry(self):
@@ -258,17 +266,46 @@ class ActivationTests(unittest.TestCase):
                     self.install('pi')
             self.assertEqual(self.path.read_bytes(), original)
             self.assertEqual(self.phases[-1], 'install-rollback')
-            self.assertFalse(self.path.with_name('activation-pending.json').exists())
+            self.assertFalse(self.path.with_name('image-install.json').exists())
         self.assertEqual(self.install('pi'), 0)
+
+    def test_success_finalizes_gateway_before_retiring_recovery(self):
+        gateway = self.gateway
+        def observe(config, phase, transaction, *, lock_fd=None):
+            gateway(config, phase, transaction, lock_fd=lock_fd)
+            if phase == 'install-finalize':
+                self.assertTrue(self.path.with_name('image-install.json').exists())
+                self.assertEqual(json.loads(self.path.read_text()), transaction['candidate'])
+        with patch.object(runtime, 'activation_gateway', side_effect=observe):
+            self.install('pi')
+        self.assertEqual(self.phases, ['install-check', 'install-commit', 'install-finalize'])
+        self.assertFalse(self.path.with_name('image-install.json').exists())
+
+    def test_finalize_failure_retains_published_state_and_recovery(self):
+        gateway = self.gateway
+        def fail(config, phase, transaction, *, lock_fd=None):
+            gateway(config, phase, transaction, lock_fd=lock_fd)
+            if phase == 'install-finalize':
+                raise ValueError('finalize interrupted')
+        with patch.object(runtime, 'activation_gateway', side_effect=fail):
+            with self.assertRaisesRegex(ValueError, 'finalize interrupted'):
+                self.install('pi')
+        self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'pi')
+        self.assertTrue(self.path.with_name('image-install.json').exists())
+        self.assertNotIn('install-rollback', self.phases)
+        self.install('pi')
+        self.assertEqual(self.phases[-1], 'install-finalize')
+        self.assertFalse(self.path.with_name('image-install.json').exists())
 
     def test_failed_rollback_retains_journal_and_retry_recovers_first(self):
         with patch.object(runtime, 'activation_gateway', side_effect=ValueError('unavailable')):
             with self.assertRaises(ValueError):
                 self.install('omp')
-        self.assertTrue(self.path.with_name('activation-pending.json').exists())
+        self.assertTrue(self.path.with_name('image-install.json').exists())
         self.install('t3', 'b')
-        self.assertEqual(self.phases, ['install-rollback', 'install-check', 'install-commit'])
-        self.assertEqual(json.loads(self.path.read_text())['default_harness'], 't3')
+        self.assertEqual(self.phases, ['install-rollback', 'install-check', 'install-commit', 'install-finalize'])
+        self.assertIsNone(json.loads(self.path.read_text())['default_harness'])
+        self.assertEqual(json.loads(self.path.read_text())['web']['default_harness'], 't3')
 
     def test_published_candidate_journal_does_not_restore_previous_policy(self):
         candidate = copy.deepcopy(self.data)
@@ -276,10 +313,10 @@ class ActivationTests(unittest.TestCase):
         candidate['default_harness'] = 'omp'
         candidate['web']['default_harness'] = None
         self.path.write_text(json.dumps(candidate))
-        pending = self.path.with_name('activation-pending.json')
+        pending = self.path.with_name('image-install.json')
         pending.write_text(json.dumps(dict(harness='omp', previous=self.data, candidate=candidate)))
         self.install('omp')
-        self.assertEqual(self.phases, [])
+        self.assertEqual(self.phases, ['install-finalize'])
         self.assertFalse(pending.exists())
 
     def test_replacement_invalid_args_and_unenrolled_caller_refused(self):
@@ -290,7 +327,7 @@ class ActivationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.activate(harness, image)
         with patch.dict(os.environ, SUDO_USER='foreign'):
-            with self.assertRaisesRegex(ValueError, 'Enrolled'):
+            with self.assertRaisesRegex(ValueError, 'shared execution account'):
                 self.install('omp', 'b')
 
     def test_image_failure_never_creates_journal_or_calls_gateway(self):
@@ -298,7 +335,7 @@ class ActivationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'bad image'):
                 self.install('pi')
         self.assertEqual(self.phases, [])
-        self.assertFalse(self.path.with_name('activation-pending.json').exists())
+        self.assertFalse(self.path.with_name('image-install.json').exists())
         self.assertEqual(json.loads(self.path.read_text()), self.data)
 
     def test_publication_failure_rolls_back_and_removes_candidate(self):
@@ -325,10 +362,10 @@ class ActivationTests(unittest.TestCase):
                 self.install('omp')
         self.assertNotIn('install-rollback', self.phases)
         self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'omp')
-        self.assertTrue(self.path.with_name('activation-pending.json').exists())
+        self.assertTrue(self.path.with_name('image-install.json').exists())
         self.install('omp')
         self.assertNotIn('install-rollback', self.phases)
-        self.assertFalse(self.path.with_name('activation-pending.json').exists())
+        self.assertFalse(self.path.with_name('image-install.json').exists())
 
     def test_real_concurrent_lock_only_one_first_default(self):
         entered, release = threading.Event(), threading.Event()
@@ -359,7 +396,7 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'omp')
 
 
-class ImageCheckTests(unittest.TestCase):
+class ImageCheckTests(IdentityFixture):
     def test_mountless_selected_version_check_and_id_cleanup_on_timeout(self):
         data = bootstrap(Path('/var/lib/test-venv'))
         image, container = 'sha256:' + 'a' * 64, 'b' * 64

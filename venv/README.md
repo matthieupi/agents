@@ -63,14 +63,21 @@ CLI/web defaults. First successful activation selects each still-null default on
 when that harness owns the corresponding requested interface; additive installs
 never change an established default. OMP is CLI-only and T3 is web-only. Provider
 files and the shared agents HOME are never copied or deleted by activation.
+The `t3` command is only a convenience for its enabled web entry, not a CLI
+capability; it refuses application arguments and an unselected web interface.
 
 Activation uses a protected lock, the private `image-install.json` journal, a
 candidate policy and atomic installed-policy replacement. Recovery validates that
 only the selected image and still-null interface defaults changed; an already
 published policy is gateway-finalized rather than rolled back. Failed backend checks
-preserve current defaults; failed rollback retains recovery evidence for retry. Installed-ID changes
-are refused rather than pretending to support safe upgrades. Same-ID retry is a
-no-op. See `14-runtime-contract.md` in the agent-harness-reset feature handoff for
+preserve current defaults; failed rollback retains recovery evidence for retry.
+Successful first installation also finalizes the gateway before retiring its
+image-install journal. A failed
+finalization retains the published policy and journal for an idempotent retry;
+it never rolls back a committed image.
+Installed-ID replacements are refused rather than pretending to support safe
+upgrades. Same-ID retry is a no-op after recovery. See `14-runtime-contract.md`
+in the agent-harness-reset feature handoff for
 exact enrollment inputs and gateway phase obligations. **Gateway phase wiring is
 required before activation can succeed; no live readiness is implied here.**
 
