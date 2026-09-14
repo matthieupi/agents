@@ -21,3 +21,9 @@
 - Replaced startup KDCO tree copying with an exact, idempotent symlink to the immutable image asset; foreign links and directories are rejected.
 - Made HOME and ephemeral OpenCode config tmpfs ownership follow `PASEO_UID`/`PASEO_GID`, retaining read-only managed descendant mounts.
 - Verification: 6 component tests passed; Compose rendering remains skipped because Docker is unavailable.
+
+## 2026-09-14 — Fail-closed image runtime identity mapping
+- Kept native OpenCode installation at build-time `1000:1000`, then remapped only the existing image `paseo` passwd/group and image-owned directories to required positive non-root `PASEO_RUNTIME_UID`/`PASEO_RUNTIME_GID` build args.
+- Added build-time rejection for missing, malformed, zero, out-of-range and unrelated passwd/group collisions; final image `USER` now uses the exact required numeric IDs without a runtime fallback or root entrypoint repair.
+- Added matching Compose build args. No host account, mounted workspace ownership, provider state, source manifest, credential, image build, deployment or live target was changed.
+- Static verification only: Dockerfile/source review, YAML parsing, root/nested whitespace checks, Python AST, Jinja parsing and Ansible syntax passed. No tests or Make targets ran.

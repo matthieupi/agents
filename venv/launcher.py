@@ -656,11 +656,42 @@ def activation_gateway(config: dict, phase: str, transaction: dict, *, lock_fd: 
 
 def run_candidate(harness: str, action: str) -> int:
     """Gateway invokes this as the enrolled owner; candidate stays root-managed."""
-    require(harness in HARNESSES and action in ('start', 'status', 'stop'), 'Finite candidate web action required')
+    require(harness in HARNESSES and action in ('start', 'status', 'stop', 'diagnose'), 'Finite candidate web action required')
     require(os.getuid() > 0, 'Candidate web must run as an enrolled non-root account')
     candidate = load_policy(POLICY.with_name('activation-candidate.json'))
     if 'shared_runtime' in candidate:
         shared_module(candidate).authorize_candidate(shared_host())
+    if action == 'diagnose':
+        account = pwd.getpwuid(os.getuid()).pw_name
+        require(account in candidate['accounts'], 'Enrolled diagnostic account required')
+        validate_socket(Path(candidate['socket']))
+        instance = inspect_web(candidate, harness)
+        require(instance is not None and validate_web_instance(candidate, harness, instance) == account,
+                'Exact owned candidate required for diagnosis')
+        state = instance['State']
+        require(state.get('Status') in ('created', 'running', 'restarting', 'removing', 'paused', 'exited', 'dead')
+                and type(state.get('ExitCode')) is int and type(state.get('OOMKilled')) is bool,
+                'Invalid candidate state')
+        logs = docker_call(candidate, ['container', 'logs', '--tail', '50', instance['Id']])
+        data = (logs.stdout + logs.stderr).encode()
+        categories = (
+            ('Physical HOME required', 'physical-home'),
+            ('HOME identity/mode mismatch', 'home-identity'),
+            ('Required shared resource is unavailable', 'shared-resource'),
+            ('Private directory identity/mode mismatch', 'private-directory'),
+            ('Existing resource link is inaccessible', 'resource-link'),
+            ('Unsafe startup lock', 'startup-lock'),
+            ('Invalid web port', 'web-port'),
+        )
+        category = next((label for text, label in categories if text.encode() in data),
+                        'image-startup' if b'venv image startup:' in data else 'application-exit')
+        error = str(state.get('Error') or '').encode()
+        print(json.dumps({'state': state['Status'], 'exit_code': state['ExitCode'],
+                          'oom_killed': state['OOMKilled'], 'category': category,
+                          'log_sha256': hashlib.sha256(data).hexdigest(),
+                          'runtime_error_present': bool(error),
+                          'runtime_error_sha256': hashlib.sha256(error).hexdigest()}, sort_keys=True))
+        return 0
     return run_web(candidate, harness, action)
 
 
@@ -924,7 +955,7 @@ def _resource_dispatch(argv: list[str] | None = None) -> int:
             return 1
     if argv[:1] == ['candidate-web']:
         try:
-            require(len(argv) == 3, 'candidate-web requires exactly harness and start|status|stop')
+            require(len(argv) == 3, 'candidate-web requires exactly harness and start|status|stop|diagnose')
             return run_candidate(argv[1], argv[2])
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             print(f'venv-agents candidate: {error}', file=sys.stderr)

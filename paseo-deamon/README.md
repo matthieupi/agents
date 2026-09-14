@@ -1,8 +1,9 @@
 # Paseo execution daemon + managed OpenCode
 
-📍 Component only; spelling **paseo-deamon** is intentional. No Ansible wiring,
-target/account selection, deployment, hub change, shared-runtime change or adapter
-patch is included. Do not deploy until the acceptance gates below pass.
+📍 Spelling **paseo-deamon** is intentional. DevAI now has source-only Ansible
+wiring in `ansible/roles/agent/paseo-daemon`; this component remains the maintained
+image/runtime ingredient. No live deployment, hub change, shared-runtime change or
+adapter patch is implied. Do not deploy until the acceptance gates below pass.
 
 ```text
 future TLS proxy -> loopback published Paseo :6767
@@ -83,9 +84,12 @@ all launches sharing them must honor those locks. One instance only. Authenticat
 providers independently into this new state; do not copy credentials. No provider
 secrets are baked, forwarded implicitly, or included in Compose examples.
 
-Numeric `PASEO_UID:PASEO_GID` defaults to `1000:1000`; startup rejects UID/GID zero.
-Other numeric identities require host permissions and live SSH/tool compatibility
-testing (the image passwd account is UID 1000). There is no root startup chown,
+Numeric `PASEO_UID:PASEO_GID` defaults to `1000:1000`; both values are required
+Docker build inputs as well as runtime settings. OpenCode installation remains a
+build-time `1000:1000` operation, after which the image maps only its existing
+`paseo` passwd/group and image-owned directories to the requested positive non-root
+IDs. Missing, zero, malformed, out-of-range, or passwd/group-colliding IDs fail the
+build. There is no runtime fallback, root startup chown, host account mutation,
 sudo, socket, Docker group, privileged broker or host-network mode. Capabilities
 are dropped and no-new-privileges is enabled; rootfs is read-only. Writable paths
 are the workspace, dedicated state and bounded `/tmp`. The upstream anonymous HOME
@@ -101,6 +105,10 @@ known_hosts beforehand and least-privilege keys; do not disable verification.
 Use an empty dedicated SSH directory and empty Git file when no identity is needed.
 Workspace content and config plugins can execute with all these granted rights;
 this is a container boundary, not per-agent credential isolation.
+
+The DevAI direct-daemon role intentionally publishes the workspace/config/resource
+subset but omits host SSH and Git identity mounts. Authenticate providers later in
+its fresh dedicated state; extend identity exposure only through a separate review.
 
 ## Native auth configuration
 
