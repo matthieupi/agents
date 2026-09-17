@@ -19,14 +19,39 @@ import subprocess
 import sys
 import tempfile
 import uuid
-import importlib.util
-import types
 
 
 HARNESSES = {"pi", "omp", "opencode", "t3"}
 IMAGE = re.compile(r"(?:sha256:[a-f0-9]{64}|[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64})")
 POLICY = Path("/etc/venv-agents/policy.json")
 ACTIVATION = Path('/etc/venv-agents/activation.json')
+GATEWAY_DIAGNOSTIC = re.compile(r'\AGW_ERROR action=(?P<phase>[a-z-]+) '
+                                 r'code=(?P<code>GW_(?:CHECK|INTERNAL_(?:JSON|KEY|OS|SUBPROCESS|VALUE|UNEXPECTED))_L[0-9]+)\n?\Z')
+CANDIDATE_DIAGNOSTIC_CATEGORIES = (
+    (b'Physical HOME required', 'physical-home'),
+    (b'HOME identity/mode mismatch', 'home-identity'),
+    (b'Required shared resource is unavailable', 'shared-resource'),
+    (b'Private directory identity/mode mismatch', 'private-directory'),
+    (b'Existing resource link is inaccessible', 'resource-link'),
+    (b'Unsafe startup lock', 'startup-lock'),
+    (b'Invalid web port', 'web-port'),
+    (b'OpenCodeConfigInvalidError:', 'opencode-config-invalid'),
+    (b'Error: Cannot find module ', 'missing-dependency'),
+    (b'ModuleNotFoundError:', 'missing-dependency'),
+    (b'Error [ERR_MODULE_NOT_FOUND]:', 'missing-dependency'),
+    (b'Error: EACCES:', 'permission-denied'),
+    (b'EACCES:', 'permission-denied'),
+    (b'SQLITEIO:', 'sqlite-io'),
+)
+
+
+class GatewayError(ValueError):
+    """A gateway failure reduced to its fixed public diagnostic protocol."""
+
+    def __init__(self, phase: str, code: str, returncode: int):
+        self.phase, self.code, self.returncode = phase, code, returncode
+        message = f'Gateway {phase} failed: code={code}; returncode={returncode}'
+        super().__init__(message)
 
 
 def require(condition, message):
@@ -60,7 +85,7 @@ def validate_policy(policy: dict) -> None:
         'resources', 'socket', 'network', 'cgroup_parent', 'web',
         'execution_account', 'command', 'ssh_aliases', 'accounts', 'harnesses',
     }
-    optional_keys = {'resource_budget', 'shared_runtime', 'resource_container_origins', 'worktree'}
+    optional_keys = {'resource_budget', 'resource_container_origins', 'worktree'}
     require(required_keys <= set(policy) and not set(policy) - required_keys - optional_keys,
             'Exact current VM policy fields required')
     require(policy.get("schema") == 2 and policy.get("scope") == "vm", "Current VM policy schema required")
@@ -188,32 +213,6 @@ def validate_policy(policy: dict) -> None:
     states = [Path(s['state']) for s in policy['accounts'].values()]
     require(all(a != b and a not in b.parents and b not in a.parents
                 for i, a in enumerate(states) for b in states[i + 1:]), "Account state roots must not overlap")
-    if 'shared_runtime' in policy:
-        shared_module(policy).validate_extension(policy['shared_runtime'], policy)
-
-
-def shared_module(policy):
-    """Import only hash-bound protected controller artifacts, never guest checkout."""
-    item = policy['shared_runtime']['controls']['adapter']
-    path = path_value(item['path'])
-    require(stat.S_ISREG(protected(path).st_mode) and path.name == 'shared.py'
-            and hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256'], 'Unsealed shared adapter refused')
-    spec = importlib.util.spec_from_file_location('venv_shared_runtime', path)
-    if spec is None or spec.loader is None:
-        raise ValueError('Cannot load protected shared adapter')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def shared_selected(policy, harness):
-    return 'shared_runtime' in policy and policy['harnesses'][harness]['image'] in policy['shared_runtime']['images'].get(harness, {})
-
-
-def shared_host():
-    return types.SimpleNamespace(**globals())
-
-
 def protected(path, *, owner=0, private=False):
     require(path.resolve(strict=True) == path, "Symlinked managed path refused")
     info = path.lstat()
@@ -226,8 +225,6 @@ def protected(path, *, owner=0, private=False):
 
 def load_policy(path: Path) -> dict:
     require(stat.S_ISREG(protected(path).st_mode), "Regular policy required")
-    require(not path.with_name('resource-update-pending.json').exists(), 'Resource update in progress; retry after operator recovery')
-    require(not path.with_name('shared-runtime-upgrade.json').exists(), 'Protected control upgrade pending; use maintained enrollment recovery')
     policy = json.loads(path.read_text())
     validate_policy(policy)
     return policy
@@ -265,8 +262,6 @@ def session_command(policy: dict, harness: str, account: str, web: bool,
         require(harness != 't3', "T3 is web-oriented; use --web")
         require(not (harness == 'opencode' and any(a in ('serve', 'web') for a in arguments)), "Use managed --web, not a CLI server")
     spec, user = policy["harnesses"][harness], policy["accounts"][account]
-    if shared_selected(policy, harness):
-        return shared_module(policy).session_command(shared_host(), policy, harness, account, web, arguments, tty)
     source_home, container_home = home_mount(policy, harness, account)
     command = ["/usr/bin/docker", "--host", "unix://" + policy["socket"], "create" if web else "run", "--init", "--pull=never",
                "--name", web_name(policy, harness) if web else f"venv-agents-{os.getuid()}-{harness}-{uuid.uuid4().hex}",
@@ -344,8 +339,6 @@ def pi_allowed_hosts(policy: dict) -> str:
 
 
 def web_name(policy: dict, harness: str) -> str:
-    if shared_selected(policy, harness):
-        return 'agents-runtime-' + hashlib.sha256(policy['target'].encode()).hexdigest()[:16] + '-' + harness + '-web'
     # Dot cannot occur in either target segment, so this encoding is injective.
     return 'venv-agents-' + policy['target'].replace(':', '.') + '-' + harness + '-web'
 
@@ -354,15 +347,13 @@ def web_contract(policy: dict, harness: str, account: str) -> str:
     data = {k: policy[k] for k in ('target', 'workspace', 'resources', 'socket', 'network', 'cgroup_parent')}
     data.update({k: policy[k] for k in ('container_workspace', 'services_root', 'worktree') if k in policy})
     data.update(spec=policy['harnesses'][harness], account=account, user=policy['accounts'][account])
-    if shared_selected(policy, harness):
-        data['shared_runtime'] = policy['shared_runtime']['images'][harness][policy['harnesses'][harness]['image']]
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
 def docker_call(policy: dict, arguments: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(['/usr/bin/docker', '--host', 'unix://' + policy['socket'], *arguments],
                           env={'PATH': '/usr/bin:/bin', 'HOME': pwd.getpwuid(os.getuid()).pw_dir},
-                          text=True, capture_output=True, timeout=60)
+                          text=True, capture_output=True, timeout=60, close_fds=True)
 
 
 def inspect_web(policy: dict, harness: str) -> dict | None:
@@ -376,21 +367,26 @@ def inspect_web(policy: dict, harness: str) -> dict | None:
     return values[0]
 
 
-def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
-    if shared_selected(policy, harness):
-        return shared_module(policy).inspect_instance(shared_host(), policy, harness, instance)
+def validate_web_namespace(policy: dict, harness: str, instance: dict) -> None:
+    """Ownership authorizes exact-ID removal, not acceptance of a runtime contract."""
+    require(instance['Name'] == '/' + web_name(policy, harness), 'Foreign web container name')
+    require(isinstance(instance['Id'], str) and re.fullmatch(r'[a-f0-9]{64}', instance['Id']),
+            'Invalid container identity')
     labels = instance['Config'].get('Labels') or {}
-    owner = labels.get('io.venv-agents.account')
-    require(isinstance(owner, str) and owner == harness_account(policy, harness),
-            'Foreign web container; no takeover')
-    if not isinstance(owner, str):
-        raise ValueError('Foreign web container; no takeover')
+    require(all(labels.get('io.venv-agents.' + key) == value for key, value in
+                {'target': policy['target'], 'harness': harness, 'mode': 'web'}.items()),
+            'Foreign web container namespace; no takeover')
+
+
+def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
+    validate_web_namespace(policy, harness, instance)
+    labels = instance['Config'].get('Labels') or {}
+    owner = harness_account(policy, harness)
+    require(labels.get('io.venv-agents.account') == owner, 'Web execution account differs from current policy')
     user, spec = policy['accounts'][owner], policy['harnesses'][harness]
     record = pwd.getpwnam(owner)
     require((record.pw_uid, record.pw_gid) == (user['uid'], user['gid']), 'Web owner identity drift')
-    require(instance['Name'] == '/' + web_name(policy, harness), 'Web container name drift')
-    for key, value in {'target': policy['target'], 'harness': harness, 'mode': 'web',
-                       'uid': str(user['uid']), 'gid': str(user['gid']),
+    for key, value in {'uid': str(user['uid']), 'gid': str(user['gid']),
                         'contract': resource_web_contract(policy, harness, owner, instance['Id'])}.items():
         require(labels.get('io.venv-agents.' + key) == value, 'Web container ownership/policy drift; no takeover')
     config, host = instance['Config'], instance['HostConfig']
@@ -433,7 +429,6 @@ def validate_web_instance(policy: dict, harness: str, instance: dict) -> str:
     expected = set(shared_mounts(policy)) | {(source, destination, True), (policy['socket'], policy['socket'], True)}
     actual = {(m['Source'], m['Destination'], m['RW']) for m in instance['Mounts'] if m['Type'] == 'bind'}
     require(actual == expected and len(instance['Mounts']) == len(expected), 'Web private/shared mount drift')
-    require(re.fullmatch(r'[a-f0-9]{64}', instance['Id']), 'Invalid container identity')
     return owner
 
 
@@ -453,32 +448,39 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
     validate_socket(Path(policy['socket']))
 
     def existing(instance):
-        owner = validate_web_instance(policy, harness, instance)
+        validate_web_namespace(policy, harness, instance)
         if action == 'stop':
-            require(owner == account, 'Another account owns this web instance; no takeover')
             require(docker_call(policy, ['container', 'stop', '--time', '30', instance['Id']]).returncode == 0,
                     'Web graceful stop failed; container/state preserved')
             require(docker_call(policy, ['container', 'rm', instance['Id']]).returncode == 0,
                     'Web stop failed; state preserved')
             print('Web instance stopped; private state preserved')
         else:
+            try:
+                owner = validate_web_instance(policy, harness, instance)
+            except (ValueError, KeyError, TypeError):
+                if action == 'start':
+                    return None
+                raise
             state = instance['State']['Status']
-            require(state in ('running', 'created', 'restarting') or action == 'status',
-                    'Web instance is stopped/failed; owner must --web-stop before retry')
+            if action == 'start' and (state != 'running' or not instance['State']['Running']):
+                return None
             readiness = '' if policy['web_ready'] else '; frontend disabled'
             print(f'https://{policy["harnesses"][harness]["hostname"]}/ ({state}; owner {owner}{readiness})')
         return 0
 
     instance = inspect_web(policy, harness)
     if instance is not None:
-        return existing(instance)
+        result = existing(instance)
+        if result is not None:
+            return result
     if action != 'start':
         print('No managed web instance')
         return 0
     # No other account's state is read or prepared on the existing-instance path.
     validate_runtime(policy, harness, account, web=True)
     state = Path(user['state']) / harness
-    fd = os.open(state / ('.session.lock' if shared_selected(policy, harness) else '.web-start.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = os.open(state / '.web-start.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(fd)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_gid == os.getgid()
@@ -486,16 +488,23 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         instance = inspect_web(policy, harness)
         if instance is not None:
-            return existing(instance)
-        if shared_selected(policy, harness):
-            shared_module(policy).validate_launch(shared_host(), policy, harness, account)
+            result = existing(instance)
+            if result is not None:
+                return result
+            # Owned namespace, but not the desired running contract. Never remove
+            # volumes or host bind data; Docker's canonical ID bounds both calls.
+            require(docker_call(policy, ['container', 'stop', '--time', '30', instance['Id']]).returncode == 0,
+                    'Outdated web container stop failed')
+            require(docker_call(policy, ['container', 'rm', instance['Id']]).returncode == 0,
+                    'Outdated web container removal failed')
         command = session_command(policy, harness, account, True, [], False)
         created = docker_call(policy, command[3:])
         if created.returncode:
             # Another account may have won Docker's atomic name reservation.
             instance = inspect_web(policy, harness)
             require(instance is not None, 'Web container creation failed; no state changed')
-            return existing(instance)
+            require(existing(instance) is not None, 'Concurrent web container is not the current running contract; retry')
+            return 0
         container_id = created.stdout.strip()
         require(re.fullmatch(r'[a-f0-9]{64}', container_id), 'Invalid created container ID')
         try:
@@ -503,7 +512,8 @@ def run_web(policy: dict, harness: str, action: str = 'start') -> int:
             instance = inspect_web(policy, harness)
             require(instance is not None and instance['Id'] == container_id and instance['State']['Running'],
                     'Web container did not remain running')
-            return existing(instance)
+            require(existing(instance) is not None, 'Created web container does not match current contract')
+            return 0
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             # ID-bound cleanup cannot remove a replacement that reused the name.
             docker_call(policy, ['container', 'rm', '--force', container_id])
@@ -562,7 +572,7 @@ def validate_runtime(policy: dict, harness: str, account: str, web: bool = False
         info = protected(path, owner=os.getuid(), private=True)
         require(stat.S_ISDIR(info.st_mode) and info.st_gid == os.getgid(), "Private state/HOME must be matching UID/GID directories")
         require(os.access(path, os.R_OK | os.W_OK | os.X_OK), "Private directory is inaccessible")
-    lock = state / ('.web-start.lock' if web and not shared_selected(policy, harness) else '.session.lock')
+    lock = state / ('.web-start.lock' if web else '.session.lock')
     if lock.exists() or lock.is_symlink():
         info = protected(lock, owner=os.getuid(), private=True)
         require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_gid == os.getgid(), "Unsafe existing state lock")
@@ -600,8 +610,6 @@ def run_session(policy: dict, harness: str, web: bool, arguments: list[str]) -> 
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and not info.st_mode & 0o077, "Unsafe state lock")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         # Explicit endpoint and minimal environment: no ambient Docker context,
-        if shared_selected(policy, harness):
-            shared_module(policy).validate_launch(shared_host(), policy, harness, account)
         # remote builder, provider credentials, shell injection or SSH forwarding.
         environment = {"PATH": "/usr/bin:/bin", "HOME": pwd.getpwuid(os.getuid()).pw_dir}
         if tty:
@@ -645,27 +653,57 @@ def atomic_json(path: Path, value: dict, mode: int = 0o644) -> None:
             os.unlink(temporary)
 
 
-def activation_gateway(config: dict, phase: str, transaction: dict, *, lock_fd: int | None = None) -> None:
-    require(phase in ('install-prepare', 'install-stage', 'install-check', 'install-commit', 'install-rollback', 'install-finalize',
-                     'select-check', 'select-commit', 'select-rollback', 'select-finalize'), 'Invalid activation phase')
+def activation_gateway(config: dict, phase: str, candidate: dict, *, lock_fd: int | None = None) -> None:
+    require(phase in ('install-current', 'select-current'), 'Invalid activation phase')
     gateway = path_value(config['gateway'])
     require(stat.S_ISREG(protected(gateway).st_mode), 'Protected maintained gateway helper required')
-    result = subprocess.run(['/usr/bin/python3', '-I', str(gateway), phase, transaction['harness']],
-                            input=json.dumps({key: transaction[key] for key in ('previous', 'candidate')}),
-                            env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'},
+    result = subprocess.run(['/usr/bin/python3', '-I', str(gateway), phase, candidate['harness']],
+                            input=json.dumps(candidate['candidate']),
+                            env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root',
+                                 'VENV_ACTIVATION_LOCK_FD': str(lock_fd)},
                             text=True, capture_output=True, timeout=180, cwd='/',
                             pass_fds=() if lock_fd is None else (lock_fd,))
-    # Never disclose captured gateway output: it may contain private diagnostics.
-    require(result.returncode == 0, f'Gateway {phase} failed; see protected service diagnostics')
+    # Gateway output is private unless it is exactly its fixed public protocol.
+    if result.returncode:
+        match = GATEWAY_DIAGNOSTIC.fullmatch(result.stderr) if not result.stdout else None
+        code = match.group('code') if match is not None and match.group('phase') == phase else 'GW_UNCLASSIFIED'
+        raise GatewayError(phase, code, result.returncode)
+
+
+def inherited_activation_fd() -> int:
+    """Prove existing authority on this open description; never acquire a free lock."""
+    value = os.environ.get('VENV_ACTIVATION_LOCK_FD', '')
+    require(value.isdecimal(), 'Inherited activation lock descriptor required')
+    fd = int(value)
+    identity = protected(POLICY.with_name('activation.lock'), private=True)
+    info = os.fstat(fd)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0
+            and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
+            and (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino)
+            and fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR,
+            'Invalid inherited activation lock custody')
+    device = f'{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}:{info.st_ino}'
+    records = [line.split() for line in Path(f'/proc/self/fdinfo/{fd}').read_text().splitlines()]
+    require(any(len(row) == 9 and row[0] == 'lock:' and row[2:5] == ['FLOCK', 'ADVISORY', 'WRITE']
+                and row[6:] == [device, '0', 'EOF'] for row in records),
+            'Inherited activation descriptor must already hold the exclusive lock')
+    os.set_inheritable(fd, False)
+    return fd
 
 
 def run_candidate(harness: str, action: str) -> int:
     """Gateway invokes this as the enrolled owner; candidate stays root-managed."""
     require(harness in HARNESSES and action in ('start', 'status', 'stop', 'diagnose'), 'Finite candidate web action required')
     require(os.getuid() > 0, 'Candidate web must run as an enrolled non-root account')
+    require(stat.S_ISREG(protected(Path(__file__)).st_mode), 'Protected deployed launcher required')
+    inherited_activation_fd()
     candidate = load_policy(POLICY.with_name('activation-candidate.json'))
-    if 'shared_runtime' in candidate:
-        shared_module(candidate).authorize_candidate(shared_host())
+    account = pwd.getpwuid(os.getuid()).pw_name
+    require(account == candidate['execution_account'], 'Candidate shared execution account required')
+    user = candidate['accounts'][account]
+    record = pwd.getpwnam(account)
+    require((os.getuid(), os.getgid()) == (record.pw_uid, record.pw_gid) == (user['uid'], user['gid']),
+            'Candidate caller identity drift')
     if action == 'diagnose':
         account = pwd.getpwuid(os.getuid()).pw_name
         require(account in candidate['accounts'], 'Enrolled diagnostic account required')
@@ -678,31 +716,19 @@ def run_candidate(harness: str, action: str) -> int:
                 and type(state.get('ExitCode')) is int and type(state.get('OOMKilled')) is bool,
                 'Invalid candidate state')
         logs = docker_call(candidate, ['container', 'logs', '--tail', '50', instance['Id']])
-        data = (logs.stdout + logs.stderr).encode()
-        categories = (
-            ('Physical HOME required', 'physical-home'),
-            ('HOME identity/mode mismatch', 'home-identity'),
-            ('Required shared resource is unavailable', 'shared-resource'),
-            ('Private directory identity/mode mismatch', 'private-directory'),
-            ('Existing resource link is inaccessible', 'resource-link'),
-            ('Unsafe startup lock', 'startup-lock'),
-            ('Invalid web port', 'web-port'),
-        )
-        category = next((label for text, label in categories if text.encode() in data),
-                        'image-startup' if b'venv image startup:' in data else 'application-exit')
-        error = str(state.get('Error') or '').encode()
+        lines = (logs.stdout + logs.stderr).encode().splitlines()
+        category = next((label for prefix, label in CANDIDATE_DIAGNOSTIC_CATEGORIES
+                         if any(line.startswith(prefix) for line in lines)),
+                        'image-startup' if any(line.startswith(b'venv image startup:') for line in lines)
+                        else 'application-exit')
         print(json.dumps({'state': state['Status'], 'exit_code': state['ExitCode'],
-                          'oom_killed': state['OOMKilled'], 'category': category,
-                          'log_sha256': hashlib.sha256(data).hexdigest(),
-                          'runtime_error_present': bool(error),
-                          'runtime_error_sha256': hashlib.sha256(error).hexdigest()}, sort_keys=True))
+                           'oom_killed': state['OOMKilled'], 'category': category,
+                           'runtime_error_present': bool(state.get('Error'))}, sort_keys=True))
         return 0
     return run_web(candidate, harness, action)
 
 
 def check_image(policy: dict, harness: str, image: str) -> None:
-    if shared_selected(policy, harness):
-        return shared_module(policy).check_image(shared_host(), policy, harness, image)
     result = docker_call(policy, ['image', 'inspect', '--format', '{{.Id}}', image])
     require(result.returncode == 0 and result.stdout.strip() == image, 'Exact image must exist in local Docker store')
     account = harness_account(policy, harness)
@@ -728,26 +754,13 @@ def check_image(policy: dict, harness: str, image: str) -> None:
                 'Failed to remove exact version-check container; no activation')
 
 
-def validate_image_install(previous: dict, candidate: dict, harness: str) -> None:
-    """Admit only one current-policy first image and its interface-valid defaults."""
-    require(harness in HARNESSES, 'Invalid image-install harness')
-    validate_policy(previous)
-    validate_policy(candidate)
-    require(previous['harnesses'][harness]['image'] is None,
-            'Image-install journal must begin with an uninstalled harness')
-    image = candidate['harnesses'][harness]['image']
-    require(isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image),
-            'Image-install journal requires one local immutable image ID')
-    expected = copy.deepcopy(previous)
-    expected['harnesses'][harness]['image'] = image
-    if previous['default_harness'] is None and requested_interface(candidate, harness, 'cli'):
-        expected['default_harness'] = harness
-    if previous['web']['default_harness'] is None and requested_interface(candidate, harness, 'web'):
-        expected['web']['default_harness'] = harness
-    require(expected == candidate, 'Image-install journal changes fields outside the selected image/defaults')
-
-
 def activate(harness: str, image: str) -> int:
+    """Admit the current writer before acquiring its private activation authority."""
+    with maintenance_lock(POLICY, exclusive=True):
+        return _activate(harness, image)
+
+
+def _activate(harness: str, image: str) -> int:
     """Finite root interface. No build code, argv, paths or policy supplied by guest."""
     require(os.getuid() == 0 and os.geteuid() == 0, 'Activation requires the protected sudo interface')
     require(harness in HARNESSES and isinstance(image, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', image),
@@ -761,15 +774,10 @@ def activate(harness: str, image: str) -> int:
     fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(fd)
-        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
-                and not info.st_mode & 0o077, 'Unsafe activation lock')
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and info.st_nlink == 1
+                and stat.S_IMODE(info.st_mode) == 0o600, 'Unsafe activation lock')
         # Bounded refusal rather than a sudo process waiting behind a long build.
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        require(not POLICY.with_name('shared-runtime-upgrade.json').exists()
-                and not POLICY.with_name('shared-runtime-upgrade.json').is_symlink(), 'Protected control upgrade in progress')
-        require(not POLICY.with_name('select-default-pending.json').exists()
-                and not POLICY.with_name('select-default-pending.json').is_symlink(),
-                'Recover pending select-default before image activation')
         policy = load_policy(POLICY)
         require(policy['schema'] == 2, 'On-demand schema 2 enrollment required')
         require(requested_interface(policy, harness, 'cli') or requested_interface(policy, harness, 'web'),
@@ -785,55 +793,19 @@ def activate(harness: str, image: str) -> int:
                           for interface in ('cli', 'web')}
         require(requested == command_backed,
                 'Requested interfaces differ from promoted protected controls')
-        if 'shared_runtime' in policy:
-            return shared_module(policy).activate(shared_host(), config, policy, harness, image, fd)
-        pending = POLICY.with_name('image-install.json')
         candidate_path = POLICY.with_name('activation-candidate.json')
-        if pending.exists() or pending.is_symlink():
-            require(stat.S_ISREG(protected(pending, private=True).st_mode), 'Private image-install journal required')
-            transaction = json.loads(pending.read_text())
-            require(set(transaction) == {'harness', 'previous', 'candidate'} and transaction['harness'] in HARNESSES,
-                    'Invalid image-install journal')
-            validate_image_install(transaction['previous'], transaction['candidate'], transaction['harness'])
-            require(policy in (transaction['previous'], transaction['candidate']), 'Policy drift during interrupted image install')
-            atomic_json(candidate_path, transaction['candidate'])
-            phase = 'install-rollback' if policy == transaction['previous'] else 'install-finalize'
-            activation_gateway(config, phase, transaction, lock_fd=fd)
-            pending.unlink()
-        if candidate_path.exists() or candidate_path.is_symlink():
-            require(stat.S_ISREG(protected(candidate_path).st_mode), 'Protected candidate file required')
-            candidate_path.unlink()
-        if installed(policy, harness):
-            require(policy['harnesses'][harness]['image'] == image,
-                    'Installed image replacement requires protected shared-runtime controls')
-            print(f'{harness} already installed; defaults unchanged')
-            return 0
         candidate = copy.deepcopy(policy)
         candidate['harnesses'][harness]['image'] = image
         if policy['default_harness'] is None and requested_interface(policy, harness, 'cli'):
             candidate['default_harness'] = harness
         if policy['web']['default_harness'] is None and requested_interface(policy, harness, 'web'):
             candidate['web']['default_harness'] = harness
-        validate_image_install(policy, candidate, harness)
+        validate_policy(candidate)
         check_image(candidate, harness, image)
-        transaction = dict(harness=harness, previous=policy, candidate=candidate)
-        atomic_json(pending, transaction, 0o600)
-        try:
-            atomic_json(candidate_path, candidate)
-            activation_gateway(config, 'install-check', transaction, lock_fd=fd)
-            activation_gateway(config, 'install-commit', transaction, lock_fd=fd)
-            require(load_policy(POLICY) == policy, 'Policy changed during image install')
-            atomic_json(POLICY, candidate)
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-            if load_policy(POLICY) == policy:
-                activation_gateway(config, 'install-rollback', transaction, lock_fd=fd)
-                pending.unlink()
-                candidate_path.unlink(missing_ok=True)
-            raise
-        # The gateway retains its first-install snapshot until publication is
-        # proven. Keep our recovery authority if its finalization is interrupted.
-        activation_gateway(config, 'install-finalize', transaction, lock_fd=fd)
-        pending.unlink()
+        atomic_json(candidate_path, candidate)
+        activation_gateway(config, 'install-current', dict(harness=harness, candidate=candidate), lock_fd=fd)
+        require(load_policy(POLICY) == policy, 'Policy changed during image install')
+        atomic_json(POLICY, candidate)
         candidate_path.unlink()
         print(f'{harness} activated; default={candidate["default_harness"]}; web={candidate["web"]["default_harness"]}')
         return 0
@@ -841,25 +813,22 @@ def activate(harness: str, image: str) -> int:
         os.close(fd)
 
 
-def finish_default_selection(pending: Path, candidate: Path) -> None:
-    """Retire candidate durably before its recovery authority, the journal."""
-    fd = os.open(pending.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        candidate.unlink(missing_ok=True)
-        os.fsync(fd)
-        pending.unlink()
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def select_default(harness: str) -> int:
-    """Controller-root-only route transaction; never build or change service state.
+    """Admit controller-root default selection before the private activation lock."""
+    with maintenance_lock(POLICY, exclusive=True):
+        return _select_default(harness)
+
+
+def _select_default(harness: str) -> int:
+    """Controller-root-only current routing selection; never build an image.
 
     No sudoers grant is added for this command. Enrolled callers retain only the
-    existing finite image activation interface. Same-policy retries check health.
+    finite image activation interface. Same-policy retries reconcile and check health.
+    Failed current state is not restored; the next invocation converges forward.
     """
     require(os.getuid() == 0 and os.geteuid() == 0, 'Default selection requires controller root')
+    require(not os.environ.get('SUDO_USER') or os.environ['SUDO_USER'] == 'root',
+            'Default selection requires controller root, not an enrolled sudo caller')
     require(harness in ('pi', 'opencode'), 'Default selection requires pi or opencode')
     require(stat.S_ISREG(protected(Path(__file__)).st_mode), 'Protected deployed launcher required')
     protected(POLICY.parent)
@@ -867,80 +836,28 @@ def select_default(harness: str) -> int:
     config = json.loads(ACTIVATION.read_text())
     require(isinstance(config, dict) and set(config) == {'gateway'}, 'Exact activation configuration required')
     lock = POLICY.with_name('activation.lock')
-    inherited = os.environ.get('VENV_DEFAULT_LOCK_FD')
-    if inherited is None:
-        fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
-    else:
-        # Only controller root can invoke this operation. A parent may lend the
-        # already-held exact lock for sealed reapply recovery, never another path.
-        require(inherited.isdecimal(), 'Invalid inherited default lock')
-        identity = protected(lock, private=True)
-        fd = os.dup(int(inherited))
-        actual = os.fstat(fd)
-        if (actual.st_dev, actual.st_ino) != (identity.st_dev, identity.st_ino):
-            os.close(fd)
-            raise ValueError('Inherited default lock identity differs')
+    fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
-        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
-                and not info.st_mode & 0o077, 'Unsafe activation lock')
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and info.st_nlink == 1
+                and stat.S_IMODE(info.st_mode) == 0o600, 'Unsafe activation lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for name in ('bootstrap-pending.json', 'shared-replacement.json',
-                     'shared-runtime-upgrade.json', 'resource-update-pending.json'):
-            path = POLICY.with_name(name)
-            require(not path.exists() and not path.is_symlink(), 'Pending maintenance blocks default selection')
-        for name in ('resource-migration.json',):
-            path = POLICY.with_name(name)
-            if path.exists() or path.is_symlink():
-                require(stat.S_ISREG(protected(path, private=True).st_mode), 'Protected migration journal required')
-                require(json.loads(path.read_text()).get('status') in ('complete', 'rolled-back'),
-                        'Unfinished migration blocks default selection')
         policy = load_policy(POLICY)
         require(policy['schema'] == 2, 'Prepared schema-2 enrollment required')
         require(not requested_interface(policy, harness, 'web') or policy['web_ready'],
                 'Selected web default requires a prepared frontend')
-        if 'shared_runtime' in policy:
-            shared_module(policy).validate_seal(shared_host(), policy)
-        pending = POLICY.with_name('select-default-pending.json')
         candidate_path = POLICY.with_name('activation-candidate.json')
-        if pending.exists() or pending.is_symlink():
-            require(stat.S_ISREG(protected(pending, private=True).st_mode), 'Private default journal required')
-            transaction = json.loads(pending.read_text())
-            require(set(transaction) == {'harness', 'previous', 'candidate'}
-                    and transaction['harness'] in ('pi', 'opencode'), 'Invalid default journal')
-            validate_policy(transaction['previous'])
-            validate_policy(transaction['candidate'])
-            require(policy in (transaction['previous'], transaction['candidate']), 'Policy drift during default selection')
-            atomic_json(candidate_path, transaction['candidate'])
-            phase = 'select-finalize' if policy == transaction['candidate'] else 'select-rollback'
-            activation_gateway(config, phase, transaction, lock_fd=fd)
-            finish_default_selection(pending, candidate_path)
-        else:
-            require(not candidate_path.exists() and not candidate_path.is_symlink(), 'Unowned activation candidate blocks selection')
         require(installed(policy, harness), 'Selected default must already be installed')
         candidate = copy.deepcopy(policy)
         require(requested_interface(policy, harness, 'cli') and requested_interface(policy, harness, 'web'),
                 'Routing default must provide both CLI and web')
         candidate['default_harness'] = candidate['web']['default_harness'] = harness
         validate_policy(candidate)
-        transaction = dict(harness=harness, previous=policy, candidate=candidate)
-        atomic_json(pending, transaction, 0o600)
-        try:
-            atomic_json(candidate_path, candidate)
-            activation_gateway(config, 'select-check', transaction, lock_fd=fd)
-            if candidate != policy:
-                activation_gateway(config, 'select-commit', transaction, lock_fd=fd)
-                require(load_policy(POLICY) == policy, 'Policy changed during default selection')
-                atomic_json(POLICY, candidate)
-            activation_gateway(config, 'select-finalize', transaction, lock_fd=fd)
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-            # Publication is the commit point, including rename-before-fsync errors.
-            # Never revert a published candidate. Leave its journal for finalization.
-            if load_policy(POLICY) == policy and candidate != policy:
-                activation_gateway(config, 'select-rollback', transaction, lock_fd=fd)
-                finish_default_selection(pending, candidate_path)
-            raise
-        finish_default_selection(pending, candidate_path)
+        atomic_json(candidate_path, candidate)
+        activation_gateway(config, 'select-current', dict(harness=harness, candidate=candidate), lock_fd=fd)
+        require(load_policy(POLICY) == policy, 'Policy changed during default selection')
+        atomic_json(POLICY, candidate)
+        candidate_path.unlink()
         print(f'default={harness}; changed={str(candidate != policy).lower()}')
         return 0
     finally:
@@ -955,14 +872,6 @@ def _resource_dispatch(argv: list[str] | None = None) -> int:
             return select_default(argv[1])
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             print(f'venv-agents default selection: {error}', file=sys.stderr)
-            return 1
-    if argv[:1] == ['shared-run']:
-        try:
-            policy = load_policy(POLICY)
-            require('shared_runtime' in policy, 'Shared runtime is not explicitly enrolled')
-            return shared_module(policy).run_cli(shared_host(), argv[1:])
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-            print(f'venv-agents shared runtime: {error}', file=sys.stderr)
             return 1
     if argv[:1] == ['candidate-web']:
         try:
@@ -1011,26 +920,31 @@ def _resource_dispatch(argv: list[str] | None = None) -> int:
     try:
         require(sum((args.web, args.web_status, args.web_stop)) <= 1, 'Select one web action')
         arguments = args.arguments + passthrough
-        policy = load_policy(POLICY)
-        if args.harness == 'default':
-            require(not args.web_status and not args.web_stop, 'Use a named harness for web lifecycle')
-            return run_default(policy, args.web, arguments)
-        if args.web_status or args.web_stop:
-            require(not arguments, 'Web lifecycle accepts no app arguments')
-            return run_web(policy, args.harness, 'stop' if args.web_stop else 'status')
-        return run_session(policy, args.harness, args.web, arguments)
+        with maintenance_lock(POLICY):
+            policy = load_policy(POLICY)
+            require(args.harness != 'default' or not (args.web_status or args.web_stop),
+                    'Use a named harness for web lifecycle')
+            if args.web or (args.harness == 't3' and not (args.web_status or args.web_stop)):
+                return (run_default(policy, True, arguments) if args.harness == 'default'
+                        else run_session(policy, args.harness, args.web, arguments))
+            if args.web_status or args.web_stop:
+                require(not arguments, 'Web lifecycle accepts no app arguments')
+                return run_web(policy, args.harness, 'stop' if args.web_stop else 'status')
+        # Interactive CLI containers are not named web writers. Do not pin
+        # publication behind an arbitrarily long user session.
+        return (run_default(policy, False, arguments) if args.harness == 'default'
+                else run_session(policy, args.harness, False, arguments))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"venv-agents: {error}", file=sys.stderr)
         return 1
 
 
-# BEGIN sealed resource runtime extension
 from contextlib import contextmanager
 
 
 @contextmanager
 def maintenance_lock(policy_path: Path, *, exclusive: bool = False):
-    """Lock the existing protected directory inode; never create a user-owned lock."""
+    """Existing directory admission: readers wait, competing activations refuse."""
     directory = policy_path.parent
     info = protected(directory)
     require(stat.S_ISDIR(info.st_mode), 'Maintenance directory required')
@@ -1038,7 +952,7 @@ def maintenance_lock(policy_path: Path, *, exclusive: bool = False):
     try:
         opened = os.fstat(fd)
         require((opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino), 'Maintenance directory changed')
-        fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        fcntl.flock(fd, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
         yield fd
     finally:
         os.close(fd)
@@ -1070,24 +984,10 @@ def resource_web_contract(policy: dict, harness: str, account: str, identity: st
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments in (['validate'], ['validate-runtime']) or arguments[:1] in (['activate'], ['select-default']):
-        return _resource_dispatch(arguments)
     try:
-        # Launch/lifecycle entrypoints, including candidate-web, serialize here.
-        # Root activation instead holds activation.lock, acquired first by maintenance.
-        # Dispatch loads policy only AFTER admission; never use a stale pre-lock copy.
-        with maintenance_lock(POLICY):
-            require(not POLICY.with_name('shared-runtime-upgrade.json').exists(), 'Protected control upgrade in progress')
-            if arguments[:1] != ['candidate-web'] and POLICY.with_name('shared-replacement.json').exists():
-                raise ValueError('Shared runtime replacement in progress; retry after recovery')
-            require(not POLICY.with_name('resource-update-pending.json').exists()
-                    and not POLICY.with_name('resource-update-pending.json').is_symlink(), 'Resource update in progress; retry after operator recovery')
-            return _resource_dispatch(arguments)
+        return _resource_dispatch(arguments)
     except (OSError, ValueError):
         print('venv-agents: resource maintenance admission refused', file=sys.stderr)
         return 1
-# END sealed resource runtime extension
-
-
 if __name__ == "__main__":
     sys.exit(main())

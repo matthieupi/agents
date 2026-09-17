@@ -196,7 +196,21 @@ class RuntimeTests(IdentityFixture):
         self.assertEqual(self.docker.calls[-1], ['container', 'rm', 'a' * 64])
         self.assertEqual(marker.read_bytes(), b'private-fixture-do-not-copy')
 
-    def test_foreign_and_owner_drift_never_take_over(self):
+    def test_owned_outdated_account_is_replaced_by_exact_id_without_deleting_data(self):
+        marker = self.root / 'home/provider.json'
+        marker.write_bytes(b'current-user-data')
+        runtime.run_web(self.data, 'pi')
+        self.docker.instance['Config']['Labels']['io.venv-agents.account'] = 'pi'
+        self.docker.instance['Config']['User'] = '2999:2999'
+        self.docker.calls.clear()
+        runtime.run_web(self.data, 'pi')
+        self.assertIn(['container', 'stop', '--time', '30', 'a' * 64], self.docker.calls)
+        self.assertIn(['container', 'rm', 'a' * 64], self.docker.calls)
+        self.assertEqual(runtime.validate_web_instance(self.data, 'pi', self.docker.instance), self.account)
+        self.assertEqual(marker.read_bytes(), b'current-user-data')
+        self.assertFalse(any('prune' in call or '--volumes' in call or '-v' in call for call in self.docker.calls))
+
+    def test_owned_contract_drift_is_strict_for_status_and_replaced_on_start(self):
         runtime.run_web(self.data, 'pi')
         original = copy.deepcopy(self.docker.instance)
         for mutate in [lambda i: i['Config']['Labels'].update({'io.venv-agents.account': 'foreign'}),
@@ -210,8 +224,31 @@ class RuntimeTests(IdentityFixture):
             mutate(self.docker.instance)
             before = len(self.docker.calls)
             with self.assertRaises(ValueError):
-                runtime.run_web(self.data, 'pi')
+                runtime.run_web(self.data, 'pi', 'status')
             self.assertEqual(len(self.docker.calls), before + 1)
+            runtime.run_web(self.data, 'pi')
+            self.assertEqual(runtime.validate_web_instance(self.data, 'pi', self.docker.instance), self.account)
+
+    def test_foreign_namespace_never_removed_on_start_or_stop(self):
+        runtime.run_web(self.data, 'pi')
+        original = copy.deepcopy(self.docker.instance)
+        for mutate in (lambda i: i['Config']['Labels'].update({'io.venv-agents.target': 'other:target'}),
+                       lambda i: i['Config']['Labels'].update({'io.venv-agents.harness': 'opencode'}),
+                       lambda i: i['Config']['Labels'].update({'io.venv-agents.mode': 'cli'}),
+                       lambda i: i.update(Name='/other'), lambda i: i.update(Id='invalid')):
+            for action in ('start', 'status', 'stop'):
+                self.docker.instance = copy.deepcopy(original)
+                mutate(self.docker.instance)
+                self.docker.calls.clear()
+                with self.assertRaises(ValueError):
+                    runtime.run_web(self.data, 'pi', action)
+                self.assertEqual(len(self.docker.calls), 1)
+
+    def test_stop_owned_outdated_contract_removes_only_exact_id(self):
+        runtime.run_web(self.data, 'pi')
+        self.docker.instance['Config']['User'] = '2999:2999'
+        runtime.run_web(self.data, 'pi', 'stop')
+        self.assertEqual(self.docker.calls[-1], ['container', 'rm', 'a' * 64])
 
     def test_failed_create_never_cleans_up_foreign_id(self):
         self.docker.fail_create = True
@@ -237,10 +274,11 @@ class RuntimeTests(IdentityFixture):
                 return subprocess.CompletedProcess(args, 1, '', 'name in use')
             return base(policy, args)
         with patch.object(runtime, 'docker_call', race):
-            self.assertEqual(runtime.run_web(self.data, 'pi'), 0)
+            with self.assertRaisesRegex(ValueError, 'Concurrent web container'):
+                runtime.run_web(self.data, 'pi')
         self.assertEqual(self.docker.instance['State']['Status'], 'created')
         self.assertFalse(any(c[:2] == ['container', 'start'] for c in self.docker.calls))
-        self.assertIn('created', self.output.getvalue())
+        self.assertFalse(any(c[:2] == ['container', 'rm'] for c in self.docker.calls))
 
     def test_concurrent_atomic_name_reservation_has_exactly_one_winner(self):
         barrier = threading.Barrier(2)

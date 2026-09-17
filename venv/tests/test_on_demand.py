@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import stat
 import subprocess
 import tempfile
 import threading
@@ -40,6 +41,28 @@ class PolicyTests(IdentityFixture):
         with self.assertRaises(ValueError):
             runtime.validate_policy(self.data)
 
+    def test_current_schema_accepts_only_current_optional_extensions(self):
+        runtime.validate_policy(self.data)
+        for extension in ('shared_runtime', 'schema_history', 'legacy_defaults'):
+            candidate = copy.deepcopy(self.data)
+            candidate[extension] = {}
+            with self.subTest(extension=extension), self.assertRaisesRegex(ValueError, 'Exact current VM policy'):
+                runtime.validate_policy(candidate)
+
+    def test_retired_deployment_markers_do_not_block_current_policy_or_admit_old_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'policy.json'
+            path.write_text(json.dumps(self.data))
+            for name in ('bootstrap-pending.json', 'resource-update-pending.json'):
+                path.with_name(name).touch()
+            with patch.object(runtime, 'protected', side_effect=lambda value, **kwargs: value.stat()):
+                self.assertEqual(runtime.load_policy(path), self.data)
+                old = copy.deepcopy(self.data)
+                old['schema'] = 1
+                path.write_text(json.dumps(old))
+                with self.assertRaisesRegex(ValueError, 'Current VM policy schema required'):
+                    runtime.load_policy(path)
+
     def test_uninstalled_refused_before_state_socket_or_docker(self):
         with patch.object(runtime, 'validate_socket') as socket, patch.object(runtime, 'docker_call') as docker:
             for harness in runtime.HARNESSES:
@@ -56,18 +79,43 @@ class PolicyTests(IdentityFixture):
             self.assertEqual(runtime.main(['default', '--', '--version']), 17)
             default.assert_called_once_with(self.data, False, ['--version'])
 
-    def test_candidate_uses_only_protected_fixed_policy_path(self):
+    def test_standalone_candidate_cannot_read_leftover_policy(self):
         from contextlib import nullcontext
         with patch.object(runtime, 'load_policy', return_value=self.data) as load_policy, \
                 patch.object(runtime, 'maintenance_lock', return_value=nullcontext()), \
                 patch.object(runtime, 'run_web', return_value=0) as web:
-            self.assertEqual(runtime.main(['candidate-web', 'pi', 'start']), 0)
-            load_policy.assert_called_once_with(runtime.POLICY.with_name('activation-candidate.json'))
-            web.assert_called_once_with(self.data, 'pi', 'start')
+            self.assertEqual(runtime.main(['candidate-web', 'pi', 'start']), 1)
+            load_policy.assert_not_called()
+            web.assert_not_called()
         with patch.object(runtime.os, 'getuid', return_value=0), patch.object(runtime, 'load_policy') as load_policy:
             with self.assertRaisesRegex(ValueError, 'non-root'):
                 runtime.run_candidate('pi', 'start')
             load_policy.assert_not_called()
+
+    def test_candidate_diagnostic_emits_only_fixed_public_category_metadata(self):
+        candidate = copy.deepcopy(self.data)
+        candidate['harnesses']['pi']['image'] = 'sha256:' + 'a' * 64
+        candidate['harnesses']['pi']['requested_interfaces']['web'] = True
+        instance = {'Id': 'a' * 64, 'State': {'Status': 'exited', 'ExitCode': 1,
+                                               'OOMKilled': False, 'Error': 'private runtime value'}}
+        logs = subprocess.CompletedProcess([], 0,
+                                           'OpenCodeConfigInvalidError: private=/token/value', '')
+        output = io.StringIO()
+        with patch.object(runtime.os, 'getuid', return_value=1000), \
+                patch.object(runtime, 'inherited_activation_fd'), \
+                patch.object(runtime, 'load_policy', return_value=candidate), \
+                patch.object(runtime.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='agents')), \
+                patch.object(runtime.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1000, pw_gid=1000)), \
+                patch.object(runtime, 'protected', return_value=SimpleNamespace(st_mode=stat.S_IFREG)), \
+                patch.object(runtime, 'validate_socket'), \
+                patch.object(runtime, 'inspect_web', return_value=instance), \
+                patch.object(runtime, 'validate_web_instance', return_value='agents'), \
+                patch.object(runtime, 'docker_call', return_value=logs), \
+                patch('sys.stdout', output):
+            assert runtime.run_candidate('pi', 'diagnose') == 0
+        result = json.loads(output.getvalue())
+        assert result == {'state': 'exited', 'exit_code': 1, 'oom_killed': False,
+                          'category': 'opencode-config-invalid', 'runtime_error_present': True}
 
     def test_default_dispatch_never_executes_as_root_and_has_no_fallback(self):
         with patch.object(runtime.os, 'getuid', return_value=0), patch.object(runtime.subprocess, 'call') as call:
@@ -212,7 +260,8 @@ class ActivationTests(IdentityFixture):
         original_fstat = os.fstat
         def fstat(fd):
             info = original_fstat(fd)
-            return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_nlink=info.st_nlink)
+            return SimpleNamespace(st_uid=0, st_gid=0, st_mode=info.st_mode, st_nlink=info.st_nlink,
+                                   st_dev=info.st_dev, st_ino=info.st_ino)
         for name, replacement in [('POLICY', self.path), ('ACTIVATION', self.config),
                                   ('protected', lambda path, **kwargs: path.stat()),
                                   ('activation_gateway', self.gateway), ('check_image', lambda *args: None)]:
@@ -226,16 +275,34 @@ class ActivationTests(IdentityFixture):
         mocked = patch('sys.stdout', new_callable=io.StringIO)
         mocked.start(); self.addCleanup(mocked.stop)
 
-    def gateway(self, config, phase, transaction, *, lock_fd=None):
+    def gateway(self, config, phase, candidate, *, lock_fd=None):
         self.phases.append(phase)
-        # No policy publication or provider mutation before successful gateway commit.
-        committed = phase == 'install-finalize'
-        self.assertEqual(json.loads(self.path.read_text()), transaction['candidate' if committed else 'previous'])
+        self.assertIn(phase, ('install-current', 'select-current'))
+        self.assertIsNotNone(lock_fd)
         self.assertEqual(self.marker.read_bytes(), b'unchanged-provider-fixture')
-        self.assertEqual(json.loads(self.path.with_name('activation-candidate.json').read_text()), transaction['candidate'])
+        self.assertEqual(set(candidate), {'harness', 'candidate'})
+        self.assertEqual(json.loads(self.path.with_name('activation-candidate.json').read_text()), candidate['candidate'])
 
     def install(self, harness, digit='a'):
         return runtime.activate(harness, 'sha256:' + digit * 64)
+
+    def test_old_journals_are_inert_even_if_unreadable_json(self):
+        paths = [self.path.with_name(name) for name in ('image-install.json', 'select-default-pending.json')]
+        for path in paths:
+            path.write_text('not a journal to parse')
+        with patch.object(runtime, 'activation_gateway') as gateway:
+            self.install('pi')
+        self.assertEqual(gateway.call_args.args[1], 'install-current')
+        for path in paths:
+            self.assertEqual(path.read_text(), 'not a journal to parse')
+
+    def test_current_image_replacement_is_allowed(self):
+        with patch.object(runtime, 'activation_gateway') as gateway:
+            self.install('pi')
+            self.install('pi', 'b')
+            self.install('pi', 'b')
+        self.assertEqual(gateway.call_count, 3)
+        self.assertEqual(json.loads(self.path.read_text())['harnesses']['pi']['image'], 'sha256:' + 'b' * 64)
 
     def test_first_success_all_choices_and_additions_preserve_defaults(self):
         for first in sorted(runtime.HARNESSES):
@@ -254,75 +321,24 @@ class ActivationTests(IdentityFixture):
                 self.assertEqual(later['web']['default_harness'], expected_web)
                 self.assertEqual(self.marker.read_bytes(), b'unchanged-provider-fixture')
 
-    def test_check_and_commit_failure_restore_previous_policy_and_retry(self):
+    def test_partial_failure_leaves_candidate_and_retry_converges_forward(self):
         original = self.path.read_bytes()
-        for failure in ('install-check', 'install-commit'):
-            def gateway(config, phase, transaction, *, lock_fd=None):
-                self.gateway(config, phase, transaction)
-                if phase == failure:
-                    raise ValueError('failed gateway')
-            with patch.object(runtime, 'activation_gateway', side_effect=gateway):
-                with self.assertRaisesRegex(ValueError, 'failed gateway'):
-                    self.install('pi')
-            self.assertEqual(self.path.read_bytes(), original)
-            self.assertEqual(self.phases[-1], 'install-rollback')
-            self.assertFalse(self.path.with_name('image-install.json').exists())
-        self.assertEqual(self.install('pi'), 0)
-
-    def test_success_finalizes_gateway_before_retiring_recovery(self):
-        gateway = self.gateway
-        def observe(config, phase, transaction, *, lock_fd=None):
-            gateway(config, phase, transaction, lock_fd=lock_fd)
-            if phase == 'install-finalize':
-                self.assertTrue(self.path.with_name('image-install.json').exists())
-                self.assertEqual(json.loads(self.path.read_text()), transaction['candidate'])
-        with patch.object(runtime, 'activation_gateway', side_effect=observe):
-            self.install('pi')
-        self.assertEqual(self.phases, ['install-check', 'install-commit', 'install-finalize'])
-        self.assertFalse(self.path.with_name('image-install.json').exists())
-
-    def test_finalize_failure_retains_published_state_and_recovery(self):
-        gateway = self.gateway
-        def fail(config, phase, transaction, *, lock_fd=None):
-            gateway(config, phase, transaction, lock_fd=lock_fd)
-            if phase == 'install-finalize':
-                raise ValueError('finalize interrupted')
+        def fail(config, phase, candidate, *, lock_fd=None):
+            self.gateway(config, phase, candidate, lock_fd=lock_fd)
+            raise ValueError('failed gateway')
         with patch.object(runtime, 'activation_gateway', side_effect=fail):
-            with self.assertRaisesRegex(ValueError, 'finalize interrupted'):
+            with self.assertRaisesRegex(ValueError, 'failed gateway'):
                 self.install('pi')
-        self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'pi')
-        self.assertTrue(self.path.with_name('image-install.json').exists())
-        self.assertNotIn('install-rollback', self.phases)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(self.phases, ['install-current'])
+        self.assertTrue(self.path.with_name('activation-candidate.json').exists())
+        self.assertEqual(self.install('pi', 'b'), 0)
+        self.assertEqual(self.phases, ['install-current', 'install-current'])
+        self.assertFalse(self.path.with_name('activation-candidate.json').exists())
+        self.assertEqual(json.loads(self.path.read_text())['harnesses']['pi']['image'], 'sha256:' + 'b' * 64)
+
+    def test_invalid_args_and_unenrolled_caller_refused(self):
         self.install('pi')
-        self.assertEqual(self.phases[-1], 'install-finalize')
-        self.assertFalse(self.path.with_name('image-install.json').exists())
-
-    def test_failed_rollback_retains_journal_and_retry_recovers_first(self):
-        with patch.object(runtime, 'activation_gateway', side_effect=ValueError('unavailable')):
-            with self.assertRaises(ValueError):
-                self.install('omp')
-        self.assertTrue(self.path.with_name('image-install.json').exists())
-        self.install('t3', 'b')
-        self.assertEqual(self.phases, ['install-rollback', 'install-check', 'install-commit', 'install-finalize'])
-        self.assertIsNone(json.loads(self.path.read_text())['default_harness'])
-        self.assertEqual(json.loads(self.path.read_text())['web']['default_harness'], 't3')
-
-    def test_published_candidate_journal_does_not_restore_previous_policy(self):
-        candidate = copy.deepcopy(self.data)
-        candidate['harnesses']['omp']['image'] = 'sha256:' + 'a' * 64
-        candidate['default_harness'] = 'omp'
-        candidate['web']['default_harness'] = None
-        self.path.write_text(json.dumps(candidate))
-        pending = self.path.with_name('image-install.json')
-        pending.write_text(json.dumps(dict(harness='omp', previous=self.data, candidate=candidate)))
-        self.install('omp')
-        self.assertEqual(self.phases, ['install-finalize'])
-        self.assertFalse(pending.exists())
-
-    def test_replacement_invalid_args_and_unenrolled_caller_refused(self):
-        self.install('pi')
-        with self.assertRaisesRegex(ValueError, 'replacement'):
-            self.install('pi', 'b')
         for harness, image in [('all', 'sha256:' + 'a' * 64), ('pi', 'pi:latest'), ('pi', 'sha256:' + 'a' * 64 + ' --privileged')]:
             with self.assertRaises(ValueError):
                 runtime.activate(harness, image)
@@ -338,7 +354,7 @@ class ActivationTests(IdentityFixture):
         self.assertFalse(self.path.with_name('image-install.json').exists())
         self.assertEqual(json.loads(self.path.read_text()), self.data)
 
-    def test_publication_failure_rolls_back_and_removes_candidate(self):
+    def test_publication_failure_does_not_restore_gateway_and_retry_is_current(self):
         atomic = runtime.atomic_json
         def fail_policy(path, value, mode=0o644):
             if path == self.path:
@@ -347,9 +363,24 @@ class ActivationTests(IdentityFixture):
         with patch.object(runtime, 'atomic_json', side_effect=fail_policy):
             with self.assertRaisesRegex(OSError, 'publication failed'):
                 self.install('pi')
-        self.assertEqual(self.phases, ['install-check', 'install-commit', 'install-rollback'])
+        self.assertEqual(self.phases, ['install-current'])
         self.assertEqual(json.loads(self.path.read_text()), self.data)
+        self.assertTrue(self.path.with_name('activation-candidate.json').exists())
+        self.install('pi')
+        self.assertEqual(self.phases, ['install-current', 'install-current'])
         self.assertFalse(self.path.with_name('activation-candidate.json').exists())
+
+    def test_install_preserves_only_original_gateway_error(self):
+        def gateway(config, phase, transaction, *, lock_fd=None):
+            self.gateway(config, phase, transaction, lock_fd=lock_fd)
+            raise runtime.GatewayError('install-current', 'GW_CHECK_L101', 17)
+
+        with patch.object(runtime, 'activation_gateway', side_effect=gateway):
+            with self.assertRaises(runtime.GatewayError) as caught:
+                self.install('pi')
+        error = caught.exception
+        self.assertEqual((error.phase, error.code, error.returncode), ('install-current', 'GW_CHECK_L101', 17))
+        self.assertEqual(self.phases, ['install-current'])
 
     def test_fsync_failure_after_publication_never_restores_previous_policy(self):
         atomic = runtime.atomic_json
@@ -362,7 +393,7 @@ class ActivationTests(IdentityFixture):
                 self.install('omp')
         self.assertNotIn('install-rollback', self.phases)
         self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'omp')
-        self.assertTrue(self.path.with_name('image-install.json').exists())
+        self.assertTrue(self.path.with_name('activation-candidate.json').exists())
         self.install('omp')
         self.assertNotIn('install-rollback', self.phases)
         self.assertFalse(self.path.with_name('image-install.json').exists())
@@ -371,10 +402,10 @@ class ActivationTests(IdentityFixture):
         entered, release = threading.Event(), threading.Event()
         errors = []
         def gateway(config, phase, transaction, *, lock_fd=None):
-            if phase == 'install-check':
+            if phase == 'install-current':
                 entered.set()
                 self.assertTrue(release.wait(5))
-            self.gateway(config, phase, transaction)
+            self.gateway(config, phase, transaction, lock_fd=lock_fd)
         def first():
             try:
                 self.install('omp')
@@ -394,6 +425,25 @@ class ActivationTests(IdentityFixture):
         self.assertEqual(errors, [])
         self.install('pi', 'b')
         self.assertEqual(json.loads(self.path.read_text())['default_harness'], 'omp')
+
+    def test_default_selection_is_root_only_current_and_ignores_old_files(self):
+        self.install('pi')
+        self.install('opencode', 'b')
+        with self.assertRaisesRegex(ValueError, 'controller root'):
+            runtime.select_default('opencode')
+        original = json.loads(self.path.read_text())
+        for name in ('image-install.json', 'select-default-pending.json', 'activation-candidate.json'):
+            self.path.with_name(name).write_text('inert prior bytes')
+        with patch.dict(os.environ, {}, clear=True):
+            runtime.select_default('opencode')
+            runtime.select_default('opencode')
+        selected = json.loads(self.path.read_text())
+        expected = copy.deepcopy(original)
+        expected['default_harness'] = expected['web']['default_harness'] = 'opencode'
+        self.assertEqual(selected, expected)
+        self.assertEqual(self.phases[-2:], ['select-current', 'select-current'])
+        self.assertFalse(self.path.with_name('activation-candidate.json').exists())
+        self.assertEqual(self.path.with_name('select-default-pending.json').read_text(), 'inert prior bytes')
 
 
 class ImageCheckTests(IdentityFixture):
@@ -434,18 +484,48 @@ class ImageCheckTests(IdentityFixture):
                     with self.assertRaisesRegex(ValueError, 'version check failed'):
                         runtime.check_image(data, 'pi', image)
 
-    def test_gateway_exact_argv_clean_environment_and_no_output_disclosure(self):
-        transaction = dict(harness='pi', previous={'public': 1}, candidate={'public': 2})
-        with patch.object(runtime, 'protected', return_value=SimpleNamespace(st_mode=0o100644)), \
-                patch.object(runtime.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, 'private', 'private')) as run:
-            with self.assertRaisesRegex(ValueError, 'Gateway install-check failed') as caught:
-                runtime.activation_gateway({'gateway': '/usr/local/lib/gateway.py'}, 'install-check', transaction, lock_fd=7)
-            self.assertNotIn('private', str(caught.exception))
-            self.assertEqual(run.call_args.args[0], ['/usr/bin/python3', '-I', '/usr/local/lib/gateway.py', 'install-check', 'pi'])
-            self.assertEqual(json.loads(run.call_args.kwargs['input']), {'previous': {'public': 1}, 'candidate': {'public': 2}})
-            self.assertEqual(set(run.call_args.kwargs['env']), {'PATH', 'HOME'})
-            self.assertEqual(run.call_args.kwargs['cwd'], '/')
-            self.assertEqual(run.call_args.kwargs['pass_fds'], (7,))
+    def test_gateway_exact_argv_clean_environment_and_safe_fixed_diagnostics(self):
+        transaction = dict(harness='pi', candidate={'public': 2})
+        codes = ('GW_CHECK_L101', 'GW_INTERNAL_JSON_L102', 'GW_INTERNAL_KEY_L103',
+                 'GW_INTERNAL_OS_L104', 'GW_INTERNAL_SUBPROCESS_L105',
+                 'GW_INTERNAL_VALUE_L106', 'GW_INTERNAL_UNEXPECTED_L107')
+        for code in codes:
+            stderr = io.StringIO()
+            print(f'GW_ERROR action=install-current code={code}', file=stderr)
+            with self.subTest(code=code), \
+                    patch.object(runtime, 'protected', return_value=SimpleNamespace(st_mode=0o100644)), \
+                    patch.object(runtime.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 17, '', stderr.getvalue())) as run:
+                with self.assertRaises(runtime.GatewayError) as caught:
+                    runtime.activation_gateway({'gateway': '/usr/local/lib/gateway.py'}, 'install-current', transaction, lock_fd=7)
+                error = caught.exception
+                self.assertEqual((error.phase, error.code, error.returncode), ('install-current', code, 17))
+                self.assertEqual(run.call_args.args[0], ['/usr/bin/python3', '-I', '/usr/local/lib/gateway.py', 'install-current', 'pi'])
+                self.assertEqual(json.loads(run.call_args.kwargs['input']), {'public': 2})
+                self.assertEqual(set(run.call_args.kwargs['env']), {'PATH', 'HOME', 'VENV_ACTIVATION_LOCK_FD'})
+                self.assertEqual(run.call_args.kwargs['cwd'], '/')
+                self.assertEqual(run.call_args.kwargs['pass_fds'], (7,))
+
+    def test_gateway_malformed_or_secret_output_is_unclassified_and_never_disclosed(self):
+        transaction = dict(harness='pi', candidate={'public': 2})
+        valid = io.StringIO()
+        print('GW_ERROR action=install-current code=GW_CHECK_L1', file=valid)
+        outputs = [
+            ('', 'secret=do-not-disclose'),
+            ('secret=do-not-disclose', valid.getvalue()),
+            ('', 'GW_ERROR action=install-rollback code=GW_CHECK_L1\n'),
+            ('', 'GW_ERROR action=install-current code=GW_INTERNAL_TYPE_L1\n'),
+            ('', valid.getvalue() + 'secret=do-not-disclose\n'),
+        ]
+        for stdout, stderr in outputs:
+            with self.subTest(stdout=bool(stdout), stderr=stderr.startswith('GW_ERROR')), \
+                    patch.object(runtime, 'protected', return_value=SimpleNamespace(st_mode=0o100644)), \
+                    patch.object(runtime.subprocess, 'run', return_value=subprocess.CompletedProcess([], 19, stdout, stderr)):
+                with self.assertRaises(runtime.GatewayError) as caught:
+                    runtime.activation_gateway({'gateway': '/usr/local/lib/gateway.py'}, 'install-current', transaction)
+                error = caught.exception
+                self.assertEqual((error.phase, error.code, error.returncode), ('install-current', 'GW_UNCLASSIFIED', 19))
+                self.assertNotIn('secret', str(error))
 
     def test_real_protection_rejects_guest_owned_root_helper(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -453,8 +533,8 @@ class ImageCheckTests(IdentityFixture):
             helper.write_text('raise SystemExit(0)')
             with patch.object(runtime.subprocess, 'run') as run:
                 with self.assertRaisesRegex(ValueError, 'ownership/mode'):
-                    runtime.activation_gateway({'gateway': str(helper)}, 'install-check',
-                                               dict(harness='pi', previous={}, candidate={}))
+                    runtime.activation_gateway({'gateway': str(helper)}, 'install-current',
+                                               dict(harness='pi', candidate={}))
                 run.assert_not_called()
 
 
