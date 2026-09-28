@@ -135,7 +135,8 @@ Use purposeful emoji markers across both chat responses and saved planning artif
 
 ## Read-Only Mode
 
-> 🔒 Planning mode is read-only except for saving the finalized plan document under `.project/`.
+> [!IMPORTANT]
+> Planning mode is read-only except for saving the finalized plan document under `.project/`.
 
 This is a read-only planning task. You are strictly prohibited from:
 

@@ -1,0 +1,55 @@
+services:
+  paseo-deamon:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      additional_contexts:
+        opencode-inputs: {{ service_config.opencode_build_context | to_json }}
+      args:
+        PASEO_BASE: {{ service_config.image | to_json }}
+        PASEO_VERSION: {{ service_config.version | to_json }}
+        OPENCODE_VERSION: {{ service_config.opencode_version | to_json }}
+        AGENT_UID: {{ agent_uid | string | to_json }}
+        AGENT_GID: {{ agent_gid | string | to_json }}
+    user: "{{ agent_uid }}:{{ agent_gid }}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: {{ service_config.pids_limit }}
+    mem_limit: {{ service_config.memory_limit | to_json }}
+    cpus: {{ service_config.cpus }}
+    working_dir: {{ agent_workspace | to_json }}
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:{{ service_config.upstream_port }}:{{ service_config.container_port }}"
+    tmpfs:
+      - "/tmp:rw,nosuid,nodev,size=512m,mode=1777"
+      - "{{ agent_home }}:rw,nosuid,nodev,noexec,size=4m,mode=0700,uid={{ agent_uid }},gid={{ agent_gid }}"
+      - "{{ agent_home }}/.config/opencode:rw,nosuid,nodev,noexec,size=4m,mode=0700,uid={{ agent_uid }},gid={{ agent_gid }}"
+      # Suppress the inherited upstream anonymous HOME volume, without exposing it.
+      - "/home/paseo:rw,nosuid,nodev,noexec,size=1m,mode=000"
+    volumes:
+      - type: bind
+        source: {{ agent_workspace | to_json }}
+        target: {{ agent_workspace | to_json }}
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (agent_home ~ '/.local/state/paseo-deamon/daemon') | to_json }}
+        target: /state/paseo
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (agent_home ~ '/.local/state/paseo-deamon/provider') | to_json }}
+        target: /state/provider
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (docker_service_path ~ '/config.json') | to_json }}
+        target: /state/paseo/config.json
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:{{ service_config.container_port }}/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

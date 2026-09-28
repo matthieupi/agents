@@ -1,0 +1,39 @@
+# The named opencode-inputs context is a finite PUBLIC staging directory, not HOME
+# or the full checkout. It is delivered by Ansible before native Compose build.
+ARG PASEO_BASE
+FROM ${PASEO_BASE}
+ARG PASEO_VERSION
+ARG OPENCODE_VERSION
+ARG AGENT_UID
+ARG AGENT_GID
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3 util-linux ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/local/bin/node /usr/bin/node \
+    && ln -s /usr/local/bin/npm /usr/bin/npm \
+    && install -d -o 1000 -g 1000 /opt/opencode/build-home /opt/opencode/component
+COPY --from=opencode-inputs scripts/entrypoint.sh /opt/opencode/native-contract.sh
+COPY --from=opencode-inputs scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
+COPY --from=opencode-inputs service-entrypoint.sh /opt/opencode/service-entrypoint.sh
+COPY --from=opencode-inputs --chown=1000:1000 .opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
+COPY --from=opencode-inputs .opencode/config/plugins/kdco-*.ts /opt/opencode/component/.opencode/config/plugins/
+USER 1000:1000
+RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER="$(id -un)" OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime OPENCODE_VERSION; install_runtime'
+USER root
+RUN set -eu; test "$AGENT_UID" -gt 0; test "$AGENT_GID" -gt 0; \
+    account="$(getent passwd 1000 | cut -d: -f1)"; \
+    group="$(getent group 1000 | cut -d: -f1)"; \
+    groupmod -n agent -g "$AGENT_GID" "$group"; \
+    usermod -l agent -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent "$account"; \
+    install -d -m 0700 -o agent -g agent /home/agent /home/agent/.config/opencode /state/paseo /state/provider; \
+    chmod -R a+rX,a-w /opt/opencode/component
+RUN node -e 'const v=process.argv[1]; if(!/^\d+\.\d+\.\d+$/.test(v)||require("/usr/local/lib/node_modules/@getpaseo/cli/package.json").version!==v||require("/usr/local/lib/node_modules/@getpaseo/server/package.json").version!==v)process.exit(1)' "$PASEO_VERSION"
+COPY entry.py /opt/paseo-component/entry.py
+ENV HOME=/home/agent USER=agent LOGNAME=agent \
+    PASEO_HOME=/state/paseo XDG_CONFIG_HOME=/home/agent/.config \
+    XDG_DATA_HOME=/state/provider/data XDG_CACHE_HOME=/state/provider/cache \
+    XDG_STATE_HOME=/state/provider/state OPENCODE_CONFIG_DIR=/home/agent/.config/opencode \
+    OPENCODE_DISABLE_AUTOUPDATE=1 PATH=/opt/opencode/component/.runtime/bin:/usr/local/bin:/usr/bin:/bin
+USER agent
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/opt/opencode/service-entrypoint.sh", "/usr/bin/python3", "-I", "/opt/paseo-component/entry.py"]
+CMD []

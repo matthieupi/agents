@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "daemon": {
+    "listen": "0.0.0.0:{{ service_config.container_port }}",
+    "hostnames": {{ service_config.hostnames | to_json }},
+    "trustedProxies": {{ service_config.trusted_proxies | to_json }},
+    "auth": {"password": {{ paseo_password_hash | to_json }}},
+    "relay": {"enabled": false},
+    "mcp": {"enabled": false, "injectIntoAgents": false},
+    "enableTerminalAgentHooks": false,
+    "cors": {"allowedOrigins": {{ service_config.allowed_origins | to_json }}},
+    "serviceProxy": {"enabled": false}
+  },
+  "agents": {"providers": {
+    "claude": {"enabled": false}, "codex": {"enabled": false},
+    "copilot": {"enabled": false}, "opencode": {"enabled": true},
+    "pi": {"enabled": false}, "omp": {"enabled": false}
+  }},
+  "features": {"webUi": {"enabled": true}, "dictation": {"enabled": false}, "voiceMode": {"enabled": false}},
+  "worktrees": {"root": {{ (agent_workspace ~ '/.paseo-worktrees') | to_json }}},
+  "log": {"console": {"level": "info", "format": "json"}, "file": {"level": "info", "rotate": {"maxSize": "10m", "maxFiles": 2}}}
+}

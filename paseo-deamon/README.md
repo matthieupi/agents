@@ -1,9 +1,20 @@
-# Paseo execution daemon + managed OpenCode
+# Paseo execution daemon + embedded OpenCode
 
-📍 Spelling **paseo-deamon** is intentional. DevAI now has source-only Ansible
-wiring in `ansible/roles/agent/paseo-daemon`; this component remains the maintained
-image/runtime ingredient. No live deployment, hub change, shared-runtime change or
-adapter patch is implied. Do not deploy until the acceptance gates below pass.
+## Standard VM Compose service
+
+The new `docker-compose.j2` / `env.j2` / `config.json.j2` and
+`Dockerfile.service` use one `agent` account with NSS-derived IDs. See
+[VM service inputs](../VM-SERVICES.md) for metadata, the finite named OpenCode
+build context, local state, credential ownership and parent integration.
+Paseo still owns embedded OpenCode and native auth/Origin. No workstation SSH or
+provider HOME is mounted. This new path is source-only, not built or accepted.
+The existing standalone `compose.yaml` / `Dockerfile` instructions below describe
+the separate retained component interface, not the new VM identity or delivery.
+
+📍 Spelling **paseo-deamon** is intentional. This component remains the maintained
+image/runtime ingredient. VM deployment uses the ordinary service catalog rather
+than the retired dedicated lifecycle. No live deployment or adapter patch is
+implied; acceptance remains deferred.
 
 ```text
 future TLS proxy -> loopback published Paseo :6767
@@ -106,9 +117,9 @@ Use an empty dedicated SSH directory and empty Git file when no identity is need
 Workspace content and config plugins can execute with all these granted rights;
 this is a container boundary, not per-agent credential isolation.
 
-The DevAI direct-daemon role intentionally publishes the workspace/config/resource
-subset but omits host SSH and Git identity mounts. Authenticate providers later in
-its fresh dedicated state; extend identity exposure only through a separate review.
+The VM Compose template omits host SSH and Git identity mounts and uses baked KDCO
+inputs, not the standalone public-config projection described above. Authenticate
+providers in its dedicated state; extend identity exposure only through review.
 
 ## Native auth configuration
 
@@ -181,12 +192,12 @@ installer, publication helper and KDCO public sources/lock. No config credential
 private runtime, other services or whole checkout are copied into the image.
 
 Paseo installation is inherited from its official version/digest image; OpenCode
-installation reuses `opencode/scripts/entrypoint.sh:install_runtime()` (the same
-callable used by `venv/Dockerfile.opencode`). No independent package installer is
+installation reuses `opencode/scripts/entrypoint.sh:install_runtime()` (also used
+by the ordinary VM images). No independent package installer is
 introduced. Required helper is copied to `component/scripts/publish-plugins.mjs`.
 Build checks actual OpenCode output and both Paseo package versions; records them
 in `/opt/opencode-version.txt` and `/opt/paseo-version.txt`. Record those plus image
-ID/digest/platform and source revision in local `progress.md` after a real build.
+ID/digest/platform and source revision in the approved deployment record after a real build.
 Exact direct versions are not a fully reproducible OS/transitive-dependency lock;
 the existing native installer permits lifecycle hooks and registry access at build.
 
@@ -194,7 +205,7 @@ Updating means repeat metadata/release review, change explicit inputs, rebuild,
 verify, then choose new private state or perform a separately reviewed state
 migration/backup. No startup pull, package installer, update timer or automatic
 activation. Compose `pull_policy: never`; later approved startup must use
-`up --no-build --pull never`. **Do not run that now: target/account remain unresolved.**
+`up --no-build --pull never`. This source cleanup grants no deployment authorization.
 
 ## Method Signature Surface
 

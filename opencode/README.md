@@ -1,5 +1,14 @@
 # OpenCode - Native and Container Workflows
 
+## Standard VM Compose service
+
+`docker-compose.j2`, `env.j2` and `Dockerfile.service` use the ordinary service
+flow; see [the shared VM contract](../VM-SERVICES.md). The image reuses
+`install_runtime()` and locked KDCO inputs; startup only links the baked plugins.
+VM registration/public agent projection and SSH aliases are not part of this
+path. The old managed controller is retired. No executable checks or builds ran
+for this change; workstation/native contracts below are unchanged.
+
 ## Native workspaces in the workstation container
 
 The workstation Compose environment and `opencode-run` launcher enable
@@ -61,7 +70,7 @@ source downloader, or inactive receipt remains.
 |---|---|
 | CPU/GPU workstation | Image installs defaults; `init.sh` checks/reuses the actual mounted `kdco/` graph under a shared lock, otherwise links installed image defaults |
 | Native | `install` checks/reuses checkout `.opencode/config/kdco` under the same package-local lock; `initialize-home` links that package and three entrypoints |
-| VM | Image installs the same package; enrollment explicitly publishes plugin-only shared resources and runs npm as their owner; private HOME links those resources |
+| Standard VM Compose | Image installs the same package; product startup links baked plugins into private HOME, without enrollment or VM registration |
 | Opt-in runtime | Image installs the package non-root and startup links it even without shared resources; all source bytes/lock are bound to the existing resolution/receipt |
 
 Private config, root package manifests, provider credentials and unrelated plugins
@@ -69,7 +78,7 @@ are not overwritten. Conflicting managed names or redirected private directories
 fail with their contents preserved. Managed links receive later shared-source
 edits; unlike ordinary copied defaults, they are not first-write-only snapshots.
 Keep the source available wherever its HOME is mounted. Workstation init, native
-install and VM enrollment share a `flock` on `kdco/.kdco-install.lock`. Under that
+install and VM image installation use a `flock` on `kdco/.kdco-install.lock`. Under that
 lock the existing helper compares both manifests and the actual installed tree's
 file contents, directory paths and symlink targets against `.kdco-install.json`.
 Unchanged launches do not invoke npm or use the network. Missing/changed inputs,
@@ -101,8 +110,8 @@ force-fix was applied. See package provenance for the approved artifact-read pat
 No deployments or running sessions are updated by these edits. Quit/restart only
 the selected idle OpenCode session after its normal installation/reapply.
 Existing workstation images must be rebuilt before using the updated mounted
-`init.sh`, which expects the image's publication helper. VM enrollment requires
-normally regenerated inventory; do not hand-edit generated allowlists or receipts.
+`init.sh`, which expects the image's publication helper. VM products instead bake
+the same public inputs through native Docker builds; there is no enrollment step.
 
 ### KDCO verification commands
 

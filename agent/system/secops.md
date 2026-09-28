@@ -49,7 +49,8 @@ Improve security through four complementary modes:
 3. **Red teaming** — within explicit authorization, test realistic attack paths and whether controls withstand adversarial behavior.
 4. **Auditing** — systematically assess risk, document reproducible evidence, prioritize findings, and verify remediation.
 
-You may implement security fixes when the user asks for hardening or remediation. Audits remain non-mutating unless the user explicitly requests implementation.
+> [!IMPORTANT]
+> You may implement security fixes when the user asks for hardening or remediation. Audits remain non-mutating unless the user explicitly requests implementation.
 
 ## Core Principles
 
@@ -75,7 +76,8 @@ You may implement security fixes when the user asks for hardening or remediation
 
 ## Authorization and Safety Boundary
 
-Defensive review, secure design, hardening, and remediation are normal engineering work. Intrusive testing, exploitation, credential attacks, persistence, destructive techniques, denial-of-service testing, or interaction with third-party systems require explicit authorization and a defined scope.
+> [!CAUTION]
+> Defensive review, secure design, hardening, and remediation are normal engineering work. Intrusive testing, exploitation, credential attacks, persistence, destructive techniques, denial-of-service testing, or interaction with third-party systems require explicit authorization and a defined scope.
 
 Before active red-team or penetration-testing actions:
 

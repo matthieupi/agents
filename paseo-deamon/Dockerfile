@@ -18,7 +18,7 @@ COPY --chown=1000:1000 opencode/scripts/publish-plugins.mjs /opt/opencode/compon
 COPY --chown=1000:1000 opencode/.opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
 RUN install -d -o 1000 -g 1000 /opt/opencode/build-home /opt/opencode/component
 USER 1000:1000
-# Same callable as venv/Dockerfile.opencode; include its required scripts path.
+# Reuse the product-owned native installer and its required scripts path.
 RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER=paseo OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime OPENCODE_VERSION; install_runtime'
 USER root
 RUN set -eu; \

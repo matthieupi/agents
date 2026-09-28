@@ -229,14 +229,11 @@ def web_instance(c: dict) -> dict:
     return value
 
 
-def web_request(c: dict, route: str, *, upgrade: bool = False) -> tuple[int, bytes]:
+def web_request(c: dict, route: str) -> tuple[int, bytes]:
     # http.client does not follow redirects or use ambient proxy/credential config.
     connection = http.client.HTTPConnection('127.0.0.1', c['port'], timeout=2)
     try:
         headers = {'Connection': 'close'}
-        if upgrade:
-            headers = {'Connection': 'Upgrade', 'Upgrade': 'websocket', 'Sec-WebSocket-Version': '13',
-                       'Sec-WebSocket-Key': 'YWdlbnRzLXJ1bnRpbWUxMg=='}
         connection.request('GET', route, headers=headers)
         response = connection.getresponse()
         body = response.read(1024 * 1024 + 1)
@@ -248,17 +245,13 @@ def web_request(c: dict, route: str, *, upgrade: bool = False) -> tuple[int, byt
 
 def web_ready(c: dict) -> None:
     require(web_request(c, '/')[0] == 200, 'Application HTTP unavailable')
-    if c['harness'] == 't3':
-        require(web_request(c, '/api/orchestration/snapshot')[0] == 401, 'T3 unpaired API gate missing')
-        require(web_request(c, '/ws', upgrade=True)[0] == 401, 'T3 unpaired WS gate missing')
-    else:
-        route = '/api/sessions' if c['harness'] == 'pi' else '/global/health'
-        status, body = web_request(c, route)
-        require(status == 200, 'Application API unavailable')
-        value = json.loads(body)
-        require(isinstance(value, (dict, list)), 'Application JSON response required')
-        if c['harness'] == 'opencode':
-            require(isinstance(value, dict) and value.get('healthy') is True, 'OpenCode API unhealthy')
+    route = '/api/sessions' if c['harness'] == 'pi' else '/global/health'
+    status, body = web_request(c, route)
+    require(status == 200, 'Application API unavailable')
+    value = json.loads(body)
+    require(isinstance(value, (dict, list)), 'Application JSON response required')
+    if c['harness'] == 'opencode':
+        require(isinstance(value, dict) and value.get('healthy') is True, 'OpenCode API unhealthy')
 
 
 def wait_web(c: dict, process, *, timeout: float = 60) -> None:
@@ -329,8 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw[:split])
     arguments = raw[split + 1:]
     try:
-        # Import only in ordinary-user entry. Protected consumers use the pure
-        # contract functions, never this checkout-dependent CLI.
+        # Workstation CLI only; never execute this mutable checkout as root.
         require(os.getuid() > 0 and os.getuid() == os.geteuid(), 'Runtime must be invoked as ordinary user')
         import install
         os.umask(0o077)
