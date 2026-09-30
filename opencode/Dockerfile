@@ -75,13 +75,15 @@ RUN npm ci --prefix /opt/opencode-defaults/kdco --ignore-scripts --no-audit --no
 RUN npm install -g playwright \
     && playwright install --with-deps chromium
 
-# Health check - verify CLI exists and responds
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD opencode --version || exit 1
+COPY init.sh backend-health.mjs /opt/harness/
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_EXPERIMENTAL_WORKSPACES=1
+# Authenticated HTTP health, allowing time for first-run dependency installation.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD node /opt/harness/backend-health.mjs
 
 # Switch to opencode user
 USER opencode
 WORKDIR /workspace
 
-# Default: show help (override with entrypoint in compose)
-CMD ["opencode"]
+# One foreground backend; terminals use opencode attach.
+CMD ["bash", "-lc", "/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false"]

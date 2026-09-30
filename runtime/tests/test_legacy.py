@@ -17,15 +17,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class LegacyDispatch(unittest.TestCase):
     def test_unaffected_legacy_trees_byte_identical_to_head(self):
-        # KDCO installation is now explicitly shared with the production path.
-        # Keep the unchanged launch/control surfaces protected, without rejecting
-        # newly staged vendored files or depending on them staying untracked.
+        # Workstation OpenCode intentionally migrated to a shared web backend.
+        # Continue protecting the other harnesses and native launch/control paths.
+        # Only OMP's README changes to remove the retired shared command candidate.
         result = subprocess.run(['git', '-C', str(ROOT), 'diff', '--exit-code', 'HEAD', '--',
                                  'pi', 'omp', 'claudecode', 't3code',
-                                 'opencode/opencode', 'opencode/opencode-run', 'opencode/opencode-mgr',
-                                 'opencode/opencode-menu', 'opencode/docker-compose.yml',
+                                 'opencode/opencode-mgr',
                                  'opencode/scripts/start.sh', 'opencode/scripts/manage.sh',
-                                 'opencode/.opencode/config/opencode.json', 'opencode/.opencode/config/tui.json'],
+                                 'opencode/.opencode/config/opencode.json', 'opencode/.opencode/config/tui.json',
+                                 ':(exclude)omp/README.md'],
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, 'Tracked production harness files changed: ' + result.stdout)
 
@@ -50,7 +50,7 @@ class LegacyDispatch(unittest.TestCase):
 
     def test_opencode_run_verbatim(self):
         cases = [[], ['.'], ['/project'], ['--web'], ['-w', '4096', '.'],
-                 ['--wlan', '4096'], ['--port', '4097'], ['--agent-web-port', '4098'],
+                 ['--wlan', '4096'], ['--port', '4097'],
                  ['--gpu', '0', '.'], ['--cpus', '4', '--memory', '8g'],
                  ['--publish', '3000'], ['-r', '.'], ['--', 'a b', '$(false)']]
         for argv in cases:
@@ -113,12 +113,15 @@ class LegacyExecution(unittest.TestCase):
         self.workspace.mkdir()
         self.calls = self.root / 'calls.jsonl'
         # No fallback PATH: only ordinary filesystem/text utilities used by these
-        # copied scripts. Docker, Python socket probes and sleep are always stubs.
+        # copied scripts. Docker and sleep are always stubs.
         for name in ('dirname', 'basename', 'realpath', 'mkdir', 'id', 'grep', 'awk',
-                     'xargs', 'readlink', 'ln', 'rm', 'mktemp', 'cat', 'stat', 'node'):
-            (self.bin / name).symlink_to(shutil.which(name))
+                     'xargs', 'readlink', 'ln', 'rm', 'mktemp', 'cat', 'stat', 'node',
+                     'sha256sum', 'cut', 'flock', 'timeout'):
+            executable = shutil.which(name)
+            assert executable is not None, f'Missing test utility: {name}'
+            (self.bin / name).symlink_to(executable)
         recorder = '''#!/usr/bin/python3
-import json, os, sys
+import json, os, sys, hashlib, fcntl
 from pathlib import Path
 args = sys.argv[1:]
 tool = Path(sys.argv[0]).name
@@ -134,20 +137,32 @@ if tool == 'docker':
                 print('fixture-id')
         elif 'name=opencode-' in args and '-aq' in args:
             print('fixture-one\\nfixture-two')
-        elif scenario in ('reuse', 'stale', 'mismatch'):
+        elif scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'permission', 'unready-reuse'):
             print('Up fixture' if scenario != 'stale' else 'Exited fixture')
     elif args[0] == 'inspect':
         fmt = args[2]
         print('lab/opencode:latest' if fmt == '{{.Config.Image}}' else
+              ('' if scenario == 'legacy' else 'web-v1') if '.lifecycle' in fmt else
+              ('{"*":"allow"}' if scenario == 'permission' else '{}') if '.permission' in fmt else
+              os.environ.get('EXPOSURE', 'none') if '.web"' in fmt else
+              hashlib.sha256(bytes([0])).hexdigest() if '.volumes' in fmt else
               ('4' if scenario == 'mismatch' else '8.0') if '.cpus' in fmt else
               '16g' if '.memory' in fmt else '')
+    elif args[0] == 'port':
+        assert args[-1] == '4096/tcp', args
+        print(os.environ.get('MAPPING', ''))
+    elif args[0] == 'exec':
+        if '--wait' in args and scenario.startswith('unready'):
+            sys.exit(1)
+        if 'attach' in args:
+            # A second launcher must be able to enter while a TUI is attached.
+            for lock in Path(os.environ['CALLS']).parent.glob('opencode/.opencode/locks/*'):
+                with lock.open('w') as stream:
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
     elif args[:2] == ['image', 'inspect'] and scenario == 'missing-image':
         sys.exit(1)
-elif tool == 'python3':
-    # Never execute opencode-run's inline socket probe.
-    sys.exit(0)
 '''
-        for name in ('docker', 'sleep', 'python3'):
+        for name in ('docker', 'sleep'):
             path = self.bin / name
             path.write_text(recorder)
             path.chmod(0o755)
@@ -178,18 +193,28 @@ elif tool == 'python3':
                       str(self.root / 'opencode/.opencode/data') + ':/home/opencode/.local/share/opencode:rw'):
             self.assertIn(value, run)
         self.assertNotIn('--cap-drop', run)  # Legacy privilege profile is not new-path policy.
-        self.assertEqual(calls[-1][-4:], ['bash', '-lc', '/opt/harness/init.sh && exec opencode "$@"', '_'])
+        self.assertNotIn('-p', run)
+        self.assertEqual(run[-1], '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false')
+        self.assertEqual(calls[-1][-5:], ['opencode', 'attach', 'http://127.0.0.1:4096', '--dir', '/workspace'])
+        self.assertIn('OPENCODE_EXPERIMENTAL_WORKSPACES=1', run)
+        self.assertIn('OPENCODE_PERMISSION={}', run)
+        self.assertIn('dev.xmist.opencode.lifecycle=web-v1', run)
+        self.assertIn('node /opt/harness/backend-health.mjs', run)
+        self.assertEqual(calls[-2][-3:], ['node', '/opt/harness/backend-health.mjs', '--wait'])
+        self.assertFalse(any('init.sh' in str(call) for call in calls if call[0] == 'exec'))
 
     def test_direct_run_web_and_wlan_ports(self):
         for flags, published, port in [(['--web'], '127.0.0.1:4096:4096', '4096'),
-                                       (['-w', '4097'], '127.0.0.1:4097:4097', '4097'),
-                                       (['--wlan', '4098'], '0.0.0.0:4098:4098', '4098')]:
+                                       (['-w', '4097'], '127.0.0.1:4097:4096', '4097'),
+                                       (['--wlan', '4098'], '0.0.0.0:4098:4096', '4098'),
+                                       (['--web', '--port', '4099'], '127.0.0.1:4099:4096', '4099')]:
             with self.subTest(flags=flags):
                 result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(published, next(argv for argv in calls if argv[0] == 'run'))
-                self.assertEqual(calls[-1][-1], port)
-                self.assertIn('exec opencode web --hostname 0.0.0.0', calls[-1][-2])
+                self.assertIn('http://localhost:' + port, result.stdout)
+                self.assertEqual(calls[-1][-1], '--wait')
+                self.assertFalse(any('attach' in call for call in calls))
 
     def test_direct_run_gpu_resources_and_publish(self):
         result, calls = self.run_copy('opencode/opencode-run',
@@ -200,17 +225,22 @@ elif tool == 'python3':
                       'dev.xmist.opencode.cpus=4', 'dev.xmist.opencode.memory=8g', '3000'):
             self.assertIn(value, run)
 
-    def test_direct_run_agent_web_uses_stubbed_probe(self):
-        result, calls = self.run_copy('opencode/opencode-run', ['--agent-web-port', '4099', '.'])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        run = next(argv for argv in calls if argv[0] == 'run')
-        self.assertIn('0.0.0.0:4099:4099', run)
-        self.assertIn('OPENCODE_AGENT_WEB_URL=http://localhost:4099', run)
-        self.assertIn('exec opencode "$@"', calls[-1][-2])
-        self.assertIn('python3', [json.loads(line)[0] for line in self.calls.read_text().splitlines()])
+    def test_retired_agent_web_port_is_rejected_before_side_effects(self):
+        for argv in (['--agent-web-port', '4099', '.'], ['--agent-web-port=4099', '.'],
+                     ['--agent-web-port'], ['--agent-web-port='],
+                     ['--web', '--agent-web-port', '4099', '.'],
+                     ['--wlan', '--agent-web-port=4099', '.'],
+                     ['-r', '--agent-web-port=4099', '.']):
+            with self.subTest(argv=argv):
+                result, calls = self.run_copy('opencode/opencode-run', argv)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('--agent-web-port has been removed', result.stderr)
+                self.assertIn('--web or --wlan', result.stderr)
+                self.assertEqual(calls, [])
+                self.assertFalse((self.root / 'opencode/.opencode').exists())
 
     def test_direct_run_reuse_and_recreation(self):
-        for scenario in ('reuse', 'stale', 'mismatch'):
+        for scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'permission'):
             with self.subTest(scenario=scenario):
                 result, calls = self.run_copy('opencode/opencode-run', ['.'], scenario)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -219,9 +249,74 @@ elif tool == 'python3':
                 self.assertEqual('rm' in operations, scenario != 'reuse')
                 self.assertEqual(operations[-1], 'exec')
 
+    def test_backend_permission_change_and_auth_are_server_wide(self):
+        self.env.update(OPENCODE_SERVER_PASSWORD='fixture-secret', OPENCODE_SERVER_USERNAME='alice')
+        result, calls = self.run_copy('opencode/opencode-run', ['-d', '.'], 'reuse')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call[0] == 'rm' for call in calls))
+        run = next(call for call in calls if call[0] == 'run')
+        self.assertIn('OPENCODE_PERMISSION={"*":"allow"}', run)
+        self.assertIn('dev.xmist.opencode.permission={"*":"allow"}', run)
+        self.assertIn('OPENCODE_SERVER_PASSWORD=fixture-secret', run)
+        self.assertNotIn('fixture-secret', result.stdout + result.stderr)
+        for call in calls:
+            if call[0] == 'exec':
+                self.assertNotIn('-e', call)
+                self.assertNotIn('--permission', call)
+                self.assertNotIn('fixture-secret', str(call))
+        result, calls = self.run_copy('opencode/opencode-run', ['-d', '.'], 'permission')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(call[0] in ('run', 'rm') for call in calls))
+
+    def test_backend_readiness_failure_never_attaches_or_reports_ready(self):
+        for scenario in ('unready', 'unready-reuse'):
+            for flags in ([], ['--web', '4097']):
+                with self.subTest(scenario=scenario, flags=flags):
+                    self.env.update(EXPOSURE='127.0.0.1:4097' if flags else 'none', MAPPING='127.0.0.1:4097')
+                    result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'], scenario)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('no client was attached', result.stderr)
+                    self.assertNotIn('Browser backend ready', result.stdout)
+                    self.assertFalse(any('attach' in call for call in calls))
+
+    def test_backend_reuse_checks_internal_port_and_requested_host_binding(self):
+        for flags, exposure, mapping in [
+            (['--web', '4097'], '127.0.0.1:4097', '127.0.0.1:4097'),
+            (['--wlan', '4098'], '0.0.0.0:4098', '0.0.0.0:4098'),
+        ]:
+            for actual in (mapping, '127.0.0.1:9999', ''):
+                with self.subTest(flags=flags, actual=actual):
+                    self.env.update(EXPOSURE=exposure, MAPPING=actual)
+                    result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'], 'reuse')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(['port', 'opencode-project with spaces', '4096/tcp'], calls)
+                    self.assertEqual(any(call[0] == 'run' for call in calls), actual != mapping)
+                    self.assertFalse(any('init.sh' in str(call) for call in calls if call[0] == 'exec'))
+                    self.assertFalse(any('attach' in call for call in calls))
+                    self.assertIn('Browser backend ready', result.stdout)
+
+    def test_plain_invocation_removes_previous_web_exposure(self):
+        self.env['EXPOSURE'] = '0.0.0.0:4096'
+        result, calls = self.run_copy('opencode/opencode-run', ['.'], 'reuse')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('-p', next(call for call in calls if call[0] == 'run'))
+
+    def test_port_flag_alone_does_not_publish(self):
+        result, calls = self.run_copy('opencode/opencode-run', ['--port', '4097', '.'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('-p', next(call for call in calls if call[0] == 'run'))
+
+    def test_backend_migration_preserves_custom_volume_request(self):
+        result, calls = self.run_copy('opencode/opencode-run',
+                                      ['--volume', f'{self.workspace}:/reference:ro', '.'], 'legacy')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = next(call for call in calls if call[0] == 'run')
+        self.assertIn(f'{self.workspace}:/reference:ro', run)
+        self.assertNotIn('-p', run)
+        self.assertIn('attach', calls[-1])
+
     def test_direct_run_invalid_input_and_missing_image_do_not_launch(self):
         for argv, scenario in [(['--port', 'bad'], 'fresh'), (['--cpus', '0'], 'fresh'),
-                               (['--web', '--agent-web-port', '4098'], 'fresh'),
                                (['.'], 'missing-image')]:
             result, calls = self.run_copy('opencode/opencode-run', argv, scenario)
             self.assertNotEqual(result.returncode, 0)
@@ -245,7 +340,7 @@ elif tool == 'python3':
                                (['start', 'fixture name'], ['start', 'fixture name']),
                                (['remove', 'fixture name'], ['rm', '-f', 'fixture name']),
                                (['logs', 'fixture name'], ['logs', '-f', 'fixture name']),
-                               (['shell', 'fixture name'], ['exec', '-it', 'fixture name', '/bin/bash'])]:
+                               (['shell', 'fixture name'], ['exec', '-it', '-e', 'OPENCODE_EXPERIMENTAL_WORKSPACES=1', 'fixture name', '/bin/bash'])]:
             result, calls = self.run_copy('opencode/opencode-mgr', argv)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(calls, [expected])
@@ -371,7 +466,13 @@ initialize_home
                 self.assertIn('HOME=' + home, spec['environment'])
                 self.assertIn('../agent:/opt/agent:rw', spec['volumes'])
                 self.assertIn('./init.sh:/opt/harness/init.sh:ro', spec['volumes'])
-                self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
+                if component == 'opencode':
+                    self.assertEqual(spec['command'], ['bash', '-lc', '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false'])
+                    self.assertNotIn('ports', spec)
+                    self.assertEqual(spec['healthcheck']['test'], ['CMD', 'node', '/opt/harness/backend-health.mjs'])
+                    self.assertEqual(spec['healthcheck']['start_period'], '120s')
+                else:
+                    self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
                 self.assertTrue(document['networks']['devai-xmist']['external'])
         copied = self.root / 'omp.yml'
         shutil.copyfile(ROOT / 'omp/docker-compose.yml', copied)

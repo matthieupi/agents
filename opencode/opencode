@@ -19,16 +19,16 @@ Usage: $(basename "$0") [command] [options]
 
 Run Mode (default):
     $(basename "$0") [options] [path]     Run OpenCode in a workspace
-        -d, --dangerous                   Skip permission prompts
+        -d, --dangerous                   Allow permissions across the shared backend
         -r, --rebuild                     Rebuild CPU and GPU images
-        -w, --web [port]                  Run browser UI locally on localhost
-        --wlan [port]                     Run browser UI exposed on the LAN
+        -w, --web [port]                  Expose localhost browser endpoint and return
+        --wlan [port]                     Expose LAN browser endpoint and return
         --port <port>                     Port for --web/--wlan mode
-        --agent-web-port <port>           Pre-publish LAN web port for agent-started UI
         --gpu, -gpu [devices]             Enable GPU access (default: all)
         --cpus <number>                   CPU limit for container (default: 8.0)
         --memory, --mem <size>            Memory limit for container (default: 16g)
         --publish, -p <spec>              Publish extra host port(s) into container
+        --volume, --volumes, -v <spec>    Mount HOST_DIR:CONTAINER_DIR[:ro|rw]
 
 Management Commands:
     menu, tui                             Open guided launcher menu
@@ -49,11 +49,11 @@ Examples:
     $(basename "$0") /path/to/project     Run in specific directory
     $(basename "$0") -w 4096 .            Run browser UI at http://localhost:4096
     $(basename "$0") --wlan 4096 .        Run browser UI on the LAN
-    $(basename "$0") --agent-web-port 4096 . Pre-publish LAN port for /start-web
     $(basename "$0") --gpu .              Run with all GPUs available
     $(basename "$0") --gpu 0 .            Run with GPU device 0 available
     $(basename "$0") --cpus 4 --memory 8g . Run with custom resources
     $(basename "$0") --publish 3000 .     Expose host port 3000 to container port 3000
+    $(basename "$0") -v /host/docs:/docs:ro . Mount host docs read-only at /docs
     $(basename "$0") -r .                 Rebuild CPU and GPU images
     $(basename "$0") rebuild              Rebuild image and refresh containers
     $(basename "$0") rebuild gpu          Rebuild GPU image and refresh containers

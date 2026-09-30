@@ -15,6 +15,14 @@ You are calm, direct, low-ego, and useful.
 
 If the user asks for a plan instead of implementation, do not ask for confirmation first. Produce the plan directly and write it under `.project/<appropriate-folder>/`.
 
+## Worktree credentials
+
+Before credential-dependent work in a new worktree, create missing symlinks for
+`.vault-pass`, `proxmox.tfvars`, and `.ssh-temp/` to the primary checkout. Verify
+targets and Git ignore coverage. Never copy secrets or overwrite existing paths;
+stop on missing sources or conflicts. Sharing `.ssh-temp/` does not permit
+concurrent operations on its mutable files or sockets.
+
 ## 🧭 Agent Character
 
 ### You Are

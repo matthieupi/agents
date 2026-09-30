@@ -3,14 +3,14 @@
 ## Native workspaces in the workstation container
 
 The workstation Compose environment and `opencode-run` launcher enable
-`OPENCODE_EXPERIMENTAL_WORKSPACES=1`. The launcher passes it on container creation
-and every TUI/web attach, including reused containers. After pulling the updated
-launcher, quit and relaunch `opencode .`; no rebuild or container recreation is
-needed solely for this flag when using that launcher.
+`OPENCODE_EXPERIMENTAL_WORKSPACES=1` on the shared backend at container startup.
+The launcher automatically recreates legacy keepalive containers on the next
+launch. All attached TUIs and browser clients then use that backend; setting the
+flag only on a client does not enable workspaces on an already-running server.
 `opencode shell <container>` also supplies the flag to the new shell, including
 for older containers; OpenCode launched from that shell inherits it. Already
 running processes are unchanged.
-In a fresh OpenCode process, enter `/warp` and select **Worktree** to create a
+With the new backend running, enter `/warp` and select **Worktree** to create a
 native workspace and move the current conversation there in the same TUI. Select
 an existing workspace to reuse it. No fork or new terminal is required.
 
@@ -30,8 +30,8 @@ docker compose up -d --no-deps --force-recreate opencode
 docker compose exec opencode printenv OPENCODE_EXPERIMENTAL_WORKSPACES
 ```
 
-The final command should print `1`. Start a fresh OpenCode process through the
-normal entrypoint. Before using Warp for real implementation, smoke-test it in a
+The final command should print `1`. Attach a TUI to the backend as shown below.
+Before using Warp for real implementation, smoke-test it in a
 disposable credential-free repository: verify a relative file operation and a
 native subagent both use the selected worktree, and that the original checkout
 remains unchanged. Source configuration alone is not runtime verification.
@@ -294,7 +294,51 @@ parsing is also checked when available. This validates npm fallback geometry,
 is root; non-root runs check root-guard ordering. No network packages, host-global
 dependencies, accounts, services or VM operations are installed/run by the suite.
 
-## Docker workflow (existing)
+## Docker workstation workflow
+
+Each container runs one foreground `opencode web` backend on internal port 4096.
+TUIs attach to it; browser clients use the same backend and session store. Init
+runs once per container start, not on each attach. Closing a TUI does not stop the
+backend; use `opencode stop <name>` when finished.
+
+```text
+TUI (docker exec attach) ---> container backend :4096 <--- browser
+                                                        via explicit host mapping
+```
+
+**No host ports are published by default**, including when `--port` is used
+without a web mode. Only `--web`, `--wlan`, or `--publish`
+requests host publication. The backend binds `0.0.0.0` **inside the container**,
+so Docker-network peers (and hosts with direct container routing) can reach it
+even without published ports. This is not network isolation. Set
+`OPENCODE_SERVER_PASSWORD` before creation on untrusted/shared networks; username
+defaults to `opencode`. HTTP Basic auth is not encryption; use a trusted network
+or a TLS reverse proxy for remote access.
+
+The launcher waits up to 120 seconds for authenticated `/global/health` readiness
+before attaching or reporting a browser endpoint. A failed probe never launches
+another server. Inspect `opencode logs <name>` for startup/dependency errors and
+retry after resolving them. Creation/reuse is serialized with host `flock` per
+container name within this checkout; the lock is released before TUI attachment.
+The launcher requires host `flock` and `timeout` (Linux util-linux/coreutils).
+
+Legacy lifecycle, permission, exposure, resources, GPU, or mount mismatches cause
+automatic recreation **without confirmation**, interrupting attached clients.
+Repeat the same flags to reuse a container. Omitting a previous web/publish option
+removes that publication by recreation. To attach to an existing exposed backend
+without changing its launch configuration, use the direct `docker exec ... attach`
+command below. Persistent config/data/cache mounts survive recreation.
+
+Readiness and TUI attach inherit credentials from the **container environment**;
+changing the invoking shell's password does not rotate a reused backend. Remove
+the container and relaunch with the new credentials to rotate them. Credentials
+are not printed in launcher commands or stored in compatibility labels.
+
+The health helper is both copied into images and mounted by the launcher/Compose,
+so older images do not need to contain that new file just to recreate a container.
+Old OpenCode binaries without compatible `web`/`attach` commands need an image
+update. Existing plugin installation prerequisites still require rebuilding old
+images as described above. Direct Compose users must recreate their containers.
 
 ## Quick Start
 
@@ -309,8 +353,9 @@ mkdir -p workspace
 # 3. Build & start
 docker compose up -d --build
 
-# 4. Attach to OpenCode
-docker exec -it opencode opencode
+# 4. Check readiness, then attach to the shared backend
+docker exec opencode node /opt/harness/backend-health.mjs --wait
+docker exec -it opencode opencode attach http://127.0.0.1:4096 --dir /workspace
 ```
 
 ## Usage with Wrapper Scripts
@@ -335,6 +380,11 @@ The guided launcher uses [`gum`](https://github.com/charmbracelet/gum) to presen
 
 ### Browser UI
 
+`--web`/`--wlan` ensure the backend is ready, print its endpoint, and return;
+they do not start a second backend or hold a foreground browser session. Open
+the printed URL in your browser. Custom host ports always map to container 4096
+(for example, `--web 4097` publishes `127.0.0.1:4097:4096`).
+
 ```bash
 ./opencode -w                   # Run browser UI locally on http://localhost:4096
 ./opencode --web 4096 .         # Run browser UI locally on a specific port
@@ -348,28 +398,14 @@ For LAN access, set `OPENCODE_SERVER_PASSWORD` so the web server is protected:
 OPENCODE_SERVER_PASSWORD=secret ./opencode --wlan 4096 /path/to/project
 ```
 
-### Agent-started Browser UI
-
-Pre-publish a LAN-accessible port when the container starts, then ask the
-agent inside that container to start the web server later:
+To attach a TUI without changing the exposed backend's launch configuration, use
+the container name reported by the launcher:
 
 ```bash
-OPENCODE_SERVER_PASSWORD=secret ./opencode --agent-web-port 4096 /path/to/project
+docker exec -it <container-name> opencode attach http://127.0.0.1:4096 --dir /workspace
 ```
 
-The wrapper checks that the host port is free before creating the container,
-publishes `0.0.0.0:4096 -> container 4096`, and exposes these environment
-variables to the agent:
-
-```bash
-OPENCODE_AGENT_WEB_PORT=4096
-OPENCODE_AGENT_WEB_BIND_HOST=0.0.0.0
-OPENCODE_AGENT_WEB_URL=http://localhost:4096
-```
-
-Inside OpenCode, run `/start-web` to launch the server on the pre-published
-port. Because this mode exposes the web server on the LAN by default, set
-`OPENCODE_SERVER_PASSWORD` before using it on a shared network.
+This attaches to the existing backend; it does not start another server.
 
 ### Rebuild image
 
@@ -380,11 +416,35 @@ port. Because this mode exposes the web server on the LAN by default, set
 ./opencode rebuild all          # Rebuild CPU and GPU images + refresh containers
 ```
 
+Workstation CPU/GPU images intentionally install **`opencode-ai@latest`**, not a
+pinned version. This is latest-at-build policy: running containers have automatic
+updates disabled. A cached Docker build may reuse the old npm install layer,
+including `./opencode update`, which pulls the base image but still allows cache.
+To force a current npm release, build without cache from this directory:
+
+```bash
+docker build --pull --no-cache -t lab/opencode:latest .
+docker build --pull --no-cache -f Dockerfile.gpu -t lab/opencode:gpu .
+```
+
+Then remove the affected workspace containers with `./opencode remove <name>`
+and relaunch them (image tags alone do not invalidate reused containers).
+Schedule updates when clients are idle. The manager's `update`/`rebuild` commands
+already remove workspace containers after their builds. This policy does not
+change the separate native/VM pinned-version workflow.
+
 ### Dangerous mode (auto-approve all permissions)
 
 ```bash
 ./opencode -d                   # Skip permission prompts
 ```
+
+`-d` sets server-wide `OPENCODE_PERMISSION='{"*":"allow"}'`, affecting **every
+TUI and browser client of that backend**, subject to OpenCode's agent-specific
+permission rules. Without `-d`, the wrapper supplies `{}` and leaves configured
+permissions intact; it does not promise that the underlying config asks for
+approval. Toggling `-d` recreates the container. No unsupported permission flag is
+passed to `opencode attach`.
 
 ### GPU access
 
@@ -429,6 +489,27 @@ Use `--publish`/`-p` to expose arbitrary ports for dev servers that agents start
 ```
 
 Inside the container, the server must listen on `0.0.0.0`, not only `localhost`, for Docker port publishing to work.
+
+### Custom directory mounts
+
+Use `--volume`, `--volumes`, or `-v` to bind additional existing host directories
+into the workspace container. The default access is read-write; use `:ro` for
+reference material that the agent must not modify.
+
+```bash
+./opencode -v /home/me/reference:/reference:ro .
+./opencode --volume ./shared-data:/data:rw .
+./opencode -v /srv/docs:/docs:ro -v /srv/assets:/assets .
+```
+
+The format is `HOST_DIR:CONTAINER_DIR[:ro|rw]`. Host paths are canonicalized and
+must already exist as directories; container destinations must be absolute.
+Destinations are intentionally unrestricted, so a custom mount can shadow an
+existing path if requested. Treat that as a deliberate Docker-level override.
+
+Docker mounts are fixed when a container is created. Changing, adding, or omitting
+custom volumes on a later invocation recreates that workspace container; finish or
+detach active sessions first.
 
 ### Container management
 

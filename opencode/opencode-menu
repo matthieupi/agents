@@ -141,6 +141,20 @@ Leave empty for no extra published ports. Separate multiple values with commas.
 '
 }
 
+show_volume_help() {
+    show_help_block "Custom volumes" '
+Mount additional existing host directories into the container.
+
+Examples:
+- /home/me/docs:/docs:ro       read-only reference material
+- ./shared-data:/data          read-write data directory
+- /srv/assets:/assets:rw       explicit read-write mount
+
+Container destinations may overlap any path; Docker applies the requested mount.
+Leave empty for no custom volumes. Separate multiple values with commas.
+'
+}
+
 show_command_summary() {
     local mode="$1"
     local workspace="$2"
@@ -150,7 +164,8 @@ show_command_summary() {
     local cpus="${6:-8.0}"
     local memory="${7:-16g}"
     local publish="${8:-}"
-    shift 8
+    local volumes="${9:-}"
+    shift 9
     local -a cmd=("$@")
 
     gum style --bold --foreground 212 "Summary"
@@ -161,6 +176,7 @@ show_command_summary() {
     printf 'CPUs:       %s\n' "${cpus}"
     printf 'Memory:     %s\n' "${memory}"
     printf 'Publish:    %s\n' "${publish:-none}"
+    printf 'Volumes:    %s\n' "${volumes:-none}"
     printf 'Dangerous:  %s\n' "${dangerous}"
     printf '\n'
 
@@ -274,6 +290,41 @@ prompt_publish() {
     done
 }
 
+is_volume_spec() {
+    local spec="$1"
+    [[ "${spec}" == *:* && "${spec}" != *:*:*:* ]]
+}
+
+prompt_volumes() {
+    local current="${1:-}"
+    local volumes raw spec trimmed
+    show_volume_help
+    while true; do
+        raw="$(gum input --value "${current}" --placeholder "Volumes, e.g. /host/docs:/docs:ro,/host/data:/data")"
+        if [[ -z "${raw}" ]]; then
+            printf '%s' ""
+            return 0
+        fi
+
+        local valid="yes"
+        IFS=',' read -ra volumes <<< "${raw}"
+        for spec in "${volumes[@]}"; do
+            trimmed="${spec// /}"
+            if [[ -z "${trimmed}" ]] || ! is_volume_spec "${trimmed}"; then
+                valid="no"
+                break
+            fi
+        done
+
+        if [[ "${valid}" == "yes" ]]; then
+            printf '%s' "${raw}"
+            return 0
+        fi
+
+        gum style --foreground 196 "Use comma-separated HOST_DIR:CONTAINER_DIR[:ro|rw] values."
+    done
+}
+
 mode_uses_port() {
     [[ "$1" == "Run Web UI" || "$1" == "Run Web UI on LAN" || "$1" == "Run Web UI + GPU" || "$1" == "Run Web UI on LAN + GPU" ]]
 }
@@ -294,7 +345,8 @@ build_run_args() {
     local cpus="$5"
     local memory="$6"
     local publish="$7"
-    local -n out_args="$8"
+    local volumes="$8"
+    local -n out_args="$9"
 
     out_args=()
 
@@ -328,6 +380,13 @@ build_run_args() {
             out_args+=(--publish "${publish_spec}")
         done
     fi
+
+    if [[ -n "${volumes}" ]]; then
+        IFS=',' read -ra volume_specs <<< "${volumes}"
+        for volume_spec in "${volume_specs[@]}"; do
+            out_args+=(--volume "${volume_spec}")
+        done
+    fi
 }
 
 choose_mode() {
@@ -349,7 +408,8 @@ render_run_config() {
     local cpus="$6"
     local memory="$7"
     local publish="$8"
-    shift 8
+    local volumes="$9"
+    shift 9
     local -a cmd=("$@")
 
     gum style --bold --foreground 212 "OpenCode Run Configuration"
@@ -368,6 +428,7 @@ render_run_config() {
     printf 'CPUs:       %s\n' "${cpus}"
     printf 'Memory:     %s\n' "${memory}"
     printf 'Publish:    %s\n' "${publish:-none}"
+    printf 'Volumes:    %s\n' "${volumes:-none}"
     printf 'Dangerous:  %s\n' "${dangerous}"
     printf '\n'
     gum style --bold --foreground 212 "Command"
@@ -383,12 +444,13 @@ configure_run() {
     local cpus="8.0"
     local memory="16g"
     local publish=""
+    local volumes=""
     local action
     local -a args=()
 
     while true; do
-        build_run_args "${mode}" "${port}" "${gpu}" "${dangerous}" "${cpus}" "${memory}" "${publish}" args
-        render_run_config "${mode}" "${workspace}" "${port}" "${gpu}" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
+        build_run_args "${mode}" "${port}" "${gpu}" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${volumes}" args
+        render_run_config "${mode}" "${workspace}" "${port}" "${gpu}" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${volumes}" "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
 
         action="$(gum choose \
             "Run" \
@@ -399,6 +461,7 @@ configure_run() {
             "Edit CPUs" \
             "Edit memory" \
             "Edit published ports" \
+            "Edit custom volumes" \
             "Toggle dangerous mode" \
             "Cancel")"
 
@@ -407,7 +470,7 @@ configure_run() {
                 if mode_uses_lan "${mode}" && [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
                     gum style --foreground 214 "Warning: OPENCODE_SERVER_PASSWORD is not set; LAN mode will be exposed without auth."
                 fi
-                show_command_summary "${mode}" "${workspace}" "$(mode_uses_port "${mode}" && printf '%s' "${port}" || true)" "$(mode_uses_gpu "${mode}" && printf '%s' "${gpu}" || true)" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
+                show_command_summary "${mode}" "${workspace}" "$(mode_uses_port "${mode}" && printf '%s' "${port}" || true)" "$(mode_uses_gpu "${mode}" && printf '%s' "${gpu}" || true)" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${volumes}" "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
                 if gum confirm "Run this command?"; then
                     exec "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
                 fi
@@ -432,6 +495,9 @@ configure_run() {
                 ;;
             "Edit published ports")
                 publish="$(prompt_publish "${publish}")"
+                ;;
+            "Edit custom volumes")
+                volumes="$(prompt_volumes "${volumes}")"
                 ;;
             "Toggle dangerous mode")
                 show_dangerous_help

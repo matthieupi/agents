@@ -10,6 +10,9 @@ data/
 # Runtime cache (provider/plugin state)
 cache/
 
+# Workstation launcher lifecycle locks (never remove while launchers are active)
+/.opencode/locks/
+
 # Local overrides
 docker-compose.override.yml
 

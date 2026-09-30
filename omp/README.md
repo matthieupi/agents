@@ -374,8 +374,8 @@ discovery/body loading, repeat-init and conflict handling remain user-owned manu
 acceptance. No tests/checks/builds/runtime operations were performed for it.
 
 `agent/prompts -> commands` is the same source, so no second prompt link is
-created. Top-level `fix-test.md` and `start-web.md` are the supported command
-candidates. Nested `commands/gsd`, `commands/infra`, `agent/gsd` and other resources
+created. Top-level `fix-test.md` is the supported command candidate.
+Nested `commands/gsd`, `commands/infra`, `agent/gsd` and other resources
 remain readable at `/opt/agent`, **not promised as registered slash commands**.
 Command discovery is not proof that the workflow body/tool vocabulary is OMP
 compatible. Workspace-native `.omp` and cross-tool discovery may override or

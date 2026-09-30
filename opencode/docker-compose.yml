@@ -39,6 +39,8 @@ services:
       # OpenCode specific
       - OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json
       - OPENCODE_DISABLE_AUTOUPDATE=1
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
       # Native same-TUI workspace switching via /warp (no terminal launcher).
       - OPENCODE_EXPERIMENTAL_WORKSPACES=1
       - TERM=xterm-256color
@@ -58,6 +60,7 @@ services:
 
       # Harness-local startup wiring
       - ./init.sh:/opt/harness/init.sh:ro
+      - ./backend-health.mjs:/opt/harness/backend-health.mjs:ro
 
       # Config persistence (opencode.json)
       - ./.opencode/config:/home/opencode/.config/opencode:rw
@@ -93,13 +96,15 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # Keep-alive for docker exec attach pattern
-    # Access: docker exec -it opencode opencode
-    entrypoint: ["bash", "-lc", "/opt/harness/init.sh && tail -f /dev/null"]
-
-    # Alternative entrypoints:
-    # entrypoint: ["opencode"]                 # Direct TUI
-    # entrypoint: ["opencode", "serve"]        # Headless API server
+    # No host ports by default. The backend is reachable on the Docker network.
+    # Access: docker compose exec opencode opencode attach http://127.0.0.1:4096 --dir /workspace
+    command: ["bash", "-lc", "/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false"]
+    healthcheck:
+      test: ["CMD", "node", "/opt/harness/backend-health.mjs"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
 
 networks:
   devai-xmist:
