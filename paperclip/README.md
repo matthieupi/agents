@@ -1,10 +1,13 @@
 # Paperclip — private Hub base service
 
-✅ **Base deployed on DevAI Hub September 26, 2026; first-admin setup pending.**
-Paperclip/PostgreSQL health and non-root/no-socket runtime controls were verified.
-The apex currently returns the intended **403 deny-all** with valid TLS; browser
-access is not enabled yet. See the parent deployment record
-`.project/deployments/paperclip-hub-20260926.md` for scope and remaining checks.
+✅ **Admin access and native ownership completed September 29, 2026.**
+Open **https://intellagent.network** through a DevAI **admin** WireGuard profile.
+The owner is **sysadmin@xmist.dev** (display name `sysadmin`), using the existing
+shared service password referenced from the Dev Vault. No password is stored here.
+Signup is disabled; operators retain Paseo access but are not allowed into Paperclip.
+Native login/admin authorization, TLS, signup/claim/Origin denials and app-only
+recreation passed. Physical operator/mobile acceptance remains a separate handoff.
+See the parent record `.project/deployments/paperclip-completion-20260929.md`.
 The pinned image requires **x86-64-v2** CPU features (native `sharp` dependency);
 Hub's canonical CPU model now supplies them. Do not revert to `qemu64` while
 expecting this image to run.
@@ -30,7 +33,7 @@ environments/devai/config.yml -> generated inventory + canonical admission
   -> common/docker_service: finite files, .env, native build/up
        +-> private PostgreSQL -> persistent local cluster
        +-> Paperclip preload -> native production server -> persistent assets
-  -> observe healthy backend address -> native nginx + existing TLS issuer/DNS
+   -> verify reserved internal backend address -> native nginx + existing TLS issuer/DNS
        LAN/WireGuard -> https://intellagent.network -> Paperclip UI
 ```
 
@@ -63,7 +66,12 @@ Existing common-role source/custody/convergence behavior is reused, not forked.
   Docker service discovery resolves `postgres`; external DNS forwarding is pointed
   at the container's own loopback, where no DNS server runs. External providers,
   SMTP, integrations and remote agents are not enabled by this base.
-- Host nginx connects to the observed app address on configured port 3100. The
+- Paperclip reserves the last usable IPv4 address of its existing Docker-allocated
+  internal bridge subnet. Compose and host nginx use that same derived address;
+  container start order no longer changes nginx's upstream. Foreign attachments,
+  occupied reservations and ambiguous allocation fail closed. The external bridge
+  persists across app recreation and host restart; no subnet is hardcoded.
+- Host nginx connects to the reserved app address on configured port 3100. The
   canonical host policy adds only this bridge-output TCP port. No worker-to-Hub
   permission, public A/AAAA record, public reverse proxy, NAT or resource resize is
   added. Existing `paseo.intellagent.network` behavior is unchanged.
@@ -127,18 +135,28 @@ Review free space on the unchanged 4-core / 6-GiB / 32-GiB Hub before rollout.
 
 ## Ingress and first-admin setup
 
-Initial canonical settings are:
+Canonical settings are:
 
 ```yaml
 auth_disable_sign_up: true
-ingress_allowed_cidrs: []       # native nginx deny-all, NOT allow-all
+ingress_access_class: admin
+ingress_allowed_cidrs: []       # no manually maintained peer allowlist
 ```
 
-Admission accepts unique explicit RFC1918 IPv4 CIDRs. Enabling signup requires
-**exactly one private `/32`**. The native nginx access include is reloaded
-synchronously **before** Compose can change signup settings. A failed validation
-or reload prevents app recreation. On first install, the include exists before
-the frontend is published. No secondary login proxy is added; Paperclip owns auth.
+The native nginx ACL derives exact admin `/32`s from canonical DevAI policy.
+`remote_access.preserve_https_sources_to: hub` preserves enrolled peer sources only
+for Hub TCP/443. Gateway peer AllowedIPs and forwarding authorization remain the
+identity boundary; all other traffic retains existing SNAT. Hub's compiler adds
+only peer TCP/443 ingress, and networkd owns exact peer return routes via the
+same-LAN gateway. Operators still reach Paseo on the shared HTTPS listener; the
+Paperclip vhost denies them. Client-supplied forwarding headers grant no access.
+
+Each service reconciliation reloads deny-all before app changes and opens the
+derived admin ACL only after native owner readiness. Bootstrap keeps deny-all
+through signup, claim, signup closure and verification. Do not allow the shared
+gateway `/32` or use the explicitly unimplemented proxy-role-SNAT feature.
+This assumes trusted gateway/Hub administration and does not provide isolation
+against privileged same-L2 source spoofing; Proxmox anti-spoofing remains deferred.
 
 TLS reuses Dev `docker-mgt`'s existing ACME owner and issuer directory. Its normal
 apex-plus-wildcard certificate convention is retained; validation explicitly
@@ -151,35 +169,36 @@ existing ownership primitive, with foreign exact UCI domain/host conflicts refus
 Generic router service-name synthesis excludes Paperclip. Wildcard DNS, human-Hub
 records and Paseo's existing exact records are not changed.
 
-### Controlled bootstrap (only after separately authorized host rollout)
+### Controlled native bootstrap and maintenance
 
-1. Keep deny-all and signup disabled for first deployment. Review the current
-   source/diff, inventory regeneration, disk headroom, issuer/exact-record custody,
-   host-policy dependency and backup plan. Use the established **Hub-scoped** site
-   workflow first so the new host-output port rule precedes service startup. Never
-   treat service-only deployment as host firewall reconciliation.
-2. Confirm native Compose health, app private/authenticated posture, exact TLS SAN,
-   and deny-all/no-public/no-worker paths. No bootstrap company/agent is needed.
-3. Determine the chosen operator's **actual source address seen by Hub nginx**.
-   Select that one private `/32` and set `auth_disable_sign_up: false` in canonical
-   config. If multiple clients share that source through NAT, do not open the
-   window until access is restricted to the intended operator. Do not whitelist a
-   whole subnet for an unclaimed instance.
-4. Regenerate inventory through the normal reviewed flow and reconcile only Hub.
-   Visit **https://intellagent.network**, create the intended account, and choose
-   **Claim this instance**. Native private bootstrap is first-authenticated-user-wins.
-   Stop before company/agent onboarding; do not import a company or supply model keys.
-5. Verify the intended instance owner. Restore `auth_disable_sign_up: true` and
-   reconcile Hub before considering any broader **private-only** ingress list.
-   Verify signup and a second-client claim fail. Record the exact scoped commands,
-   source identity and results without passwords, cookies or signup tokens.
-6. If interrupted, restore deny-all and signup-disabled canonical settings and
-   reconcile Hub. Inspect ownership via the restricted operator path; never reset
-   an unknown account or delete data to make setup convenient.
+The existing `deploy-services.yml --tags paperclip` entrypoint accepts explicit
+`paperclip_bootstrap=true` **only for an unclaimed instance**. It uses native
+`/api/auth/sign-up/email`, `/api/auth/get-session` and `/api/bootstrap/claim`.
+Creation and claiming are separate; the first authenticated claim wins under a
+native DB lock. An existing account conflict or existing owner stops the operation;
+there is no reset, forced invite or raw database write.
 
-The existing `make ansible ENV=devai HOST=hub` is the scoped site entrypoint after
-reviewed inventory/host dependencies. No Make target is added. These are future
-operator instructions, not commands executed by this implementation pass.
+Public config supplies `admin_email`, `admin_name`, `admin_password_vault` and
+`admin_password_ref`. The approved reference is Dev's `vault_beszel_user_password`;
+the value is loaded under a private namespace and is not duplicated into another
+Vault, `.env`, command argument or log. Later shared-password rotations do not
+automatically rotate this application account.
+
+The temporary signup setting changes only the generated app environment behind
+deny-all. An Ansible `always` block closes it and recreates only Paperclip on success
+or failure. If the controller is killed/unreachable, deny-all remains in place;
+rerun normal reconciliation to restore canonical signup closure before recovery.
+Do not rerun bootstrap after a successful claim. Verification-only mode uses
+`paperclip_verify_auth=true`; additionally set `paperclip_verify_external=true`
+to verify canonical HTTPS from an already authorized controller admin path.
+Passwords/cookies/responses use `no_log`; available operation sessions are signed out.
+
+Use the existing **guarded host-firewall** workflow for host policy (ordinary site
+does not activate it). Prepare Hub routes/firewall before the gateway NAT exception.
+Use the existing native gateway playbook for enrolled policy, then the scoped
+`make ansible ENV=devai HOST=hub` for normal convergence. Exact reviewed commands
+and verification recaps are in the completion record. No company, agent, provider
+credential, worker permission or heartbeat schedule is created by these tasks.
 
 ## Pinned source and verification
 
@@ -195,7 +214,8 @@ PostgreSQL `17-bookworm` resolves to index
 AMD64 metadata reports 17.11 and docker-library source
 `2603e26e245e558218728ee14e0a42dcb020dc7f`, whose Dockerfile includes NSS-wrapper
 support for arbitrary runtime UIDs. Artifact metadata is not attestation or layer
-verification. Neither image has been pulled, built or run in this pass.
+verification. The initial source review did not run the images; subsequent live
+deployment and acceptance are recorded in the completion record above.
 
 Pinned upstream references:
 [Docker docs](https://github.com/paperclipai/paperclip/blob/6bc830b62bc96064aabe5c841cbdf97424bed73f/doc/DOCKER.md),
@@ -208,8 +228,8 @@ Pinned upstream references:
 Source uses external/embedded PostgreSQL, despite the Docker document's inconsistent
 embedded-SQLite heading.
 
-Focused syntax/render checks are recorded under the parent's
-`.project/implementation/paperclip-base-2026-09-25.md`. No tests were added or run,
-no Make commands or live operations executed, no credentials generated, and no
-further delegation performed during completion. Native Compose/image, first-admin,
-packet-path, reboot and restore acceptance remain unverified, not artificial gates.
+Historical source-only checks are recorded under the parent's
+`.project/implementation/paperclip-base-2026-09-25.md`. September 29 completion adds
+focused offline tests, scoped gateway/Hub convergence, native first-admin/login and
+app-recreation evidence. Whole-host reboot, restore drills, mobile/operator device
+acceptance and adversarial isolation remain unverified.

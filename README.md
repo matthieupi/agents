@@ -25,7 +25,8 @@ inputs, auth, account, state, Docker grants and ingress ownership.
   standalone component interface; embedded OpenCode belongs to Paseo.
 - [Paseo Hub](paseo-hub/README.md): restricted UI service, not an execution host.
 - [Paperclip base](paperclip/README.md): DevAI Hub-only private native-auth UI and
-  PostgreSQL; no configured agents or scheduler, frontend deny-all pending bootstrap.
+  PostgreSQL; native ownership established, signup closed and DevAI-admin-only
+  ingress. No agents or heartbeat scheduler are configured by the deployment.
 
 ## Shared defaults
 
