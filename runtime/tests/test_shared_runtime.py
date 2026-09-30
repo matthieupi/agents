@@ -29,7 +29,7 @@ SRI = 'sha512-' + base64.b64encode(b'x' * 64).decode()
 
 
 def contract():
-    return dict(schema=1, harness='opencode', mode='cli', image=ID, platform='linux/amd64',
+    return dict(schema=1, harness='opencode', account='alice', mode='cli', image=ID, platform='linux/amd64',
                 uid=1000, gid=1000, name='agents-runtime-test', workspace='/work/project',
                 home='/private/opencode', resources=None,
                 source=dict(mode='baked', path=None, sha256='b' * 64, revision='c' * 40),
@@ -59,6 +59,28 @@ def instance(c):
 
 
 class Contracts(unittest.TestCase):
+    def test_owner_home_environment_and_mount_are_explicit(self):
+        c = contract()
+        env = runtime.environment(c)
+        self.assertEqual(env['HOME'], '/private/opencode')
+        self.assertEqual(env['USER'], 'alice')
+        self.assertEqual(env['LOGNAME'], 'alice')
+        self.assertEqual(env['XDG_CONFIG_HOME'], '/private/opencode/.config')
+        self.assertIn(('/private/opencode', '/private/opencode', True), runtime.mounts(c))
+        for account in ('root', '', 'a b', None):
+            with self.subTest(account=account), self.assertRaisesRegex(ValueError, 'owner account'):
+                runtime.validate_contract(dict(c, account=account))
+
+    def test_retired_harnesses_rejected_before_spawn(self):
+        for harness in ('omp', 't3', 't3code', 'venv'):
+            with self.subTest(harness=harness), patch.object(runtime.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(ValueError, 'Unsupported harness mode'):
+                    runtime.command(dict(contract(), harness=harness), [], tty=False)
+                with patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
+                    runtime.main(['run', harness, '--workspace', '.'])
+                self.assertEqual(error.exception.code, 2)
+                spawn.assert_not_called()
+
     def test_default_no_socket_or_escalation(self):
         c = contract()
         argv = runtime.command(c, ['a b', '$(false)', '--mode', 'rpc'], tty=False)
@@ -149,7 +171,7 @@ class Contracts(unittest.TestCase):
                     if mode == 'web':
                         self.assertIn('127.0.0.1:4096:4096', argv)
         c = contract()
-        c.update(harness='omp', platform='linux/arm64')
+        c.update(platform='linux/unsupported')
         with self.assertRaises(ValueError):
             runtime.validate_contract(c)
 
@@ -209,18 +231,18 @@ class Installation(unittest.TestCase):
         current = json.loads((ROOT / 'harnesses.json').read_text())
         self.assertEqual(set(current['harnesses']), set(runtime.MODES))
 
-    def test_host_platform_and_all_cpu_checks_remain(self):
-        with patch.object(installer.host_platform, 'machine', return_value='x86_64'):
+    def test_native_host_platform_required_for_supported_harnesses(self):
+        for machine, native, foreign in [('x86_64', 'linux/amd64', 'linux/arm64'),
+                                          ('aarch64', 'linux/arm64', 'linux/amd64')]:
+            for harness in ('pi', 'opencode', 'claude'):
+                with self.subTest(machine=machine, harness=harness), \
+                        patch.object(installer.host_platform, 'machine', return_value=machine):
+                    installer.prerequisites(harness, native)
+                    with self.assertRaisesRegex(ValueError, 'Native host/platform'):
+                        installer.prerequisites(harness, foreign)
+        with patch.object(installer.host_platform, 'machine', return_value='unsupported'):
             with self.assertRaises(ValueError):
-                installer.prerequisites('pi', 'linux/arm64')
-            for text, accepted in [('flags : sse4_2 avx\nflags : sse4_2\n', True),
-                                   ('flags : sse4_2\nflags : sse2\n', False), ('', False)]:
-                with patch.object(Path, 'read_text', return_value=text):
-                    if accepted:
-                        installer.prerequisites('omp', 'linux/amd64')
-                    else:
-                        with self.assertRaises(ValueError):
-                            installer.prerequisites('omp', 'linux/amd64')
+                installer.prerequisites('pi', 'linux/amd64')
 
     def resolution(self, harness='opencode'):
         current = installer.catalog()
@@ -333,7 +355,8 @@ class Installation(unittest.TestCase):
                 installer.resolve('pi', installer.catalog(), 'linux/amd64')
             fetch.assert_not_called()
         with patch.object(installer, 'ordinary'), patch.object(installer, 'fetch') as fetch:
-            for harness, platform in [('unknown', 'linux/amd64'), ('omp', 'linux/arm64')]:
+            for harness, platform in [('unknown', 'linux/amd64'), ('pi', 'linux/unsupported'),
+                                      ('omp', 'linux/amd64'), ('t3', 'linux/amd64'), ('venv', 'linux/amd64')]:
                 with self.assertRaises(ValueError):
                     installer.resolve(harness, installer.catalog(), platform)
             fetch.assert_not_called()

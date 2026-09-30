@@ -94,8 +94,6 @@ class ImageRecipeTests(unittest.TestCase):
                 self.assertEqual(json.loads(entrypoint.removeprefix('ENTRYPOINT ')),
                                  ['/usr/bin/python3', '-I', '/opt/agents-runtime/entry.py', name])
                 self.assertEqual(re.findall(r'^USER (.+)$', recipe, re.M)[-1], 'node')
-                if name == 'omp':
-                    self.assertIn('test "$(dpkg --print-architecture)" = amd64', recipe)
 
 
 if __name__ == '__main__':

@@ -16,18 +16,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LegacyDispatch(unittest.TestCase):
-    def test_unaffected_legacy_trees_byte_identical_to_head(self):
-        # Workstation OpenCode intentionally migrated to a shared web backend.
-        # Continue protecting the other harnesses and native launch/control paths.
-        # Only OMP's README changes to remove the retired shared command candidate.
-        result = subprocess.run(['git', '-C', str(ROOT), 'diff', '--exit-code', 'HEAD', '--',
-                                 'pi', 'omp', 'claudecode', 't3code',
-                                 'opencode/opencode-mgr',
-                                 'opencode/scripts/start.sh', 'opencode/scripts/manage.sh',
-                                 'opencode/.opencode/config/opencode.json', 'opencode/.opencode/config/tui.json',
-                                 ':(exclude)omp/README.md'],
-                                text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, 'Tracked production harness files changed: ' + result.stdout)
+    def test_supported_dispatch_and_retired_entrypoints(self):
+        # Stable behavior, independent of the current commit or merge state.
+        for component, wrapper in [('pi', 'pi'), ('opencode', 'opencode'), ('claudecode', 'claude')]:
+            with self.subTest(component=component):
+                argv = ['.', '--', 'a b', '$(false)']
+                self.assertEqual(self.dispatch(component, wrapper, argv), [wrapper + '-run', argv])
+        for retired in ('omp/omp', 't3code/t3code', 'venv/venv'):
+            with self.subTest(retired=retired):
+                self.assertFalse((ROOT / retired).exists())
 
     def dispatch(self, component, wrapper, arguments, *, directory=None):
         with tempfile.TemporaryDirectory() as temporary:
@@ -40,9 +37,6 @@ class LegacyDispatch(unittest.TestCase):
                 path.chmod(0o755)
             if directory:
                 (root / directory).mkdir()
-            if component == 't3code':
-                (root / 'scripts').mkdir()
-                (root / 'scripts/host.py').write_text(recorder)
             result = subprocess.run(['/bin/bash', str(root / wrapper), *arguments],
                                     cwd=root, text=True, capture_output=True,
                                     env={'PATH': '/usr/bin:/bin'}, check=True)
@@ -61,7 +55,6 @@ class LegacyDispatch(unittest.TestCase):
         common = 'list ls stop start remove rm clean fclean logs shell'.split()
         for component, wrapper, extra in [('opencode', 'opencode', ['rebuild', 'update']),
                                           ('pi', 'pi', ['build', 'rebuild', 'update', 'login']),
-                                          ('omp', 'omp', ['build', 'rebuild', 'update']),
                                           ('claudecode', 'claude', [])]:
             for verb in common + extra:
                 with self.subTest(component=component, verb=verb):
@@ -83,21 +76,9 @@ class LegacyDispatch(unittest.TestCase):
         self.assertEqual(self.dispatch('pi', 'pi', ['--prompt', 'a b']), ['pi-run', ['-p', 'a b']])
         self.assertEqual(self.dispatch('pi', 'pi', []), ['pi-run', []])
 
-    def test_omp_rebuild_and_native_resume(self):
-        for argv, result in [(['-r', 'x'], ['omp-mgr', ['rebuild', 'x']]),
-                             (['session', '-r'], ['omp-run', ['-r']]),
-                             (['--', '-r'], ['omp-run', ['--', '-r']]),
-                             (['.', '-r'], ['omp-run', ['.', '-r']]),
-                             (['--resume'], ['omp-run', ['--resume']])]:
-            self.assertEqual(self.dispatch('omp', 'omp', argv), result)
-
     def test_claude_run(self):
         for argv in ([], ['.'], ['-r', '.'], ['--dangerous', '.']):
             self.assertEqual(self.dispatch('claudecode', 'claude', argv), ['claude-run', argv])
-
-    def test_t3_python_boundary(self):
-        for argv in ([], ['.'], ['build'], ['recreate'], ['pair'], ['auth'], ['provider']):
-            self.assertEqual(self.dispatch('t3code', 't3code', argv), ['host.py', ['dispatch', *argv]])
 
 
 class LegacyExecution(unittest.TestCase):
@@ -435,20 +416,6 @@ initialize_home
         self.assertNotEqual(initialize().returncode, 0)
         self.assertFalse(imported.exists())
 
-    def test_t3_provider_contract_is_explicit_and_unconfigured(self):
-        self.env['T3CODE_PROVIDER'] = 'none'
-        for action, status, message in [('status', 0, 'unconfigured'),
-                                         ('initialize-home', 0, ''),
-                                         ('login', 69, 'no provider is configured')]:
-            result, calls = self.run_copy('t3code/scripts/provider.sh', [action])
-            self.assertEqual(result.returncode, status)
-            self.assertIn(message, result.stdout + result.stderr)
-            self.assertEqual(calls, [])
-        self.env['T3CODE_PROVIDER'] = 'other'
-        result, calls = self.run_copy('t3code/scripts/provider.sh', ['initialize-home'])
-        self.assertEqual(result.returncode, 64)
-        self.assertEqual(calls, [])
-
     def test_compose_contracts_without_interpolation_or_docker(self):
         for component, service, image, home in [('opencode', 'opencode', 'lab/opencode:latest', '/home/opencode'),
                 ('pi', 'pi', 'lab/pi:latest', '/home/pi'),
@@ -474,13 +441,6 @@ initialize_home
                 else:
                     self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
                 self.assertTrue(document['networks']['devai-xmist']['external'])
-        copied = self.root / 'omp.yml'
-        shutil.copyfile(ROOT / 'omp/docker-compose.yml', copied)
-        spec = yaml.safe_load(copied.read_text())['services']['omp']
-        self.assertEqual(spec['user'], '${OMP_UID:-1000}:${OMP_GID:-1000}')
-        self.assertEqual(spec['environment']['OMP_PERSONA'], '${OMP_PERSONA:-build}')
-        self.assertTrue(all(not mount['bind']['create_host_path'] for mount in spec['volumes']))
-        self.assertEqual(spec['entrypoint'], ['bash', '-c', '/opt/harness/init.sh && exec sleep infinity'])
 
 
 if __name__ == '__main__':

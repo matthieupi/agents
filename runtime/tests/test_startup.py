@@ -154,25 +154,13 @@ class Startup(unittest.TestCase):
         self.assertEqual((root / 'agents/system-build.md').readlink(), self.resources / 'system/build.md')
         self.assertFalse((root / 'AGENTS.md').exists())
 
-    def test_omp_default_persona_and_flattened_skills(self):
-        for name in ('direct', 'category/nested'):
-            root = self.resources / 'skills' / name
-            root.mkdir(parents=True)
-            (root / 'SKILL.md').write_text('Public skill')
-        entry.initialize('omp', self.home, self.resources)
-        root = self.home / '.omp/agent'
-        self.assertEqual((root / 'SYSTEM.md').readlink(), self.resources / 'system/build.md')
-        for name in ('direct', 'nested'):
-            self.assertTrue((root / 'skills' / name / 'SKILL.md').is_file())
-        entry.initialize('omp', self.home, self.resources)
-
-    def test_omp_duplicate_skill_names_fail(self):
-        for name in ('one/same', 'two/same'):
-            root = self.resources / 'skills' / name
-            root.mkdir(parents=True)
-            (root / 'SKILL.md').write_text('Public skill')
-        with self.assertRaises(ValueError):
-            entry.initialize('omp', self.home, self.resources)
+    def test_claude_resources_are_linked_idempotently(self):
+        for _ in range(2):
+            entry.initialize('claude', self.home, self.resources)
+        root = self.home / '.claude'
+        for name in ('skills', 'commands'):
+            self.assertEqual((root / name).readlink(), self.resources / name)
+        self.assertFalse((root / 'SYSTEM.md').exists())
 
     def test_custom_resources_preserved_and_conflicting_links_refused(self):
         (self.config / 'commands').mkdir()
@@ -183,29 +171,25 @@ class Startup(unittest.TestCase):
         with self.assertRaises(ValueError):
             entry.initialize('opencode', self.home, self.resources)
 
-    def test_no_resources_and_t3_do_not_seed(self):
-        for harness in entry.MODES:
+    def test_no_resources_creates_only_supported_private_roots_without_seed(self):
+        for harness, path in [('pi', '.pi/agent'), ('opencode', '.config/opencode'), ('claude', '.claude')]:
             entry.initialize(harness, self.home, None)
+            self.assertEqual((self.home / path).stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.config / 'config.json').exists())
-        self.assertTrue((self.home / 'base').is_dir())
-        self.assertEqual((self.home / 'logs').stat().st_mode & 0o777, 0o700)
+        for retired in ('base', 'logs', '.omp'):
+            self.assertFalse((self.home / retired).exists())
 
-    def test_t3_existing_data_roots_are_inspected_not_repaired(self):
-        entry.initialize('t3', self.home, None)
-        root = self.home / 'base'
-        for name in ('userdata', 'worktrees', 'caches'):
-            path = root / name
-            self.assertFalse(path.exists())
-            path.symlink_to(self.resources)
-            with self.assertRaises(ValueError):
-                entry.initialize('t3', self.home, None)
-            self.assertTrue(path.is_symlink())
-            path.unlink()
-            path.mkdir(mode=0o755)
-            with self.assertRaises(ValueError):
-                entry.initialize('t3', self.home, None)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
-            path.rmdir()
+    def test_retired_harnesses_refused_before_home_initialization_or_exec(self):
+        for harness in ('omp', 't3', 't3code', 'venv'):
+            with self.subTest(harness=harness), patch.object(entry, 'directory') as directory, \
+                    patch.object(entry.os, 'execvpe') as execute:
+                with self.assertRaisesRegex(ValueError, 'Unsupported harness'):
+                    entry.initialize(harness, self.home, self.resources)
+                for web in (False, True):
+                    with self.assertRaisesRegex(ValueError, 'Unsupported harness mode'):
+                        entry.command(harness, [], web=web, port=4096 if web else None)
+                directory.assert_not_called()
+                execute.assert_not_called()
 
     def test_main_exec_environment_is_private_and_update_disabled(self):
         environment = {'HOME': str(self.home), 'AGENTS_RUNTIME_SOURCE_MODE': 'baked'}
@@ -225,14 +209,14 @@ class Startup(unittest.TestCase):
             self.assertEqual(env['XDG_STATE_HOME'], str(self.home / '.local/state'))
 
     def test_command_contract_modes_and_verbatim_arguments(self):
-        for harness in ('pi', 'omp', 'opencode', 'claude'):
+        for harness in ('pi', 'opencode', 'claude'):
             argv = ['a b', '$(false)', '--resume']
             self.assertEqual(entry.command(harness, argv, web=False, port=None)[1:], argv)
         for harness in ('pi', 'opencode'):
             command = entry.command(harness, [], web=True, port=4096)
             self.assertIn('0.0.0.0', command)
             self.assertIn('4096', command)
-        for harness, web, argv, port in [('omp', True, [], 4096), ('t3', False, [], None),
+        for harness, web, argv, port in [('claude', True, [], 4096),
                                        ('opencode', False, ['upgrade'], None),
                                        ('pi', True, ['extra'], 4096), ('pi', True, [], 80)]:
             with self.assertRaises(ValueError):

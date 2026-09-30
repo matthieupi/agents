@@ -79,15 +79,16 @@ class WebReadiness(unittest.TestCase):
                 patch.object(runtime, 'web_ready', create=True), self.assertRaises(ValueError):
             runtime.wait_web(self.c, self.process)
 
-    def test_health_semantics_and_t3_unauthenticated_gates(self):
+    def test_supported_health_routes_and_unhealthy_responses(self):
         for harness, responses in [('opencode', [(200, b''), (200, b'{"healthy":true}')]),
-                                   ('pi', [(200, b''), (200, b'[]')]),
-                                   ('t3', [(200, b''), (401, b''), (401, b'')])]:
+                                   ('pi', [(200, b''), (200, b'[]')])]:
             self.c['harness'] = harness
-            with patch.object(runtime, 'web_request', side_effect=responses, create=True):
+            with patch.object(runtime, 'web_request', side_effect=responses) as request:
                 runtime.web_ready(self.c)
+            self.assertEqual([call.args[1] for call in request.call_args_list],
+                             ['/', '/api/sessions' if harness == 'pi' else '/global/health'])
         for responses in ([(302, b'')], [(200, b''), (200, b'')],
-                          [(200, b''), (401, b''), (101, b'')]):
+                          [(200, b''), (401, b'')], [(200, b''), (200, b'null')]):
             with patch.object(runtime, 'web_request', side_effect=responses, create=True), self.assertRaises(ValueError):
                 runtime.web_ready(self.c)
         self.c['harness'] = 'opencode'

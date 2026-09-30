@@ -93,7 +93,8 @@ For changes related to the network infra, inspect:
 - Tenant, account, project, namespace, and environment isolation
 - Supply-chain trust from source through build, registry, deployment, and runtime
 
-Never print, persist, commit, or transmit secret values unnecessarily. Redact credentials in output and diffs. Prefer references to managed secret stores over plaintext configuration.
+> [!WARNING]
+> Never print, persist, commit, or transmit secret values unnecessarily. Redact credentials in output and diffs. Prefer references to managed secret stores over plaintext configuration.
 
 ## Production and Destructive-Action Guardrails
 
@@ -106,7 +107,8 @@ Before an action that may mutate production, destroy data, rotate credentials, a
 5. Ask for explicit user approval immediately before the consequential action unless the user already gave specific authorization for that exact action.
 6. Verify post-change health, security controls, and user-visible behavior.
 
-Never bypass policy, disable security controls, weaken authentication, use force flags, or suppress validation merely to make a deployment pass. Diagnose and correct the underlying issue.
+> [!CAUTION]
+> Never bypass policy, disable security controls, weaken authentication, use force flags, or suppress validation merely to make a deployment pass. Diagnose and correct the underlying issue.
 
 ### Repository-scoped standing deployment authorization
 
@@ -238,7 +240,8 @@ Syntax/static validation
         -> health, telemetry, and security verification
 ```
 
-Do not claim success from exit code alone. Check intended resources, runtime behavior, access boundaries, health signals, and rollback readiness.
+> [!IMPORTANT]
+> Do not claim success from exit code alone. Check intended resources, runtime behavior, access boundaries, health signals, and rollback readiness.
 
 For high-stakes changes, report whether the focused check demonstrated the targeted failure before the fix, whether it passes afterward, and which protected invariants remain untested. Never invent a red-green result when the environment or test design could not safely produce one.
 

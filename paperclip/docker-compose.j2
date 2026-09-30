@@ -1,0 +1,91 @@
+# Stable internal host-nginx endpoint; no published ports or Docker socket.
+services:
+  paperclip:
+    build:
+      context: .
+      args:
+        PAPERCLIP_IMAGE: {{ service_config.image | to_json }}
+        USER_UID: {{ agent_uid | string | to_json }}
+        USER_GID: {{ agent_gid | string | to_json }}
+    user: "{{ agent_uid }}:{{ agent_gid }}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: {{ service_config.pids_limit }}
+    mem_limit: {{ service_config.memory_limit }}
+    env_file: [.env]
+    # Preserve Docker service-name discovery; do not forward external DNS.
+    dns: [127.0.0.1]
+    volumes:
+      - type: bind
+        source: {{ (service_config.state_path ~ '/app') | to_json }}
+        target: /paperclip
+        bind: {create_host_path: false}
+{% for name in ['better-auth-secret', 'tool-action-signing-secret', 'postgres-password', 'master-key'] %}
+      - type: bind
+        source: {{ (service_config.state_path ~ '/credentials/' ~ name) | to_json }}
+        target: /run/secrets/{{ name }}
+        read_only: true
+        bind: {create_host_path: false}
+{% endfor %}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /run/paperclip:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid={{ agent_uid }},gid={{ agent_gid }}
+    networks:
+      paperclip_private:
+        ipv4_address: {{ paperclip_backend_address | to_json }}
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health',{headers:{Host:new URL(process.env.PAPERCLIP_PUBLIC_URL).hostname},signal:AbortSignal.timeout(4000)}).then(async r=>{const b=await r.json();process.exit(r.ok&&b.status==='ok'&&b.deploymentMode==='authenticated'&&b.deploymentExposure==='private'?0:1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 120s
+
+  postgres:
+    image: {{ service_config.postgres_image | to_json }}
+    user: "{{ agent_uid }}:{{ agent_gid }}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: {{ service_config.postgres_pids_limit }}
+    mem_limit: {{ service_config.postgres_memory_limit }}
+    stop_grace_period: 90s
+    dns: [127.0.0.1]
+    environment:
+      POSTGRES_DB: {{ service_config.database_name | to_json }}
+      POSTGRES_USER: {{ service_config.database_user | to_json }}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - type: bind
+        source: {{ (service_config.state_path ~ '/postgres') | to_json }}
+        target: /var/lib/postgresql/data
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (service_config.state_path ~ '/credentials/postgres-password') | to_json }}
+        target: /run/secrets/postgres-password
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+      - /var/run/postgresql:rw,nosuid,nodev,size=16m,mode=1777
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [paperclip_private]
+
+networks:
+  paperclip_private:
+    external: true
+    name: {{ paperclip_network_name | to_json }}

@@ -10,11 +10,13 @@ services:
         PASEO_BASE: ${PASEO_BASE:?set reviewed official version and digest}
         PASEO_VERSION: ${PASEO_VERSION:?set exact stable version}
         OPENCODE_VERSION: ${OPENCODE_VERSION:?set exact stable version}
+        PASEO_RUNTIME_UID: ${PASEO_UID:-1000}
+        PASEO_RUNTIME_GID: ${PASEO_GID:-1000}
     user: "${PASEO_UID:-1000}:${PASEO_GID:-1000}"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    restart: "no"
+    restart: unless-stopped
     pids_limit: 512
     mem_limit: 4g
     cpus: 2.0

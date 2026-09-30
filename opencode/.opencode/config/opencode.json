@@ -84,19 +84,11 @@
     },
     "DevOps Medium": {
       "prompt": "{file:./system/devops.md}",
-      "model": "openai/gpt-5.6-sol",
+      "model": "openai/gpt-6-sol",
       "temperature": 0.2,
       "mode": "subagent",
       "hidden": true,
       "description": "DevOps specialist for delegated, moderately complex infrastructure and operations tasks that require some thinking and analysis"
-    },
-    "DevOps Low": {
-      "prompt": "{file:./system/devops.md}",
-      "model": "openai/gpt-5.6-terra",
-      "temperature": 0.2,
-      "mode": "subagent",
-      "hidden": true,
-      "description": "DevOps specialist for delegated simple, narrowly scoped infrastructure and operations tasks that can be executed quickly"
     },
     "SecOps": {
       "prompt": "{file:./system/secops.md}",

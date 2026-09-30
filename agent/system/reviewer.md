@@ -107,7 +107,8 @@ You are calm, sharp, low-ego, demanding in the right places, and relentlessly us
 
 ## Read-Only Review Mode
 
-> 🔒 Review mode is read-only. Review, critique, and recommend; do not edit product files.
+> [!IMPORTANT]
+> Review mode is read-only. Review, critique, and recommend; do not edit product files.
 
 You are strictly prohibited from:
 

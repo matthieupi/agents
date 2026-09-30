@@ -1,12 +1,19 @@
 # Pi lifecycle — native VM and retained Docker workflows
 
+## Standard VM Compose service
+
+`docker-compose.j2`, `env.j2` and `Dockerfile.service` are the new ordinary-service
+path; see [the shared VM contract](../VM-SERVICES.md). It uses account `agent`,
+NSS-derived IDs and the unchanged paired Pi/Pi Web pins. No old VM controller,
+T3/OMP base or registration is used. This source-only path is not yet built or
+accepted. The workstation/native commands documented below are unchanged.
+
 ## Native lifecycle
 
 **Native UI and CLI launch with LOCAL execution under `PI_USER`.**
-This is not a remote-only adapter or an agent sandbox. Remote-only DevAI activation
-still requires validated adapters and containment. This pass installs only Pi and
-Pi Web; OpenCode/OMP native porting is deferred. Docker lifecycle and wrappers
-remain independent. Docker and native home initialization share only the system-agent
+This is not a remote-only adapter or an agent sandbox. These retained native
+workstation scripts install Pi and Pi Web; VM deployments use Compose above.
+Docker lifecycle and wrappers remain independent. Docker and native home initialization share only the system-agent
 import helper in `init.sh`; the checked-in `.pi` extension tree is unchanged.
 
 ### Chosen UI and verified upstream evidence (2026-09-05)
@@ -33,7 +40,7 @@ Verified release-specific contracts:
   Our shell uses foreground `exec`; systemd must manage the complete cgroup.
 - [Published Pi metadata](https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.85.1):
   upstream package's `pi` executable is `dist/bundle/cli.js`; package includes
-  shrinkwrap. This is the current upstream scope, not an OMP substitute.
+   shrinkwrap. This is the current upstream scope.
 - [node-pty 1.1.0 distribution](https://unpkg.com/node-pty@1.1.0/prebuilds/):
   Linux needs compilation. Ansible supplies compiler/Python/Node headers;
   dependency scripts run as `PI_USER`, with `--ignore-scripts=false`.
@@ -197,8 +204,8 @@ not runtime-validated here. `/sub` does not resolve these files by role name.
 No extension/preset definitions, tool defaults, or aliases were changed.
 
 Names are `system-build`, `system-coo`, `system-devops`, `system-explore`, `system-plan`,
-`system-plan-inline`, `system-reviewer`, and `system-secops`, shared with OMP to avoid
-its built-in collisions. Existing instructions requesting unprefixed roles are not
+`system-plan-inline`, `system-reviewer`, and `system-secops`.
+Existing instructions requesting unprefixed roles are not
 automatically mapped. The two-field metadata introduces no model/tools/permissions;
 role rules are prompt instructions, not a security boundary.
 
@@ -232,7 +239,7 @@ or native installation/service changes. Pending manual acceptance is concerned-h
 initialization, exact target/body discovery via `/system`, repeat-init/conflict and
 legacy-link conversion behavior, followed by extension/preset compatibility. Existing
 sessions need reload/new-session discovery after initialization; no sessions were
-restarted here. OMP task registration is documented [separately](../omp/README.md#shared-resources-and-discovery-evidence).
+restarted here.
 
 ## Retained Docker workflows
 
@@ -240,10 +247,8 @@ The rest of this document describes the container lifecycle only; its
 paths and security assumptions do not apply to native VMs.
 
 Dockerized [Pi](https://pi.dev) for local and remote development workflows.
-OMP now has its own [standalone Docker CLI component](../omp/README.md), image,
-wrappers and state. `pi --oh` and `pi-run --agent-cli` are removed; use `../omp/omp`.
-This is a source extraction, not a live cutover: existing images/containers still
-need deliberate rebuilding/recreation. Never delete old state as part of that work.
+OMP is retired from maintained support. Existing Pi wrappers and private state
+are unchanged; no migration or deletion of historical state is performed.
 
 ## Quick Start
 
@@ -314,26 +319,9 @@ pi/
 
 The harness mounts `./.pi` at `/home/pi/.pi` for vanilla Pi only.
 `settings.json`, `models.json`, `keybindings.json`, `auth.json`, extensions,
-themes and Pi sessions stay here. No OMP state is mounted by the new OMP component.
-
-**Authorized default cleanup:** the unchanged tracked OMP `config.yml` and
-`models.yml` and their tracking exceptions were removed with user authorization.
-All ignored legacy credentials, databases, history and sessions remain protected
-and untouched. OMP uses its own tracked defaults and fresh credentials/state;
-migration and history continuity are out of scope, not acceptance blockers.
-Legacy `agent.db` contains secrets; never commit it or copy the entire Pi state
-into OMP. Nothing performs an automatic migration. Optional historical recovery
-is operator-owned work, not a deliverable. Do not launch old OMP images against
-Pi state expecting safe rollback: the removed `config.yml` sentinel previously
-prevented fallback migration/renaming of Pi settings. See
-[OMP state policy](../omp/README.md#fresh-state-and-retained-legacy-files).
-
-OMP source delivery is complete; automated test creation/execution is waived.
-Final OMP manual verification/validation remains user-owned and pending, not passed.
-In the standalone facade, leading `omp -r` rebuilds only the OMP image; use
-`omp --resume`, `omp session -r`, `omp -- -r`, or `-r` after a workspace for native
-resume. OMP's ownership/diagnostic follow-ups do not change Pi's lifecycle; the
-[remote OMP reuse failure remains unresolved](../omp/README.md#known-runtime-follow-ups).
+themes and Pi sessions stay here. Ignored historical credentials, databases,
+history and sessions remain protected. Legacy `agent.db` contains secrets; never
+commit it or copy the entire Pi state. Nothing performs an automatic migration.
 
 This service persists that path from `./.pi`, including:
 
@@ -434,8 +422,7 @@ Configure local or self-hosted providers by editing:
 .pi/agent/models.json
 ```
 
-Use `models.json` for Pi. OMP YAML defaults belong only to the standalone OMP
-component, not Pi configuration.
+Use `models.json` for Pi.
 
 For the local stack, the default config uses the Ollama container directly:
 
@@ -446,7 +433,6 @@ http://ollama:11434/v1
 This works because Pi now joins the same external Docker network as the `ollama` service. Do not use `localhost` here unless Ollama is running inside the same container.
 
 If Ollama runs on another host, update `./.pi/agent/models.json` to that reachable URL.
-OMP provider configuration is independent under `../omp/.omp/agent/models.yml`.
 
 ## Local UI Customizations
 
@@ -508,8 +494,7 @@ Named extension presets exposed by the host wrapper:
 
 These presets rebuild the current explicit daily-driver stack with `--no-extensions`, prepend the requested bundle (`agent-team.ts`, `agent-chain.ts`, or `pi-pi.ts`) so its mapped theme/title stays primary, and avoid double-loading the auto-discovered defaults.
 
-Named `ext-*` presets remain Pi-only. The standalone OMP component does not
-install these extensions; they explicitly spawn `pi` and use Pi-specific APIs.
+Named `ext-*` presets remain Pi-only; they explicitly spawn `pi` and use Pi-specific APIs.
 
 If you are already inside the Pi container and want the raw Pi CLI, use the bundle files under `~/.pi/agent/extension-library/pi-vs-claude-code/` together with the explicit extension stack from `~/.pi/agent/extensions/`.
 
@@ -524,8 +509,7 @@ If you are already inside the Pi container and want the raw Pi CLI, use the bund
 
 ## Troubleshooting
 
-OMP build/setup instructions now live in [OMP's README](../omp/README.md).
-Rebuilding Pi does not migrate or retire legacy OMP state.
+Rebuilding Pi does not migrate or delete historical private state.
 
 Image missing:
 

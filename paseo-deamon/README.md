@@ -1,8 +1,20 @@
-# Paseo execution daemon + managed OpenCode
+# Paseo execution daemon + embedded OpenCode
 
-📍 Component only; spelling **paseo-deamon** is intentional. No Ansible wiring,
-target/account selection, deployment, hub change, shared-runtime change or adapter
-patch is included. Do not deploy until the acceptance gates below pass.
+## Standard VM Compose service
+
+The new `docker-compose.j2` / `env.j2` / `config.json.j2` and
+`Dockerfile.service` use one `agent` account with NSS-derived IDs. See
+[VM service inputs](../VM-SERVICES.md) for metadata, the finite named OpenCode
+build context, local state, credential ownership and parent integration.
+Paseo still owns embedded OpenCode and native auth/Origin. No workstation SSH or
+provider HOME is mounted. This new path is source-only, not built or accepted.
+The existing standalone `compose.yaml` / `Dockerfile` instructions below describe
+the separate retained component interface, not the new VM identity or delivery.
+
+📍 Spelling **paseo-deamon** is intentional. This component remains the maintained
+image/runtime ingredient. VM deployment uses the ordinary service catalog rather
+than the retired dedicated lifecycle. No live deployment or adapter patch is
+implied; acceptance remains deferred.
 
 ```text
 future TLS proxy -> loopback published Paseo :6767
@@ -83,9 +95,12 @@ all launches sharing them must honor those locks. One instance only. Authenticat
 providers independently into this new state; do not copy credentials. No provider
 secrets are baked, forwarded implicitly, or included in Compose examples.
 
-Numeric `PASEO_UID:PASEO_GID` defaults to `1000:1000`; startup rejects UID/GID zero.
-Other numeric identities require host permissions and live SSH/tool compatibility
-testing (the image passwd account is UID 1000). There is no root startup chown,
+Numeric `PASEO_UID:PASEO_GID` defaults to `1000:1000`; both values are required
+Docker build inputs as well as runtime settings. OpenCode installation remains a
+build-time `1000:1000` operation, after which the image maps only its existing
+`paseo` passwd/group and image-owned directories to the requested positive non-root
+IDs. Missing, zero, malformed, out-of-range, or passwd/group-colliding IDs fail the
+build. There is no runtime fallback, root startup chown, host account mutation,
 sudo, socket, Docker group, privileged broker or host-network mode. Capabilities
 are dropped and no-new-privileges is enabled; rootfs is read-only. Writable paths
 are the workspace, dedicated state and bounded `/tmp`. The upstream anonymous HOME
@@ -101,6 +116,10 @@ known_hosts beforehand and least-privilege keys; do not disable verification.
 Use an empty dedicated SSH directory and empty Git file when no identity is needed.
 Workspace content and config plugins can execute with all these granted rights;
 this is a container boundary, not per-agent credential isolation.
+
+The VM Compose template omits host SSH and Git identity mounts and uses baked KDCO
+inputs, not the standalone public-config projection described above. Authenticate
+providers in its dedicated state; extend identity exposure only through review.
 
 ## Native auth configuration
 
@@ -173,12 +192,12 @@ installer, publication helper and KDCO public sources/lock. No config credential
 private runtime, other services or whole checkout are copied into the image.
 
 Paseo installation is inherited from its official version/digest image; OpenCode
-installation reuses `opencode/scripts/entrypoint.sh:install_runtime()` (the same
-callable used by `venv/Dockerfile.opencode`). No independent package installer is
+installation reuses `opencode/scripts/entrypoint.sh:install_runtime()` (also used
+by the ordinary VM images). No independent package installer is
 introduced. Required helper is copied to `component/scripts/publish-plugins.mjs`.
 Build checks actual OpenCode output and both Paseo package versions; records them
 in `/opt/opencode-version.txt` and `/opt/paseo-version.txt`. Record those plus image
-ID/digest/platform and source revision in local `progress.md` after a real build.
+ID/digest/platform and source revision in the approved deployment record after a real build.
 Exact direct versions are not a fully reproducible OS/transitive-dependency lock;
 the existing native installer permits lifecycle hooks and registry access at build.
 
@@ -186,7 +205,7 @@ Updating means repeat metadata/release review, change explicit inputs, rebuild,
 verify, then choose new private state or perform a separately reviewed state
 migration/backup. No startup pull, package installer, update timer or automatic
 activation. Compose `pull_policy: never`; later approved startup must use
-`up --no-build --pull never`. **Do not run that now: target/account remain unresolved.**
+`up --no-build --pull never`. This source cleanup grants no deployment authorization.
 
 ## Method Signature Surface
 

@@ -119,7 +119,7 @@ def first_write(destination: Path, text: str) -> bool:
 
 
 def seed_opencode(home: Path, resources: Path) -> dict:
-    """Config-only first seed, matching legacy VM policy preservation rules.
+    """Config-only first seed, preserving existing private workstation policy.
 
     Deliberately self-contained: baked startup must not import legacy/mutable code.
     """
@@ -186,8 +186,7 @@ def _seed_opencode(root: Path, resources: Path) -> dict:
 def initialize(harness: str, home: Path, resources: Path | None) -> None:
     require(harness in MODES, 'Unsupported harness')
     directory(home)
-    root = home / {'pi': '.pi/agent', 'omp': '.omp/agent', 'opencode': '.config/opencode',
-                   'claude': '.claude', 't3': 'base'}[harness]
+    root = home / {'pi': '.pi/agent', 'opencode': '.config/opencode', 'claude': '.claude'}[harness]
     directory(root)
     if harness == 'opencode':
         # Baked package + dependencies stay visible even when private HOME is bound.
@@ -198,28 +197,15 @@ def initialize(harness: str, home: Path, resources: Path | None) -> None:
             publisher = Path('/opt/opencode-publish-plugins.mjs')
         if publisher.is_file():
             subprocess.run(['node', str(publisher), str(plugins), str(root)], check=True)
-    if harness == 't3':
-        directory(home / 'logs')
-        for name in ('userdata', 'worktrees', 'caches'):
-            path = root / name
-            if path.exists() or path.is_symlink():
-                directory(path)  # Inspect existing roots only, never traverse/repair.
-        return
     if resources is None:
         return
     require(resources.is_absolute() and resources.resolve(strict=True) == resources and resources.is_dir(),
             'Physical reviewed public resources required')
-    names = {'pi': ('skills', 'prompts'), 'omp': ('commands',),
+    names = {'pi': ('skills', 'prompts'),
              'opencode': ('skills', 'commands', 'system', 'gsd'), 'claude': ('skills', 'commands')}[harness]
     for name in names:
         link(root / name, resources / name)
-    if harness == 'omp':
-        link(root / 'SYSTEM.md', resources / 'system/build.md')
-        directory(root / 'skills')
-        for source in sorted([*(resources / 'skills').glob('*/SKILL.md'), *(resources / 'skills').glob('*/*/SKILL.md')]):
-            require(resources / 'skills' in source.resolve().parents, 'External skill refused')
-            link(root / 'skills' / source.parent.name, source.parent)
-    if harness in ('pi', 'omp'):
+    if harness == 'pi':
         directory(root / 'agents')
         for source in sorted((resources / 'system').glob('*.md')):
             require(source.resolve().parent == resources / 'system', 'External agent source refused')
@@ -240,8 +226,6 @@ def command(harness: str, arguments: list[str], *, web: bool, port: int | None) 
             return [BIN + 'pi-web', '--hostname', '0.0.0.0', '--port', str(port), '--no-open']
         if harness == 'opencode':
             return [BIN + 'opencode', 'web', '--hostname', '0.0.0.0', '--port', str(port)]
-        return [BIN + 't3', 'serve', '--host', '0.0.0.0', '--port', str(port),
-                '--base-dir', str(Path(os.environ['HOME']) / 'base'), os.getcwd()]
     require(not (harness == 'opencode' and any(arg in ('web', 'serve', 'upgrade') for arg in arguments)),
             'Use managed web; runtime self-upgrade forbidden')
     return [BIN + CATALOG['harnesses'][harness]['cli'], *arguments]
@@ -277,25 +261,6 @@ def main(argv: list[str] | None = None) -> int:
                           XDG_CONFIG_HOME=str(home / '.config'), XDG_DATA_HOME=str(home / '.local/share'),
                           XDG_STATE_HOME=str(home / '.local/state'), XDG_CACHE_HOME=str(home / '.cache'),
                           PI_CODING_AGENT_DIR=str(home / '.pi/agent'), OPENCODE_CONFIG_DIR=str(home / '.config/opencode'))
-        # An image-level lock also guards T3 if called without the host adapter.
-        # Keep the fd across exec; never acquire by following an existing symlink.
-        if args.harness == 't3':
-            fd = os.open(home / '.server.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            info = os.fstat(fd)
-            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
-                    and (info.st_uid, info.st_gid) == (os.getuid(), os.getgid())
-                    and not info.st_mode & 0o077, 'Unsafe T3 writer lock')
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.set_inheritable(fd, True)
-            log = os.open(home / 'logs/server.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND
-                          | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-            info = os.fstat(log)
-            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
-                    and (info.st_uid, info.st_gid) == (os.getuid(), os.getgid())
-                    and not info.st_mode & 0o077, 'Unsafe private T3 log')
-            os.dup2(log, 1)
-            os.dup2(log, 2)
-            os.close(log)
         selected = command(args.harness, arguments, web=args.web, port=args.port)
         os.execvpe(selected[0], selected, os.environ)
     except (OSError, ValueError, KeyError) as error:

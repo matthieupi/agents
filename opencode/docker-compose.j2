@@ -1,0 +1,49 @@
+services:
+  opencode:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      args:
+        OPENCODE_VERSION: {{ service_config.version | to_json }}
+        AGENT_UID: {{ agent_uid | string | to_json }}
+        AGENT_GID: {{ agent_gid | string | to_json }}
+    user: "{{ agent_uid }}:{{ agent_gid }}"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: {{ service_config.pids_limit }}
+    mem_limit: {{ service_config.memory_limit | to_json }}
+    cpus: {{ service_config.cpus }}
+    working_dir: {{ agent_workspace | to_json }}
+    env_file: [.env]
+    # Gateway-only auth; do not inherit native web credentials at server launch.
+    command: [env, -u, OPENCODE_SERVER_PASSWORD, -u, OPENCODE_SERVER_USERNAME, opencode, web, --hostname, "0.0.0.0", --port, {{ service_config.container_port | string | to_json }}, --mdns, "false"]
+    ports:
+      - "127.0.0.1:{{ service_config.upstream_port }}:{{ service_config.container_port }}"
+    networks: [backends]
+    volumes:
+      - type: bind
+        source: {{ agent_home | to_json }}
+        target: {{ agent_home | to_json }}
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ agent_workspace | to_json }}
+        target: {{ agent_workspace | to_json }}
+        bind: {create_host_path: false}
+{% if 'opencode' in (docker_access | default([])) %}
+      - type: bind
+        source: {{ agent_docker_socket | to_json }}
+        target: {{ agent_docker_socket | to_json }}
+        bind: {create_host_path: false}
+    group_add: [{{ agent_docker_gid | string | to_json }}]
+{% endif %}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:{{ service_config.container_port }}/global/health').then(async r=>process.exit(r.ok&&(await r.json()).healthy===true?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+networks:
+  backends:
+    external: true
+    name: {{ agent_publication.backend_network.name | to_json }}

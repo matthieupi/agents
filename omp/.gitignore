@@ -1,14 +1,10 @@
 /.env
 /.env.*
-!/.env.example
 /workspace/
 /ssh/
 /.omp/*
 !/.omp/.gitignore
-!/.omp/agent/
 /.omp/agent/*
-!/.omp/agent/config.yml
-!/.omp/agent/models.yml
 *.db*
 *.sqlite*
 *.log

@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import platform as host_platform
-import pwd
 import re
 import stat
 import subprocess
@@ -24,8 +23,6 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 IMAGE = re.compile(r'sha256:[a-f0-9]{64}')
-# Must match the protected launcher's fixed policy location; never forwarded in argv.
-VM_POLICY = Path('/etc/venv-agents/policy.json')
 
 
 def require(value, message):
@@ -41,11 +38,6 @@ def ordinary():
 def prerequisites(harness, platform):
     native = {'x86_64': 'linux/amd64', 'aarch64': 'linux/arm64'}.get(host_platform.machine())
     require(platform == native, 'Native host/platform match required; no implicit emulation')
-    if harness == 'omp':
-        require(native == 'linux/amd64', 'OMP is amd64-only')
-        flags = [line.split(':', 1)[1].split() for line in Path('/proc/cpuinfo').read_text().splitlines()
-                 if ':' in line and line.split(':', 1)[0].strip() == 'flags']
-        require(flags and all('sse4_2' in cpu for cpu in flags), 'OMP/Bun requires SSE4.2 on every host CPU')
 
 
 def digest(value):
@@ -352,72 +344,15 @@ def build(harness: str, root: Path, resolution: dict, *, refresh: bool) -> dict:
                 'resolution': resolution, 'built_at': datetime.now(timezone.utc).isoformat(), 'contract': 1}
 
 
-def protected_path(value: str, *, executable: bool = False) -> Path:
-    """Root custody through every ancestor; no guest-selected executable redirects."""
-    require(isinstance(value, str) and re.fullmatch(r'/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*', value)
-            and all(part not in ('.', '..') for part in value.split('/')), 'Canonical protected path required')
-    path = Path(value)
-    require(path.resolve(strict=True) == path, 'Redirected protected path refused')
-    for item in (path, *path.parents):
-        info = item.lstat()
-        require(info.st_uid == 0 and not info.st_mode & 0o6022, 'Root-owned non-writable protected path required')
-        if item == path:
-            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, 'Single-link protected regular file required')
-            require(not executable or info.st_mode & 0o111, 'Executable protected launcher required')
-        else:
-            require(stat.S_ISDIR(info.st_mode), 'Protected directory ancestor required')
-    return path
-
-
-def vm_command(harness: str, receipt: dict, settings: dict) -> Path:
-    """Ordinary-user preflight only. Root rechecks policy, seals, caller and image."""
-    require(harness in ('pi', 'omp', 'opencode', 't3'), 'Claude is workstation-only; unsupported VM harness')
-    require(isinstance(settings.get('target'), str)
-            and re.fullmatch(r'[a-z0-9-]+:[a-z0-9-]+', settings['target']), 'Explicit VM target required')
-    config = json.loads(protected_path(settings.get('vm_config')).read_text())
-    command = protected_path(config['command'], executable=True)
-    policy = json.loads(protected_path(str(VM_POLICY)).read_text())
-    require(policy['schema'] == 2 and policy['scope'] == 'vm'
-            and policy['target'] == settings['target'], 'VM target/policy mismatch')
-    shared = policy.get('shared_runtime', {})
-    require(shared.get('target') == policy['target'], 'Protected shared-runtime opt-in required')
-    account = pwd.getpwuid(os.getuid())
-    caller = policy.get('accounts', {}).get(account.pw_name, {})
-    require(caller.get('uid') == os.getuid() and caller.get('gid') == os.getgid() == account.pw_gid,
-            'Enrolled ordinary caller identity required')
-    resolution = receipt['resolution']
-    require(receipt['schema'] == receipt['contract'] == resolution['contract'] == 1
-            and resolution['harness'] == harness
-            and receipt['platform'] == resolution['platform'] == config['platform']
-            and config['socket'] == '/var/run/docker.sock', 'VM receipt/platform/local endpoint mismatch')
-    prerequisites(harness, receipt['platform'])
-    projection = dict(harness=harness, platform=receipt['platform'], contract=receipt['contract'],
-                      resolution_sha256=digest(encoded(resolution)),
-                      source_sha256=resolution['source']['public_sha256'],
-                      source_revision=resolution['source']['revision'])
-    require(shared.get('images', {}).get(harness, {}).get(receipt['image']) == projection,
-            'Build receipt is not reviewed in protected VM image policy')
-    return command
-
-
 def activate(harness: str, image: str, settings: dict) -> int:
     ordinary()
-    require(settings.get('scope') in ('workstation', 'vm'), 'Explicit supported activation scope required')
+    require(not set(settings) - {'state', 'scope'} and settings.get('scope', 'workstation') == 'workstation',
+            'Workstation selection only')
     require(harness in catalog()['harnesses'] and isinstance(image, str) and IMAGE.fullmatch(image),
             'Explicit harness and local image ID required')
-    require(settings['scope'] == 'vm' or not (settings.get('vm_config') or settings.get('target')),
-            'VM selectors require VM activation scope')
-    require(settings['scope'] != 'vm' or (settings.get('vm_config') and settings.get('target')),
-            'VM activation requires explicit protected --vm-config and --target')
     root = private(Path(settings['state']), directory=True)
     receipt = json.loads(private(root / (harness + '-' + image[7:] + '.json')).read_text())
     require(receipt['image'] == image and receipt['harness'] == harness and receipt['contract'] == 1, 'Matching built receipt required')
-    if settings['scope'] == 'vm':
-        command = vm_command(harness, receipt, settings)
-        # No receipt/path/target/env authorization reaches root; only the finite
-        # existing sudoers operation. No timeout kills a transaction mid-recovery.
-        return subprocess.run(['/usr/bin/sudo', '-n', '--', str(command), 'activate', harness, image],
-                              env={'PATH': '/usr/bin:/bin', 'LANG': 'C'}, check=False).returncode
     inspected = json.loads(docker(['image', 'inspect', image]).stdout)[0]
     verify_image(receipt, inspected)
     atomic(root / (harness + '-selected.json'), receipt)
@@ -429,24 +364,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('action', choices=('update', 'build', 'activate'))
     parser.add_argument('harness', choices=tuple(catalog()['harnesses']))
     parser.add_argument('image', nargs='?')
-    parser.add_argument('--scope', choices=('workstation', 'vm'), default='workstation')
-    parser.add_argument('--vm-config', help='Explicit deployed root-owned build settings path (VM activation only)')
-    parser.add_argument('--target', help='Exact environment:host from protected policy (VM activation only)')
+    parser.add_argument('--scope', choices=('workstation',), default='workstation')
     parser.add_argument('--platform', default='linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(host_platform.machine(), 'unsupported'))
     args = parser.parse_args(argv)
     try:
         ordinary()
         require(args.action == 'activate' or args.image is None, 'Image is activation-only')
-        require(args.action == 'activate' or (args.scope == 'workstation' and not args.vm_config and not args.target),
-                'Scope/VM selectors are activation-only; update/build never activate')
         root = state_root()
         fd = os.open(root / '.install.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             private(root / '.install.lock')
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.action == 'activate':
-                return activate(args.harness, args.image or '', dict(scope=args.scope, state=str(root),
-                                                                   vm_config=args.vm_config, target=args.target))
+                return activate(args.harness, args.image or '', dict(scope=args.scope, state=str(root)))
             path = root / (args.harness + '-resolution.json')
             if args.action == 'update':
                 resolution = resolve(args.harness, catalog(), args.platform)

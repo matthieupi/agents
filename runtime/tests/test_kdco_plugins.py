@@ -41,7 +41,7 @@ class PluginBuild(unittest.TestCase):
             self.assertEqual(record['public_files'][relative],
                              installer.digest((self.root / relative).read_bytes()))
         self.assertEqual(record['public_sha256'], installer.digest(installer.encoded(record['public_files'])))
-        for harness in ('pi', 'omp', 't3', 'claude'):
+        for harness in ('pi', 'claude'):
             self.assertEqual(len(installer.source_record(ROOT, harness)['public_files']), 4)
 
     def test_each_input_edit_rejects_stale_resolution_before_docker(self):
