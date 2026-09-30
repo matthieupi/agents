@@ -1,4 +1,4 @@
-# Ordinary base service. No host-published ports, proxy_net or Docker socket.
+# Stable internal host-nginx endpoint; no published ports or Docker socket.
 services:
   paperclip:
     build:
@@ -32,7 +32,9 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
       - /run/paperclip:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid={{ agent_uid }},gid={{ agent_gid }}
-    networks: [paperclip_private]
+    networks:
+      paperclip_private:
+        ipv4_address: {{ paperclip_backend_address | to_json }}
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
