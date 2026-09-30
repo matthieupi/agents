@@ -52,6 +52,12 @@ initialize_home() (
     require_opencode_user
     export HOME="$OPENCODE_HOME"
     umask 077
+    # Same lock order/inodes as container initialization; lifecycle locks alone
+    # do not serialize other harnesses or callers of initialize_home.
+    exec 8<"$OPENCODE_REPO/agent"
+    flock -x 8
+    exec 7<"$HOME"
+    flock -x 7
     local name destination source legacy file relative parent tracked pending='' path old
     for path in "$OPENCODE_CONFIG_DIR" "$HOME/.local/share/opencode" "$HOME/.cache/opencode" "$HOME/.local/state/opencode" "$HOME/.agents"; do
         [[ "$path" == "$(realpath -m -- "$path")" ]] || die 'preserved redirected private state; reconcile manually'
@@ -69,7 +75,7 @@ initialize_home() (
             [[ -L "$destination" && ( "$(readlink -- "$destination")" == "$source" || "$(readlink -- "$destination")" == "$old" ) ]] || die "preserved conflicting resource; reconcile manually: $destination"
             [[ "$(readlink -- "$destination")" == "$source" ]] || ln -sfnT -- "$source" "$destination"
         else
-            ln -s -- "$source" "$destination"
+            ln -sT -- "$source" "$destination"
         fi
         legacy="$HOME/.agents/$name"
         if [[ -L "$legacy" && ( "$(readlink -- "$legacy")" == "$source" || "$(readlink -- "$legacy")" == "$old" ) ]]; then

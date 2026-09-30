@@ -51,6 +51,12 @@ initialize_home() (
     require_pi_user
     export HOME="$PI_HOME"
     umask 077
+    # Same lock order/inodes as container initialization; lifecycle locks alone
+    # do not serialize other harnesses or callers of initialize_home.
+    exec 8<"$PI_REPO/agent"
+    flock -x 8
+    exec 7<"$HOME"
+    flock -x 7
     local name source destination tracked file relative parent pending=''
     [[ "$PI_CODING_AGENT_DIR" == "$(realpath -m -- "$PI_CODING_AGENT_DIR")" ]] || die 'preserved redirected Pi state; reconcile manually'
     if [[ -n ${PI_PREVIOUS_REPO:-} ]]; then
@@ -73,7 +79,7 @@ initialize_home() (
                 printf 'Preserved existing resource: %s\n' "$destination" >&2
             fi
         else
-            ln -s -- "$source" "$destination"
+            ln -sT -- "$source" "$destination"
         fi
     done
     # Keep the original allowlist and copy-once defaults. No auth, sessions,

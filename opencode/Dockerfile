@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     openssh-client \
     bash \
+    util-linux \
     ripgrep \
     fzf \
     curl \

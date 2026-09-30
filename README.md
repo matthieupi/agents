@@ -35,6 +35,17 @@ content, `prompts` is a symlink to commands, and `skills/` contains skill bundle
 Existing workstation harnesses own their HOME discovery links; no workspace-local
 configuration tree is created proactively by this shared root.
 
+Workstation shell initialization serializes the whole home update with Linux
+`flock`: shared `agent/` directory inode first, home directory inode second.
+The shared lock coordinates harnesses and containers using the same bind-mounted
+resources; directory locks avoid root-owned lock files and do not change ownership
+or writable-mount requirements. Keep these directories stable during initialization.
+Resource links use exact destinations (`ln -sT`) and reuse already-correct links.
+Container initialization also removes only the three exact legacy self-links
+`{commands,skills,system}/<same-name> -> /opt/agent/<same-name>` under real,
+non-redirected resource directories. Real content, custom links, and
+`prompts -> commands` are preserved. This is not a general symlink-tree cleanup.
+
 Pi Docker/native initialization imports top-level system Markdown as individual
 `~/.pi/agent/agents/system-*.md` links. Exact links are reused; unknown links and
 conflicts are preserved and fail rather than being overwritten.
