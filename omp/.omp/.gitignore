@@ -1,5 +1,0 @@
-# Deny by default, including auth, DB sidecars, sessions, blobs, plugins,
-# caches, logs, profiles, installation identity and future upstream state.
-/*
-!/.gitignore
-/agent/*
