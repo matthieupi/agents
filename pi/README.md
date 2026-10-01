@@ -1,4 +1,4 @@
-# Pi lifecycle — native VM and retained Docker workflows
+# Pi — VM services, installer/init and workstation Docker workflows
 
 ## Standard VM Compose service
 
@@ -6,13 +6,14 @@
 path; see [the shared VM contract](../VM-SERVICES.md). It uses account `agent`,
 NSS-derived IDs and the unchanged paired Pi/Pi Web pins. No old VM controller,
 T3/OMP base or registration is used. This source-only path is not yet built or
-accepted. The workstation/native commands documented below are unchanged.
+accepted. Workstation wrappers and static Compose remain; native start/manage
+scripts and the separate opt-in runtime framework are retired.
 
-## Native lifecycle
+## Retained installer and home initialization
 
-**Native UI and CLI launch with LOCAL execution under `PI_USER`.**
-This is not a remote-only adapter or an agent sandbox. These retained native
-workstation scripts install Pi and Pi Web; VM deployments use Compose above.
+The retained `scripts/entrypoint.sh` installs Pi and Pi Web and initializes HOME;
+it is not a native launch/management interface or an agent sandbox. VM deployments
+use Compose above and still consume this helper's package pins.
 Docker lifecycle and wrappers remain independent. Docker and native home initialization share only the system-agent
 import helper in `init.sh`; the checked-in `.pi` extension tree is unchanged.
 
@@ -34,10 +35,10 @@ Verified release-specific contracts:
   release source SHA `8463025a321b8a660e9c27b1fa9e1938e1e84c1f`.
 - [Pinned CLI option parser](https://github.com/agegr/pi-web/blob/8463025a321b8a660e9c27b1fa9e1938e1e84c1f/bin/pi-web-options.js):
   `--hostname`, `--port`, `--no-open`; password via `PI_WEB_PASSWORD`, username `pi`.
-  This lifecycle always supplies `--hostname 127.0.0.1` and an explicit port.
+  VM binding and ingress are owned by the ordinary Compose service contract.
 - [UI launch implementation](https://github.com/agegr/pi-web/blob/8463025a321b8a660e9c27b1fa9e1938e1e84c1f/bin/pi-web.js):
   launches the bundled production Next server and wires its child lifecycle.
-  Our shell uses foreground `exec`; systemd must manage the complete cgroup.
+  Native start/manage wrappers are no longer supplied here.
 - [Published Pi metadata](https://registry.npmjs.org/@earendil-works/pi-coding-agent/0.85.1):
   upstream package's `pi` executable is `dist/bundle/cli.js`; package includes
    shrinkwrap. This is the current upstream scope.
@@ -48,11 +49,10 @@ Verified release-specific contracts:
 ### Ownership and configuration contract
 
 ```text
-Ansible: accounts + OS packages/pins + checkout + unit + environment
+Installer caller: account + OS packages/pins + checkout
                          |
                          v
 PI_USER: entrypoint.sh install --> pi/.runtime + missing home defaults
-PI_USER: start.sh              --> foreground pi-web / interactive pi
 ```
 
 The checkout is the **whole agents repository**, user-owned and editable. Root
@@ -66,19 +66,14 @@ systemctl directly; these editable scripts never control services.
 | `PI_REPO` | Default `/srv/agents`; canonical absolute checkout owned by PI_USER |
 | `PI_ROOT` | Default `$PI_REPO/pi`; must equal that component path |
 | `PI_PREFIX` | Default `$PI_ROOT/.runtime`; must equal that generated runtime path |
-| `PI_UNIT` | Default `pi.service`; existing Ansible-owned unit, read-only status only |
-| `PI_WORKSPACE` | Required at launch: existing canonical directory outside the Pi component; the whole editable checkout may be the workspace |
-| `PI_BRANCH` | Required for explicit updates; assigned local branch, e.g. `agents/devai-team` |
+| `PI_UNIT` | Legacy contract field, default `pi.service`; no service control |
 | `PI_PREVIOUS_REPO` | Optional install/initialize-home migration input; previous checkout, e.g. `/srv/pi/repo` |
-| `PI_PORT` | Required service port, decimal `1024..65535`, no leading zeroes |
-| `PI_WEB_PASSWORD` | Required service secret; never placed on argv |
-| `PI_WEB_ALLOWED_HOSTS` | Exact proxy hostnames if needed; does not change loopback binding |
 
 HOME comes from `getent passwd`, must be owned by PI_USER, and must not overlap
 the checkout. Canonical paths outside `/opt` are required; redirected private
 Pi state is refused. Scripts do not source `.env` or root-only service secrets.
-Ansible supplies separate install and runtime environments. Provider/web variables
-remain available to launched sessions/services, but never to npm build children.
+Provider/web variables are not passed to npm build children. VM launch and auth
+belong to the ordinary service contract, not this installer.
 
 ### Commands and installation
 
@@ -87,12 +82,6 @@ All native commands run explicitly **as PI_USER**, never root:
 ```bash
 bash "$PI_REPO/pi/scripts/entrypoint.sh" install
 bash "$PI_REPO/pi/scripts/entrypoint.sh" initialize-home
-bash "$PI_REPO/pi/scripts/start.sh" session -p "Review this checkout"
-bash "$PI_REPO/pi/scripts/start.sh" service
-bash "$PI_REPO/pi/scripts/manage.sh" status
-bash "$PI_REPO/pi/scripts/manage.sh" version
-bash "$PI_REPO/pi/scripts/manage.sh" update-check "$REVIEWED_FULL_SHA"
-bash "$PI_REPO/pi/scripts/manage.sh" update "$REVIEWED_FULL_SHA"
 ```
 
 Ansible exclusively supplies system Node >=22.19.0, `/usr/bin/npm`, Git, Bash,
@@ -115,24 +104,13 @@ never starts/stops a service. Drain sessions and stop the concerned unit through
 administrator-owned tools before replacing an in-use runtime.
 
 The runtime, build directories and `.lifecycle.lock` are Git-ignored. A shared Pi
-lock serializes install, standalone initialization and explicit updates; it does
+lock serializes install and standalone initialization; it does
 not coordinate arbitrary user edits or direct systemctl calls. Dependency scripts
 are trusted supply-chain code with PI_USER's filesystem access, **not sandboxed**
 by the clean environment. Exact top-level versions do not fully lock transitive
 dependencies. Real concerned-host package/service validation remains required.
 
-### Explicit Git updates and home preservation
-
-Updates require a clean tracked/untracked tree, the assigned `PI_BRANCH`, and a
-full lowercase SHA. Ignored runtime/build state is allowed. Both commands fetch
-the assigned origin branch without tags; the requested SHA must be on its history
-and a descendant of local HEAD. `update-check` leaves HEAD unchanged. `update`
-uses `merge --ff-only --no-overwrite-ignore`, preserving the branch and refusing
-divergence or ignored-file collisions. No reset, clean, forced checkout, commits,
-pushes, config writes, dependency installs or service actions. Git output from
-fetch is suppressed to avoid exposing credential-bearing URLs. Branch selection
-does not enforce GitHub permissions; infrastructure owns source approval and any
-future server-side publication restrictions.
+### Home preservation
 
 `initialize-home` retains `~/.pi/agent`, auth, sessions, databases, model settings
 and real user resource directories. Only `prompts` and `skills` links whose literal
@@ -155,30 +133,18 @@ unit and service credentials for protected-SHA rollback. These scripts neither
 delete nor rewrite the old deployment. Publication and live cutover require later
 explicit approval and infrastructure's normal source preflight.
 
-### Launch behavior and verification
-
-```text
-cd "$PI_WORKSPACE"
-pi-web --hostname 127.0.0.1 --port "$PI_PORT" --no-open   # service
-pi [arguments...]                                      # session
-```
-
-The [pinned Pi CLI](https://github.com/earendil-works/pi/blob/d981de1229ef899957bbe968bc8dcda02a21f477/packages/coding-agent/src/main.ts)
-uses cwd for new sessions; resuming may select saved cwd. The UI launches Next
-from the installed package directory, not PI_WORKSPACE; choose the project in
-the UI. Shell cwd is not UI isolation. A Pi tool extension alone does not cover
-UI filesystem/Git/terminal routes. Keep remote-only activation disabled until
-adapters, authenticated proxy transport and containment are validated separately.
+### Verification
 
 ```bash
-python3 -B -m unittest discover -s pi/tests -v
-for script in pi/scripts/*.sh; do bash -n "$script"; done
+python3 -B -m unittest pi/tests/test_lifecycle.py pi/tests/test_npm_config.py tests/test_workstation.py -v
+bash -n pi/scripts/entrypoint.sh
 ```
 
-Tests use non-root temporary Git/build/launch fixtures and a real npm config-only
+Tests use non-root temporary Git/build/init fixtures and a real npm config-only
 probe. They do not install controller dependencies or change live services. The
 actual-root refusal test skips on non-root runners; fixture Git/install tests
-skip on root runners. Docker workflows below retain their original lifecycle.
+skip on root runners. Run with a sanitized environment and writable temporary
+HOME/TMPDIR. Docker workflows below retain their original lifecycle.
 
 ## Automatic system-agent import (Docker and native)
 

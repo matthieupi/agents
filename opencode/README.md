@@ -6,12 +6,13 @@
 flow; see [the shared VM contract](../VM-SERVICES.md). The image reuses
 `install_runtime()` and locked KDCO inputs; startup only links the baked plugins.
 VM registration/public agent projection and SSH aliases are not part of this
-path. The old managed controller is retired. No executable checks or builds ran
-for this change; workstation/native contracts below are unchanged.
+path. The old managed controller, opt-in workstation runtime, native start/manage
+scripts and static workstation Compose are retired. The installer/init helper,
+VM Compose template and CPU/GPU workstation wrappers remain.
 
 ## Native workspaces in the workstation container
 
-The workstation Compose environment and `opencode-run` launcher enable
+The `opencode-run` launcher enables
 `OPENCODE_EXPERIMENTAL_WORKSPACES=1` on the shared backend at container startup.
 The launcher automatically recreates legacy keepalive containers on the next
 launch. All attached TUIs and browser clients then use that backend; setting the
@@ -28,18 +29,6 @@ retains its terminal-launch behavior. The native creation dialog does not provid
 plan-derived branch names, the KDCO `/var/worktree` setting, or credential symlink
 setup. Do not rely on Warp to transfer uncommitted primary-checkout changes.
 
-For direct Compose launches (rather than `opencode-run`), existing containers need
-recreation, not just `docker restart`, to receive the new container environment.
-Coordinate an idle window for all sessions first. From
-`services/agents/opencode`, using the existing deployment environment/overrides:
-
-```sh
-docker compose config --quiet
-docker compose up -d --no-deps --force-recreate opencode
-docker compose exec opencode printenv OPENCODE_EXPERIMENTAL_WORKSPACES
-```
-
-The final command should print `1`. Attach a TUI to the backend as shown below.
 Before using Warp for real implementation, smoke-test it in a
 disposable credential-free repository: verify a relative file operation and a
 native subagent both use the selected worktree, and that the original checkout
@@ -71,7 +60,6 @@ source downloader, or inactive receipt remains.
 | CPU/GPU workstation | Image installs defaults; `init.sh` checks/reuses the actual mounted `kdco/` graph under a shared lock, otherwise links installed image defaults |
 | Native | `install` checks/reuses checkout `.opencode/config/kdco` under the same package-local lock; `initialize-home` links that package and three entrypoints |
 | Standard VM Compose | Image installs the same package; product startup links baked plugins into private HOME, without enrollment or VM registration |
-| Opt-in runtime | Image installs the package non-root and startup links it even without shared resources; all source bytes/lock are bound to the existing resolution/receipt |
 
 Private config, root package manifests, provider credentials and unrelated plugins
 are not overwritten. Conflicting managed names or redirected private directories
@@ -119,7 +107,6 @@ the same public inputs through native Docker builds; there is no enrollment step
 flock -x opencode/.opencode/config/kdco/.kdco-install.lock node opencode/scripts/publish-plugins.mjs install opencode/.opencode/config/kdco
 node --test opencode/tests/plugins.test.mjs
 bun test opencode/tests/plugins-smoke.test.ts
-python3 -B -m unittest discover -s runtime/tests -p test_kdco_plugins.py -v
 python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
 # Optional real npm install/reuse/repair verification, entirely in disposable directories:
 KDCO_REAL_NPM_TEST=1 python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
@@ -131,7 +118,7 @@ Bun is a test prerequisite, not an additional production installation. The Node
 test's dependency-resolution check requires the preceding npm install. Tests use
 temporary directories; no real provider, worktree deletion or desktop event runs.
 
-## Native lifecycle
+## Retained installer and home initialization
 
 Native OpenCode executes **locally as the supplied account**, not inside a sandbox
 or remote-only adapter. Docker workflows below remain independent and unchanged.
@@ -146,56 +133,36 @@ wrappers must reject root before loading these scripts.
 | `OPENCODE_REPO` | Default `/srv/agents`; full user-owned Git clone, not a worktree/submodule |
 | `OPENCODE_ROOT` | Must equal `$OPENCODE_REPO/opencode` (default) |
 | `OPENCODE_PREFIX` | Must equal `$OPENCODE_ROOT/.runtime` (default) |
-| `OPENCODE_UNIT` | Default `opencode.service`; read-only status only |
+| `OPENCODE_UNIT` | Legacy contract field, default `opencode.service`; no service control |
 | `OPENCODE_VERSION` | **Install only:** required exact stable `X.Y.Z`; no default/latest |
-| `OPENCODE_BRANCH` | Update/update-check only: required assigned local branch |
 | `OPENCODE_PREVIOUS_REPO` | Optional initialize-home input: explicit known old checkout for link migration |
-| `OPENCODE_WORKSPACE` | Launch only: existing canonical absolute directory, including workspaces outside checkout |
-| `OPENCODE_PORT` | Service only: decimal `1024..65535`, no leading zeroes |
-| `OPENCODE_SERVER_PASSWORD` | Service only: mandatory nonempty secret, never argv |
-| `OPENCODE_SERVER_USERNAME` | Optional service username; upstream default otherwise |
-| Provider credentials | Service/session only, supplied securely or through user authentication |
 
 HOME/UID/GID come from passwd. The account must own its existing home, checkout
 and component. Home and checkout cannot overlap; canonical paths outside `/opt`
-are required. No service environment file is sourced. Start sets HOME, USER,
-LOGNAME, all XDG config/data/cache/**state** paths beneath passwd HOME,
-`OPENCODE_CONFIG_DIR=$HOME/.config/opencode` and `OPENCODE_DISABLE_AUTOUPDATE=1`.
-It clears `OPENCODE_BIN_PATH`, `OPENCODE_TEST_HOME`, `NODE_OPTIONS`, `NODE_PATH`.
-Session arguments are passed unchanged and VERSION is not needed at launch.
+are required. No service environment file is sourced. Native start/manage commands
+are no longer supplied; VM launch belongs to the ordinary Compose service and
+workstation launch belongs to `opencode-run`.
 
 ### Commands and integration order
 
 ```text
-Ansible: account + OS pins/tools + full checkout + protected wrappers/unit/secrets
+Installer caller: account + OS pins/tools + full checkout
     |
     +-- OPENCODE_USER: entrypoint.sh install          -> opencode/.runtime ONLY
     +-- OPENCODE_USER: entrypoint.sh initialize-home  -> missing defaults/known links
     |                  (supply PREVIOUS_REPO here for first migration)
-    +-- OPENCODE_USER: start.sh service | session [CLI arguments...]
 ```
 
 **Install never initializes the home.** The deployment role must call
 `initialize-home` separately after install, passing any migration input. This
 avoids duplicate setup and first-migration failures. Both operations share a
-nonblocking component lifecycle lock with explicit updates.
+nonblocking component lifecycle lock.
 
 Ansible owns OS dependencies and their approved pins: Bash, coreutils, flock,
 getent, `/usr/bin/git`, `/usr/bin/node`, `/usr/bin/npm`, certificates and workload
 tools. NodeSource-bundled npm is acceptable; no standalone npm package or APT
 input is required here. Scripts create no accounts, units or login hooks and
 perform no privilege escalation or service control.
-
-Service foreground-execs exactly:
-
-```text
-opencode web --hostname 127.0.0.1 --port <supplied port> --mdns false
-```
-
-Extra service flags are rejected. Infrastructure owns TLS/WebSocket proxying,
-firewall/access policy and protected environment files outside the checkout.
-The proxy must reach the host's loopback; do not expose the backend publicly.
-Credentials remain environment-only and must never enter Git or deployment logs.
 
 ### Installation, compatibility and failure handling
 
@@ -247,7 +214,7 @@ administrator tools before replacing an in-use runtime. No private-state rollbac
 is implied. Lifecycle scripts have the account's filesystem access: sanitized
 environment is not a sandbox, and a top-level pin is not a transitive lockfile.
 
-### Home resources and explicit updates
+### Home resources
 
 `initialize-home` directly links only `commands`, `skills`, `system`, `gsd` to
 `$OPENCODE_REPO/agent/`; it does not use Pi's agents mapping. Only literal current
@@ -265,43 +232,18 @@ concurrently created files win. Existing plugin lists/config are never rewritten
 Private auth, data, cache and state stay outside Git and unchanged. Copied defaults
 do not receive later repository edits automatically; review/merge deliberately.
 
-```text
-manage.sh status                   read-only unit properties
-manage.sh version                  isolated --version; no VERSION input required
-manage.sh update-check FULL_SHA    fetch/validate without moving HEAD
-manage.sh update FULL_SHA          clean-tree, assigned-branch fast-forward only
-```
-
-Updates require a full lowercase SHA on the fetched assigned origin branch and
-a descendant of local HEAD. Tracked/untracked changes, detached/wrong branches,
-divergence and ignored-file collisions are refused. Ignored runtime/build state
-is allowed. Git fetch is bounded at 120 seconds and output suppressed to avoid
-credential-bearing URLs. `merge --ff-only --no-overwrite-ignore` preserves the
-branch; no reset, detach, clean, commits, pushes, hook skipping or config writes.
-No install/service action is implicit; infrastructure owns source approval and
-activation. The lock cannot coordinate arbitrary editor/Git/service operations.
-
 ### Verification
 
 Run from the agents repository root:
 
 ```bash
-bash -n opencode/scripts/entrypoint.sh opencode/scripts/start.sh opencode/scripts/manage.sh
-python3 -B -m unittest discover -s opencode/tests -v
-# If installed:
-shellcheck -x -P opencode/scripts opencode/scripts/{entrypoint,start,manage}.sh
+bash -n opencode/scripts/entrypoint.sh
+python3 -B -m unittest tests/test_workstation.py opencode/tests/test_backend.py -v
 ```
 
-Tests run as a real non-root user with temporary Git repositories and fake package
-fixtures; account lookup and normal package installation are mocked. When npm and
-Node are available, an **offline real-npm** test installs two local fixture
-tarballs only: a parent's postinstall invokes a child install and checks the
-vendor-expected `node_modules` path. It proves old global mode fails and local
-production installation succeeds through verification/promotion. Real npm config
-parsing is also checked when available. This validates npm fallback geometry,
-**not live OpenCode/VM compatibility**. Root execution is tested when the runner
-is root; non-root runs check root-guard ordering. No network packages, host-global
-dependencies, accounts, services or VM operations are installed/run by the suite.
+These targeted tests use isolated HOME, recorded Docker calls and mocked HTTP;
+they do not run Docker, install packages or contact providers. Run with a sanitized
+environment and a writable temporary HOME/TMPDIR. This is not live VM acceptance.
 
 ## Docker workstation workflow
 
@@ -343,28 +285,19 @@ changing the invoking shell's password does not rotate a reused backend. Remove
 the container and relaunch with the new credentials to rotate them. Credentials
 are not printed in launcher commands or stored in compatibility labels.
 
-The health helper is both copied into images and mounted by the launcher/Compose,
+The health helper is both copied into images and mounted by the launcher,
 so older images do not need to contain that new file just to recreate a container.
 Old OpenCode binaries without compatible `web`/`attach` commands need an image
 update. Existing plugin installation prerequisites still require rebuilding old
-images as described above. Direct Compose users must recreate their containers.
+images as described above.
 
 ## Quick Start
 
 ```bash
-# 1. Configure
-cp .env.example .env
-# Edit .env with your API keys
-
-# 2. Create workspace
+# From this directory; configure provider authentication separately.
 mkdir -p workspace
-
-# 3. Build & start
-docker compose up -d --build
-
-# 4. Check readiness, then attach to the shared backend
-docker exec opencode node /opt/harness/backend-health.mjs --wait
-docker exec -it opencode opencode attach http://127.0.0.1:4096 --dir /workspace
+./opencode rebuild
+./opencode ./workspace
 ```
 
 ## Usage with Wrapper Scripts
@@ -540,7 +473,7 @@ detach active sessions first.
 opencode/
 ├── Dockerfile              # Container definition
 ├── Dockerfile.gpu          # CUDA devel GPU container definition
-├── docker-compose.yml      # Service orchestration
+├── docker-compose.j2       # Ordinary VM service template (not workstation Compose)
 ├── .env.example            # Environment template
 ├── .env                    # Your config (git-ignored)
 ├── opencode.json           # OpenCode app config (reference)
@@ -609,10 +542,8 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 | `GEMINI_API_KEY` | No* | Google Gemini API key |
 | `OPENROUTER_API_KEY` | No* | OpenRouter API key |
 | `OLLAMA_HOST` | No | LAN Ollama server URL |
-| `WORKSPACE_PATH` | No | Project directory (default: `./workspace`) |
 | `GIT_AUTHOR_NAME` | No | Git commit author name |
 | `GIT_AUTHOR_EMAIL` | No | Git commit author email |
-| `SSH_DIR_PATH` | No | SSH directory path (default: `./ssh`) |
 
 *At least one LLM provider API key is required.
 
@@ -680,13 +611,8 @@ Host test-server
 
 ## Network
 
-Default: joins `devai-xmist` external network. For standalone:
-
-```yaml
-networks:
-  devai-xmist:
-    driver: bridge
-```
+The workstation launcher joins the existing `devai-xmist` Docker network.
+Ordinary VM networking is separately owned by the Compose template.
 
 ## Troubleshooting
 
@@ -697,15 +623,13 @@ sudo chown -R 1000:1000 workspace/
 
 ### Container won't start
 ```bash
-docker compose logs opencode
+./opencode logs <container-name>
 ```
 
 ### Image not found
 ```bash
-cd /path/to/services/opencode
-docker compose build
-# or
-./opencode -r .
+./opencode rebuild          # CPU
+./opencode rebuild gpu      # GPU
 ```
 
 ### OAuth login is requested again

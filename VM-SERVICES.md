@@ -16,8 +16,10 @@ host.services -> ordinary catalog -> common/docker_service
 
 There is no VM runtime policy, source manifest, image approval, activation broker,
 registration, SSH alias or custom launcher in these inputs. The old `venv/` build
-path is deleted. Existing workstation scripts, native installers,
-run/mgr wrappers and static Compose files are separate and unchanged.
+path is deleted. Workstation run/mgr wrappers and Pi/Claude static Compose remain
+separate. Pi/OpenCode installer/init helpers remain VM build dependencies; native
+start/manage scripts, OpenCode static Compose and the opt-in `runtime/` framework
+are retired. Ordinary VM templates and their delivery inputs are unchanged.
 
 Paperclip is an additional ordinary **base UI**, not an execution product. Its
 [own contract](paperclip/README.md) uses a pinned published production image,
@@ -185,25 +187,24 @@ was pulled or built here, including the newly selected Docker CLI tag.
 The maintained `venv/` controller, its Docker overlays/build controls, old Pi VM
 Dockerfile, T3/OMP products/recipes and old Paseo runtime projection are deleted.
 Strict transport now belongs to the parent's `scripts/ssh_transport.py`.
-`runtime/Makefile resources` calls `opencode/scripts/public-resources.py` for only
-the retained workstation public agent projection, exclusive publication and exact
-physical-prompt validation. No VM registration, ACL plan or policy was relocated.
-The opt-in Pi/OpenCode/Claude workstation runtime keeps its actual build/install
-contracts, with no T3/OMP or managed-VM delegation. Its local receipts are not
-privileged VM approvals. The deleted VM machinery was SHA/source publication and
+The opt-in workstation framework and its runtime-only public-resource publisher
+are retired. Product plugin publication and both Pi/OpenCode `scripts/entrypoint.sh`
+helpers remain. No VM registration, ACL plan or policy was relocated.
+The deleted VM machinery was SHA/source publication and
 image/gateway approval, not an established cryptographic signing system.
 
-Only wholly obsolete nested controller/product tests were deleted. All seven mixed
-runtime test files remain unchanged with stale retired-code expectations, including
-removed `vm_command`/`protected_path` calls. Eight mixed parent legacy test files
-also require separate maintenance. No replacement tests, stubs or skips were added;
-the test graph is not claimed clean. Staged deletions and ignored/private data
-remain protected. Source retirement performs no deployed-state cleanup.
+Framework-owned tests were removed; retained workstation coverage moved to
+`tests/test_workstation.py`, excluding only OpenCode static Compose assertions.
+Pi installer/init coverage remains under `pi/tests`; deleted native start/manage
+cases were removed. Parent legacy tests require separate maintenance; the whole
+test graph is not claimed clean. Ignored/private data remains protected. Source
+retirement performs no deployed-state cleanup.
 
 ## Deferred acceptance
 
-No executable verification was run and no tests were written. After the whole
-code/config set is assembled: native template/Compose checks, positive/negative
+Targeted offline fixture tests and shell syntax checks cover the workstation
+cleanup, not VM acceptance. After the whole code/config set is assembled:
+native template/Compose checks, positive/negative
 socket rendering, isolated image builds, NSS/UID collision behavior, KDCO discovery,
 Paseo supervisor compatibility, auth/Origin and host-to-Hub bridge reachability
 remain necessary. Pi's bounded HTTP health and Paseo's public health endpoint do

@@ -14,13 +14,10 @@ inputs, auth, account, state, Docker grants and ingress ownership.
 
 ## Preserved workstation interfaces
 
-- [Pi](pi/README.md): existing run/mgr wrappers, static Compose, native scripts.
-- [OpenCode](opencode/README.md): existing CPU/GPU wrappers, Compose, native scripts,
+- [Pi](pi/README.md): run/mgr wrappers, static Compose, installer/init helper.
+- [OpenCode](opencode/README.md): CPU/GPU dispatcher/menu/run/mgr, installer/init helper,
   KDCO plugins and explicit optional tools.
 - `claudecode/`: existing workstation component.
-- [Opt-in runtime](runtime/README.md): separate Pi/OpenCode/Claude workstation
-  build/select/run interface. It does not delegate to a VM controller or replace
-  existing workstation defaults. Its local build receipts are not VM authorization.
 - [Paseo daemon](paseo-deamon/README.md): VM templates and separately retained
   standalone component interface; embedded OpenCode belongs to Paseo.
 - [Paseo Hub](paseo-hub/README.md): restricted UI service, not an execution host.
@@ -59,13 +56,16 @@ Use the exact names (`system-build`, `system-coo`, `system-devops`, `system-expl
 to unprefixed names or new delegation framework are supplied. See
 [Pi's consumer matrix](pi/README.md#automatic-system-agent-import-docker-and-native).
 
-OpenCode workstation config uses its own agent schema. The opt-in runtime's
-`resources` target calls the product-owned public config publisher; ordinary VM
-services do not register agents from that manifest.
+OpenCode workstation config uses its own agent schema. The opt-in `runtime/`
+framework and its public-resource projection are retired. Product plugin
+publication, KDCO, custom configuration and shared resources remain intact.
+Pi/OpenCode native start/manage scripts and OpenCode static Compose are also
+retired; the product installers and ordinary VM Compose templates remain.
 
 ## Evidence boundary
 
 > [!IMPORTANT]
-> This cleanup is source-only. No tests were authored or executed, and no validation,
-> build or deployment was run. Mixed workstation test files retain obsolete cases
-> for separate maintenance; their presence is not a claim of a passing test graph.
+> This cleanup is source-only. Targeted credential-free workstation, backend and
+> Pi installer/init tests exercise fixtures, not live containers. Retained wrapper
+> coverage lives in `tests/test_workstation.py`. No image build, deployment or
+> deployed-state cleanup is implied; the full test graph is not claimed clean.
