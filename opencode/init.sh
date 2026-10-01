@@ -61,14 +61,6 @@ link_path() {
     ln -sT -- "$shared_path" "$current_path"
 }
 
-ensure_shared_home_root() {
-    local shared_root="$1"
-    mkdir -p "$shared_root"
-    if [[ ! -e "$shared_root/prompts" && ! -L "$shared_root/prompts" ]]; then
-        ln -sT -- commands "$shared_root/prompts"
-    fi
-}
-
 remove_legacy_link() {
     local current_path="$1"
     local shared_path="$2"

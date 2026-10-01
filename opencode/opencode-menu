@@ -18,7 +18,6 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[opencode-menu]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[opencode-menu]${NC} $*"; }
 log_error() { echo -e "${RED}[opencode-menu]${NC} $*" >&2; }
 
 require_gum() {

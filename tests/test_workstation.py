@@ -1,4 +1,4 @@
-"""Copied legacy scripts with isolated HOME and Docker/native boundary recorders.
+"""Workstation scripts with isolated HOME and Docker/native boundary recorders.
 
 No real Docker/Compose, credential files, package installs or network calls.
 """
@@ -12,7 +12,7 @@ import unittest
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class LegacyDispatch(unittest.TestCase):
@@ -302,6 +302,9 @@ if tool == 'docker':
             result, calls = self.run_copy('opencode/opencode-run', argv, scenario)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(any(call[0] in ('run', 'exec', 'rm') for call in calls))
+            if scenario == 'missing-image':
+                self.assertIn('opencode rebuild', result.stderr)
+                self.assertNotIn('docker compose', result.stderr)
 
     def test_leading_rebuild_differs_from_manager_update(self):
         result, calls = self.run_copy('opencode/opencode-run', ['-r', '.'])
@@ -417,8 +420,7 @@ initialize_home
         self.assertFalse(imported.exists())
 
     def test_compose_contracts_without_interpolation_or_docker(self):
-        for component, service, image, home in [('opencode', 'opencode', 'lab/opencode:latest', '/home/opencode'),
-                ('pi', 'pi', 'lab/pi:latest', '/home/pi'),
+        for component, service, image, home in [('pi', 'pi', 'lab/pi:latest', '/home/pi'),
                 ('claudecode', 'claude-code', 'lab/claude-code:latest', '/home/claude')]:
             with self.subTest(component=component):
                 copied = self.root / (component + '.yml')
@@ -433,13 +435,7 @@ initialize_home
                 self.assertIn('HOME=' + home, spec['environment'])
                 self.assertIn('../agent:/opt/agent:rw', spec['volumes'])
                 self.assertIn('./init.sh:/opt/harness/init.sh:ro', spec['volumes'])
-                if component == 'opencode':
-                    self.assertEqual(spec['command'], ['bash', '-lc', '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false'])
-                    self.assertNotIn('ports', spec)
-                    self.assertEqual(spec['healthcheck']['test'], ['CMD', 'node', '/opt/harness/backend-health.mjs'])
-                    self.assertEqual(spec['healthcheck']['start_period'], '120s')
-                else:
-                    self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
+                self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
                 self.assertTrue(document['networks']['devai-xmist']['external'])
 
 

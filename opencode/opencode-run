@@ -11,7 +11,6 @@ while [[ -L "$SOURCE" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 
-COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 CPU_IMAGE_NAME="lab/opencode:latest"
 GPU_IMAGE_NAME="lab/opencode:gpu"
 IMAGE_NAME="${CPU_IMAGE_NAME}"
@@ -373,7 +372,7 @@ if ! docker image inspect "${IMAGE_NAME}" > /dev/null 2>&1; then
         log_error "  opencode rebuild gpu"
         log_error "  or: opencode -r --gpu ."
     else
-        log_error "  cd ${SCRIPT_DIR} && docker compose build"
+        log_error "  opencode rebuild"
         log_error "  or: opencode -r ."
     fi
     exit 1
