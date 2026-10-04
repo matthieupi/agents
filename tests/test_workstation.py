@@ -45,6 +45,7 @@ class LegacyDispatch(unittest.TestCase):
     def test_opencode_run_verbatim(self):
         cases = [[], ['.'], ['/project'], ['--web'], ['-w', '4096', '.'],
                  ['--wlan', '4096'], ['--port', '4097'],
+                 ['--privileged', '.'], ['--priviliged', '.'],
                  ['--gpu', '0', '.'], ['--cpus', '4', '--memory', '8g'],
                  ['--publish', '3000'], ['-r', '.'], ['--', 'a b', '$(false)']]
         for argv in cases:
@@ -123,6 +124,8 @@ if tool == 'docker':
     elif args[0] == 'inspect':
         fmt = args[2]
         print('lab/opencode:latest' if fmt == '{{.Config.Image}}' else
+              os.environ.get('PRIVILEGED', 'false') if fmt == '{{.HostConfig.Privileged}}' else
+              'no' if fmt == '{{.HostConfig.RestartPolicy.Name}}' else
               ('' if scenario == 'legacy' else 'web-v1') if '.lifecycle' in fmt else
               ('{"*":"allow"}' if scenario == 'permission' else '{}') if '.permission' in fmt else
               os.environ.get('EXPOSURE', 'none') if '.web"' in fmt else
@@ -174,6 +177,9 @@ if tool == 'docker':
                       str(self.root / 'opencode/.opencode/data') + ':/home/opencode/.local/share/opencode:rw'):
             self.assertIn(value, run)
         self.assertNotIn('--cap-drop', run)  # Legacy privilege profile is not new-path policy.
+        self.assertNotIn('--privileged', run)
+        self.assertNotIn('--pid=host', run)
+        self.assertNotIn('/:/host:rw', run)
         self.assertNotIn('-p', run)
         self.assertEqual(run[-1], '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false')
         self.assertEqual(calls[-1][-5:], ['opencode', 'attach', 'http://127.0.0.1:4096', '--dir', '/workspace'])
@@ -183,6 +189,37 @@ if tool == 'docker':
         self.assertIn('node /opt/harness/backend-health.mjs', run)
         self.assertEqual(calls[-2][-3:], ['node', '/opt/harness/backend-health.mjs', '--wait'])
         self.assertFalse(any('init.sh' in str(call) for call in calls if call[0] == 'exec'))
+
+    def test_direct_run_privileged_flags(self):
+        for flag in ('--privileged', '--priviliged'):
+            with self.subTest(flag=flag):
+                result, calls = self.run_copy('opencode/opencode-run', [flag, '.'])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                run = next(call for call in calls if call[0] == 'run')
+                self.assertEqual(run[run.index('--restart') + 1], 'no')
+                for value in ('--privileged', '--pid=host', '/:/host:rw',
+                              '1000:1000', 'devai-xmist', 'OPENCODE_PERMISSION={}'):
+                    self.assertIn(value, run)
+                self.assertIn('full host-root access', result.stdout)
+                self.assertIn('persists across container restarts', result.stdout)
+
+    def test_privileged_reuse_and_recreation_in_both_directions(self):
+        for configured in ('false', 'true'):
+            for requested in (False, True):
+                with self.subTest(configured=configured, requested=requested):
+                    self.env['PRIVILEGED'] = configured
+                    flags = ['--privileged'] if requested else []
+                    result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'], 'reuse')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    changed = requested != (configured == 'true')
+                    self.assertEqual(any(call[0] == 'rm' for call in calls), changed)
+                    self.assertEqual(any(call[0] == 'run' for call in calls), changed)
+                    if changed:
+                        run = next(call for call in calls if call[0] == 'run')
+                        for value in ('--privileged', '--pid=host', '/:/host:rw'):
+                            self.assertEqual(value in run, requested)
+                    if requested:
+                        self.assertIn('full host-root access', result.stdout)
 
     def test_direct_run_web_and_wlan_ports(self):
         for flags, published, port in [(['--web'], '127.0.0.1:4096:4096', '4096'),

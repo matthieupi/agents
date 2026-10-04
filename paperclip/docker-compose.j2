@@ -35,6 +35,9 @@ services:
     networks:
       paperclip_private:
         ipv4_address: {{ paperclip_backend_address | to_json }}
+{% if service_config.remote_execution is defined %}
+      paperclip_ssh: {}
+{% endif %}
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
@@ -86,6 +89,11 @@ services:
     networks: [paperclip_private]
 
 networks:
+{% if service_config.remote_execution is defined %}
+  paperclip_ssh:
+    external: true
+    name: {{ service_config.remote_execution.network_name | to_json }}
+{% endif %}
   paperclip_private:
     external: true
     name: {{ paperclip_network_name | to_json }}

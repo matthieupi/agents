@@ -10,6 +10,13 @@ path. The old managed controller, opt-in workstation runtime, native start/manag
 scripts and static workstation Compose are retired. The installer/init helper,
 VM Compose template and CPU/GPU workstation wrappers remain.
 
+The independently hosted admin client at `opencode.intellagent.network` is built
+and served by the infrastructure repository's `agent/opencode-ui` role. COO, Team
+DevAI and N3TX Dev add that one exact CORS origin to their pinned backends; direct
+URLs and gateway Basic credentials remain unchanged. CORS preflight is the only
+ordinary unauthenticated API method. PTY WebSockets use the upstream one-time
+ticket exchange, and the gateway rejects legacy `auth_token` query transport.
+
 ## Native workspaces in the workstation container
 
 The `opencode-run` launcher enables
@@ -601,6 +608,41 @@ Host test-server
 ```
 
 ## Security Notes
+
+### Full host access (explicit opt-in)
+
+```bash
+opencode --privileged .
+# Direct launcher also accepts --privileged (alias: --priviliged):
+opencode-run --privileged .
+```
+
+This adds `--privileged --pid=host -v /:/host:rw` to the OpenCode container
+itself. No helper, SSH server, or Docker socket is needed. The existing container
+user and bridge network stay unchanged; the image's passwordless sudo allows
+host-root execution. Host files are accessible under `/host`; to execute in the
+host's namespaces and root filesystem:
+
+```bash
+sudo nsenter --target 1 --mount --uts --ipc --net --pid --root --wd -- uptime
+```
+
+**This grants full root control of the Docker host to every client, agent and
+plugin on this backend. It is not read-only or time-limited.** Privileged containers
+use `--restart no`, so Docker will not automatically restart them. Manually
+restarting one retains its privileges. Ordinary containers retain their
+`unless-stopped` restart policy. On native rootful Linux
+Docker this is the workstation; on Docker Desktop it is the Docker Linux VM.
+Rootless/user-namespace-remapped Docker may not provide equivalent host access.
+
+Relaunch the same workspace/runtime profile **without** the flag to recreate the
+container without these privileges, or remove the container. Switching privilege
+mode disconnects existing sessions. Stopping and starting the existing container
+does not remove privileges. Other flags (GPU, mounts, ports, etc.) must be supplied
+as usual when relaunching. This is independent of `--dangerous`, which controls
+OpenCode tool approvals rather than Docker isolation.
+
+### Default container profile
 
 - Container runs as non-root user (`opencode:1000`)
 - API keys never baked into image

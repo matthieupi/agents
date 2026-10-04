@@ -1,4 +1,4 @@
-# Paperclip — private Hub base service
+# Paperclip — private Hub service and remote SSH execution
 
 ✅ **Admin access and native ownership completed September 29, 2026.**
 Open **https://intellagent.network** through a DevAI **admin** WireGuard profile.
@@ -14,21 +14,46 @@ expecting this image to run.
 
 DevAI Hub selects `paperclip` beside `paseo-hub`. The base serves
 **https://intellagent.network** directly using native authenticated/private mode.
-No company, agent, provider credentials, execution workspace or schedules are seeded.
+Normal service deployment seeds no company, agent, provider credential or schedule;
+explicit native API configuration/acceptance is a separate operation.
 The heartbeat scheduler is disabled. There is no cloud mode or custom execution guard.
 Do not restore an execution-populated company database onto Hub as a base install.
 
 An authenticated instance administrator can deliberately configure local adapters
 and initiate runs. The base policy is operational, not tamper-proof admin isolation:
-**do not configure or enable agents on Hub**. Agent integration remains deferred
-pending reviewed remote-only setup and a separate worker return-route decision.
+**do not configure or enable local execution on Hub**. Select the explicit remote
+environment rather than the instance's existing Local environment.
+
+**October 2 — containerized remote execution deployed.** The user
+accepted sensitive Hub credential/checkpoint custody and selected OpenCode/Pi with
+OpenAI. They explicitly approved upstream **direct SSH adapters** instead of native
+runner WSS. `opencode_local` and `pi_local` both support remote SSH despite their
+names; their authenticated, per-run callback bridge uses the existing SSH command
+transport. No WSS listener/grant, provider pack, upstream patch or custom worker
+protocol is needed. The ordinary `paperclip-daemon` service runs native sshd.
+Pi is not available in the pinned native runner; the managed
+AI-connection table maps OpenAI subscription to Codex, not OpenCode/Pi.
+
+`COO Paperclip SSH` in **Neuralys Lab** now targets the ordinary
+[`paperclip-daemon`](../paperclip-daemon/README.md) container at COO port 2222.
+It shares the canonical `agent` UID/GID, HOME/workspace and explicit socket grant
+with Pi/OpenCode; native SSH sessions run as agent and container-local sudo is
+approved. Shared HOME and Docker access are deliberately the same trust boundary,
+not isolation. The superseded host executor account/tools/state were removed.
+Native SSH, socket/sudo, workspace and authenticated callback probes passed.
+`COO OpenCode` is paused after two zero-token subscription-model rejections;
+**no provider-backed remote run has passed**. See the parent's
+`.project/deployments/paperclip-daemon-20261002.md` and `.project/TODO-MANUAL.md`.
+Credentials are used through the shared mount, never copied into an image.
+Hub's encrypted SSH secret, app state and any future
+credential/checkpoint data must be treated as sensitive and backed up accordingly.
 
 ## Ownership and flow
 
 ```text
 environments/devai/config.yml -> generated inventory + canonical admission
   -> existing account/engine prerequisites (no provider/workspace/socket grants)
-  -> services/paperclip: local directories + missing-only service secrets
+  -> agent/paperclip: local directories + missing-only service secrets
   -> native nginx ACL: apply restrictions BEFORE app configuration changes
   -> common/docker_service: finite files, .env, native build/up
        +-> private PostgreSQL -> persistent local cluster
@@ -39,11 +64,11 @@ environments/devai/config.yml -> generated inventory + canonical admission
 
 | File / owner | Responsibility |
 |---|---|
-| `Dockerfile`, `Dockerfile.dockerignore` | Thin pinned-image composition; only configuration script enters the build context; no upstream source build or CLI installation |
+| `Dockerfile`, `Dockerfile.dockerignore` | Thin pinned-image composition; build-time NSS UID/GID mapping required by OpenSSH; only configuration script enters the build context; no upstream source build or CLI installation |
 | `configure.mjs` | Runtime preload reads mounted service secrets, constructs `DATABASE_URL`, writes disposable native config, then upstream Node loader/server starts normally |
 | `docker-compose.j2` | Non-root app + private PostgreSQL, local bind mounts, healthchecks, resource bounds; no exposed host ports |
 | `env.j2` | Public canonical settings only; no secret interpolation from controller environment |
-| Parent `services/paperclip` role | Local filesystem/type/ownership checks, missing-only target secret generation, private network and healthy endpoint observation |
+| Parent `agent/paperclip` role | Hub custody/client identity, exact egress guard, native API environment configuration and probes; the separate `agent/paperclip-daemon` role prepares container SSH identity/authorization |
 | Parent `agent/gateway` role | Native nginx, pre-recreation access restriction, certificate transfer and exact-owned private DNS |
 
 Canonical runtime metadata is `ansible_vars.service_config.paperclip` in DevAI
@@ -59,13 +84,19 @@ Existing common-role source/custody/convergence behavior is reused, not forked.
   facts, with read-only root filesystems, `cap_drop: ALL`, `no-new-privileges`,
   bounded PIDs/memory and limited tmpfs. The app does not run the upstream root
   remap/chown entrypoint. Same UID is not an isolation boundary.
-- No Docker socket, host-root mount, host HOME, workspace, SSH keys, provider
-  secrets, privileged mode, host network or shared `proxy_net` is supplied.
+- No Docker socket, host-root/HOME/workspace or workstation-key mount, privileged
+  mode, host network or shared `proxy_net` is supplied. The dedicated execution key
+  is persisted through Paperclip's native encrypted-secret API, not an env/build input.
 - Docker allocates `paperclip_private` dynamically as an internal IPv4 bridge.
   Compose references that external network; neither app nor DB publishes a port.
   Docker service discovery resolves `postgres`; external DNS forwarding is pointed
-  at the container's own loopback, where no DNS server runs. External providers,
-  SMTP, integrations and remote agents are not enabled by this base.
+  at the container's own loopback, where no DNS server runs. The optional app-only
+  `paperclip_ssh` bridge permits exactly the configured COO daemon SSH port (2222);
+  the prior host TCP/22 allowance was removed. PostgreSQL stays internal-only.
+  A table-local native nftables transaction blocks other forwarded egress and
+  bridge-origin host access. A oneshot firewall unit plus Docker Requires/ExecStartPre
+  loads the guard before container restoration; this is not an execution daemon.
+  No Hub provider/SMTP internet access is granted.
 - Paperclip reserves the last usable IPv4 address of its existing Docker-allocated
   internal bridge subnet. Compose and host nginx use that same derived address;
   container start order no longer changes nginx's upstream. Foreign attachments,
@@ -73,8 +104,9 @@ Existing common-role source/custody/convergence behavior is reused, not forked.
   persists across app recreation and host restart; no subnet is hardcoded.
 - Host nginx connects to the reserved app address on configured port 3100. The
   canonical host policy adds only this bridge-output TCP port. No worker-to-Hub
-  permission, public A/AAAA record, public reverse proxy, NAT or resource resize is
-  added. Existing `paseo.intellagent.network` behavior is unchanged.
+  permission, public A/AAAA record, public reverse proxy or resource resize is added.
+  Docker's normal outbound NAT presents Hub's address to COO; the SSH authorized key
+  is restricted to that source with forwarding/PTY disabled. Paseo is unchanged.
 - Internal bridges are not complete host isolation. Existing Hub host policy,
   actual bridge/Docker packet behavior, LAN/WireGuard paths and denial paths need
   scoped live verification. Root/Docker operators can bypass host controls.
@@ -197,8 +229,9 @@ Use the existing **guarded host-firewall** workflow for host policy (ordinary si
 does not activate it). Prepare Hub routes/firewall before the gateway NAT exception.
 Use the existing native gateway playbook for enrolled policy, then the scoped
 `make ansible ENV=devai HOST=hub` for normal convergence. Exact reviewed commands
-and verification recaps are in the completion record. No company, agent, provider
-credential, worker permission or heartbeat schedule is created by these tasks.
+and verification recaps are in the completion record. The bootstrap/owner-verification
+tasks create no company, agent, provider credential or heartbeat schedule. Optional
+SSH preparation and explicit environment configuration are separate operations above.
 
 ## Pinned source and verification
 

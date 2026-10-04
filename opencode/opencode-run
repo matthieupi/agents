@@ -27,6 +27,9 @@ log_error() { echo -e "${RED}[opencode]${NC} $*" >&2; }
 
 # Parse optional flags
 PERMISSION_JSON='{}'
+PRIVILEGED_MODE="false"
+PRIVILEGED_ARGS=()
+RESTART_POLICY="unless-stopped"
 BACKEND_LIFECYCLE="web-v1"
 REBUILD_IMAGE=""
 WEB_MODE=""
@@ -115,6 +118,10 @@ add_volume() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --privileged|--priviliged)
+            PRIVILEGED_MODE="true"
+            shift
+            ;;
         -d|--dangerous)
             PERMISSION_JSON='{"*":"allow"}'
             log_warn "DANGEROUS MODE applies to the shared backend and all its clients!"
@@ -206,6 +213,13 @@ if [[ -n "${GPU_MODE}" ]]; then
     IMAGE_NAME="${GPU_IMAGE_NAME}"
 fi
 
+if [[ "${PRIVILEGED_MODE}" == "true" ]]; then
+    PRIVILEGED_ARGS=(--privileged --pid=host -v /:/host:rw)
+    RESTART_POLICY="no"
+    log_warn "PRIVILEGED MODE grants full host-root access to the shared backend and all its clients!"
+    log_warn "Access persists across container restarts. Relaunch without --privileged to remove it."
+fi
+
 # Handle rebuild if requested
 if [[ -n "${REBUILD_IMAGE}" ]]; then
     log_info "Rebuilding OpenCode CPU image..."
@@ -290,6 +304,17 @@ has_requested_backend_config() {
     [[ "${lifecycle}" == "${BACKEND_LIFECYCLE}" && "${permission}" == "${PERMISSION_JSON}" && "${exposure}" == "${WEB_EXPOSURE}" ]]
 }
 
+has_requested_privileged_config() {
+    local configured_privileged configured_restart
+    configured_privileged="$(docker inspect --format '{{.HostConfig.Privileged}}' "${CONTAINER_NAME}")"
+    [[ "${configured_privileged}" == "${PRIVILEGED_MODE}" ]] || return 1
+    if [[ "${PRIVILEGED_MODE}" == "true" ]]; then
+        configured_restart="$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${CONTAINER_NAME}")"
+        [[ "${configured_restart}" == "no" ]] || return 1
+    fi
+    return 0
+}
+
 connect_backend() {
     log_info "Waiting for authenticated backend readiness (up to 120 seconds)..."
     if ! timeout --kill-after=5s 125 docker exec "${CONTAINER_NAME}" node /opt/harness/backend-health.mjs --wait; then
@@ -330,6 +355,9 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
         if [[ "${CONTAINER_IMAGE}" == "${IMAGE_NAME}" ]]; then
             if ! has_requested_backend_config; then
                 log_warn "Backend lifecycle, permissions, or exposure changed; recreating..."
+                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+            elif ! has_requested_privileged_config; then
+                log_warn "Host privilege mode changed; recreating (existing sessions will disconnect)..."
                 docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
             elif [[ -n "${WEB_MODE}" ]] && ! has_requested_web_port; then
                 log_warn "Container lacks requested web port mapping (${WEB_BIND_HOST}:${WEB_PORT}), recreating..."
@@ -431,7 +459,7 @@ docker run -d \
     --label "dev.xmist.opencode.memory=${MEMORY_LIMIT}" \
     --label "dev.xmist.opencode.publish=$(publish_label)" \
     --label "dev.xmist.opencode.volumes=$(volume_label)" \
-    --restart unless-stopped \
+    --restart "${RESTART_POLICY}" \
     --user "1000:1000" \
     -e "HOME=/home/opencode" \
     -e "PATH=/home/opencode/.local/bin:/usr/local/bin:/usr/bin:/bin" \
@@ -465,6 +493,7 @@ docker run -d \
     -v "${CACHE_DIR}:/home/opencode/.cache/opencode:rw" \
     -v "${SSH_DIR}:/home/opencode/.ssh:ro" \
     "${VOLUME_ARGS[@]}" \
+    "${PRIVILEGED_ARGS[@]}" \
     "${PORT_ARGS[@]}" \
     "${GPU_ARGS[@]}" \
     --network devai-xmist \

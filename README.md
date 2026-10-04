@@ -23,7 +23,11 @@ inputs, auth, account, state, Docker grants and ingress ownership.
 - [Paseo Hub](paseo-hub/README.md): restricted UI service, not an execution host.
 - [Paperclip base](paperclip/README.md): DevAI Hub-only private native-auth UI and
   PostgreSQL; native ownership established, signup closed and DevAI-admin-only
-  ingress. No agents or heartbeat scheduler are configured by the deployment.
+  ingress. Ordinary deployment seeds no agents or schedules; explicit acceptance
+  created a paused native agent, documented in the parent deployment record.
+- [Paperclip daemon](paperclip-daemon/README.md): ordinary native SSH execution
+  container sharing agent HOME/workspace and explicit socket grants with Pi/OpenCode.
+  This is the same trust boundary, not an isolated worker protocol.
 
 ## Shared defaults
 

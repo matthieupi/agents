@@ -1,0 +1,69 @@
+services:
+  paperclip-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile.service
+      additional_contexts:
+        opencode_inputs: {{ service_config.opencode_build_context | to_json }}
+      args:
+        OPENCODE_VERSION: {{ service_config.opencode_version | to_json }}
+        PI_VERSION: {{ service_config.pi_version | to_json }}
+        AGENT_UID: {{ agent_uid | string | to_json }}
+        AGENT_GID: {{ agent_gid | string | to_json }}
+{% if 'paperclip-daemon' in (docker_access | default([])) %}
+        AGENT_DOCKER_GID: {{ agent_docker_gid | string | to_json }}
+{% endif %}
+    # Native sshd privilege separation needs root; sessions are restricted to agent.
+    user: "0:0"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, SYS_CHROOT, CHOWN, DAC_OVERRIDE, FOWNER, AUDIT_WRITE, KILL]
+    # Deliberately no no-new-privileges: user-approved container-local sudo needs setuid.
+    pids_limit: {{ service_config.pids_limit }}
+    mem_limit: {{ service_config.memory_limit | to_json }}
+    cpus: {{ service_config.cpus }}
+    working_dir: {{ agent_workspace | to_json }}
+    env_file: [.env]
+    ports:
+      - "{{ ansible_host }}:{{ service_config.host_port }}:{{ service_config.container_port }}"
+    networks: [backends]
+    volumes:
+      - type: bind
+        source: {{ agent_home | to_json }}
+        target: {{ agent_home | to_json }}
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ agent_workspace | to_json }}
+        target: {{ agent_workspace | to_json }}
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (service_config.state_path ~ '/ssh') | to_json }}
+        target: /run/paperclip-ssh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (docker_service_path ~ '/sshd_config') | to_json }}
+        target: /etc/paperclip-sshd.conf
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (docker_service_path ~ '/authorized_keys') | to_json }}
+        target: /etc/paperclip-authorized_keys
+        read_only: true
+        bind: {create_host_path: false}
+{% if 'paperclip-daemon' in (docker_access | default([])) %}
+      - type: bind
+        source: {{ agent_docker_socket | to_json }}
+        target: {{ agent_docker_socket | to_json }}
+        bind: {create_host_path: false}
+    group_add: [{{ agent_docker_gid | string | to_json }}]
+{% endif %}
+    healthcheck:
+      test: [CMD, node, -e, "const s=require('net').connect({host:'127.0.0.1',port:{{ service_config.container_port }}});s.setTimeout(4000,()=>process.exit(1));s.on('data',b=>process.exit(b.toString().startsWith('SSH-2.0-')?0:1));s.on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+networks:
+  backends:
+    external: true
+    name: {{ agent_publication.backend_network.name | to_json }}

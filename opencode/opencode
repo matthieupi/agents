@@ -20,6 +20,7 @@ Usage: $(basename "$0") [command] [options]
 Run Mode (default):
     $(basename "$0") [options] [path]     Run OpenCode in a workspace
         -d, --dangerous                   Allow permissions across the shared backend
+        --privileged, --priviliged        Grant full host-root access (persists until recreated)
         -r, --rebuild                     Rebuild CPU and GPU images
         -w, --web [port]                  Expose localhost browser endpoint and return
         --wlan [port]                     Expose LAN browser endpoint and return

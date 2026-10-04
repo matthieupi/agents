@@ -1,6 +1,6 @@
 # Native VM service inputs
 
-📍 `pi`, `opencode`, `paseo-deamon` (intentional spelling), and `paseo-hub`
+📍 `pi`, `opencode`, `paperclip-daemon`, `paseo-deamon` (intentional spelling), and `paseo-hub`
 have ordinary Compose templates. This is assembled **source**, not a build,
 deployment or acceptance record. Parent catalog/prerequisite/ingress integration
 owns operational convergence; nested legacy-source retirement is complete.
@@ -28,7 +28,13 @@ the same NSS account without HOME/workspace/socket mounts. The parent preparatio
 role owns its target-local missing-only secrets and internal bridge; native ingress
 defaults deny-all until controlled first-admin setup. No company/agent bootstrap,
 cloud mode or custom execution guard is added; an instance administrator remains
-capable of deliberately configuring local adapters. Remote agents are deferred.
+capable of deliberately configuring local adapters. Its optional direct SSH
+environment targets `paperclip-daemon` over exact container SSH egress. That service
+shares agent HOME/workspace and explicitly granted socket access with Pi/OpenCode,
+but owns separate persistent SSH host keys and authorization outside HOME. Native
+transport/callback acceptance passed; provider smoke was rejected by account/model
+compatibility and the agent is paused. See the Paperclip daemon contract and parent
+deployment record for the approved sensitive Hub custody boundary.
 
 ## Identity, paths and grants
 
@@ -39,7 +45,7 @@ and Compose runtime identity; all new images name that identity `agent` and use
 `/home/agent`. Changing IDs requires a rebuild, not a runtime chown or identity
 restoration. Base-image UID/GID collisions fail through native user/group tools.
 
-Pi/OpenCode bind the account HOME and exact workspace. Only allowlist membership
+Pi/OpenCode/Paperclip daemon bind the account HOME and exact workspace. Only allowlist membership
 emits both socket mount and `agent_docker_gid` supplementary group (resolved from
 socket facts), plus `DOCKER_HOST`. There is no host-group enrollment or privileged
 mode. Docker access remains host-root-equivalent. Same-UID services and shared HOME
@@ -50,6 +56,7 @@ Prerequisites create missing local directories without recursive repair:
 | Service | Host paths owned by agent, private mode 0700 |
 |---|---|
 | Pi/OpenCode | HOME, workspace and required product config/state descendants |
+| Paperclip daemon | Shared HOME/workspace; root-owned SSH host keys outside HOME; native SSH agent sessions and explicitly approved container-local sudo |
 | Daemon | `agent_home/.local/state/paseo-deamon/{daemon,provider}`; workspace |
 | Hub | `agent_home/.local/state/paseo-hub` and its `.paseo` child |
 

@@ -7,6 +7,11 @@ FROM ${PAPERCLIP_IMAGE}
 ARG USER_UID
 ARG USER_GID
 USER root
+# OpenSSH requires a passwd entry for the numeric runtime UID. Resolve it in
+# the image, never by chowning mounted state in a root runtime entrypoint.
+RUN test "$USER_UID" -gt 0 && test "$USER_GID" -gt 0 \
+    && groupmod -g "$USER_GID" node \
+    && usermod -u "$USER_UID" -g "$USER_GID" -d /paperclip node
 COPY configure.mjs /opt/paperclip/configure.mjs
 RUN node --check /opt/paperclip/configure.mjs
 ENV PAPERCLIP_CONFIG=/run/paperclip/config.json
