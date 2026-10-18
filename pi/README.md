@@ -183,7 +183,7 @@ fatal. Only the literal legacy `agents -> shared root` link (or the native expli
 provided previous checkout root) is unlinked and replaced with a real directory;
 its source data is untouched. Existing individual links to a previous checkout
 require explicit reconciliation. Stale imports are never removed automatically.
-No GSD or recursive shared-root import is performed by this helper.
+No recursive shared-root import is performed by this helper.
 
 ### Method Signature Surface
 

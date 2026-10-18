@@ -558,8 +558,8 @@ After the final audit is written, verify it exists and report:
 > - **30 min**: Downstream Use Guide — actionable next steps for your specific goal
 > - **Deep dive**: Individual dimension reports — every detail with file:line refs
 >
-> **Next steps:** Use these findings with `/bugfix`, `/ideation`, or
-> `/gsd:plan-phase` to act on specific recommendations or propositions.
+> **Next steps:** Use these findings with `/bugfix` or `/ideation`, or ask the
+> plan agent to turn selected recommendations into an implementation plan.
 
 ### Quick mode delivery:
 

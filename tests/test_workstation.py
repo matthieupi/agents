@@ -388,7 +388,7 @@ if tool == 'docker':
         for name in ('background-agents', 'worktree', 'notify'):
             (defaults / f'plugins/kdco-{name}.ts').write_text('export default async () => ({})')
         resources = self.root / 'agent'
-        for name in ('commands', 'skills', 'system', 'gsd'):
+        for name in ('commands', 'skills', 'system'):
             (resources / name).mkdir(parents=True)
         config = self.home / '.config/opencode'
         env = dict(self.env, OPENCODE_HOME=str(self.home), OPENCODE_CONFIG_DIR=str(config),
@@ -415,6 +415,23 @@ initialize_home
         self.assertEqual((config / 'system').readlink(), resources / 'system')
         self.assertEqual(json.loads((config / 'opencode.json').read_text()), {'fixture': True})
         self.assertFalse((config / 'auth.json').exists())
+        legacy_shared = self.home / '.agents'
+        legacy_shared.mkdir()
+        previous = self.root / 'previous-checkout'
+        env['OPENCODE_PREVIOUS_REPO'] = str(previous)
+        for target in (resources / 'gsd', previous / 'agent/gsd', Path('/opt/agent/gsd')):
+            for directory in (config, legacy_shared):
+                (directory / 'gsd').symlink_to(target)
+            result = initialize()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for directory in (config, legacy_shared):
+                self.assertFalse((directory / 'gsd').is_symlink())
+        (config / 'gsd').symlink_to('/custom/gsd')
+        (legacy_shared / 'gsd').mkdir()
+        (legacy_shared / 'gsd/private.md').write_text('preserved')
+        self.assertEqual(initialize().returncode, 0)
+        self.assertEqual((config / 'gsd').readlink(), Path('/custom/gsd'))
+        self.assertEqual((legacy_shared / 'gsd/private.md').read_text(), 'preserved')
         (config / 'opencode.json').write_text('private fixture config')
         self.assertEqual(initialize().returncode, 0)
         self.assertEqual((config / 'opencode.json').read_text(), 'private fixture config')

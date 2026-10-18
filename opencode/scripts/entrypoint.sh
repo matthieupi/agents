@@ -66,7 +66,18 @@ initialize_home() (
         [[ "$OPENCODE_PREVIOUS_REPO" == /* && "$OPENCODE_PREVIOUS_REPO" != / && "$OPENCODE_PREVIOUS_REPO" == "$(realpath -m -- "$OPENCODE_PREVIOUS_REPO")" ]] || die 'invalid OPENCODE_PREVIOUS_REPO'
     fi
     mkdir -p "$OPENCODE_CONFIG_DIR" "$HOME/.local/share/opencode" "$HOME/.cache/opencode" "$HOME/.local/state/opencode"
-    for name in commands skills system gsd; do
+    # Retire only exact former managed links, including an explicitly moved checkout.
+    for legacy in "$OPENCODE_CONFIG_DIR/gsd" "$HOME/.agents/gsd"; do
+        if [[ -L "$legacy" ]]; then
+            source=$(readlink -- "$legacy")
+            if [[ "$source" == "$OPENCODE_REPO/agent/gsd" ||
+                  "$source" == "${OPENCODE_PREVIOUS_REPO:-$OPENCODE_REPO}/agent/gsd" ||
+                  "$source" == /opt/agent/gsd ]]; then
+                rm -- "$legacy"
+            fi
+        fi
+    done
+    for name in commands skills system; do
         source="$OPENCODE_REPO/agent/$name"
         destination="$OPENCODE_CONFIG_DIR/$name"
         old="${OPENCODE_PREVIOUS_REPO:-$OPENCODE_REPO}/agent/$name"

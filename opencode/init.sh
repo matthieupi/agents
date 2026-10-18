@@ -118,9 +118,7 @@ init_home() (
     link_path "$opencode_root/commands" "$DEFAULTS_ROOT/commands"
     link_path "$opencode_root/skills" "$DEFAULTS_ROOT/skills"
     link_path "$opencode_root/system" "$DEFAULTS_ROOT/system"
-    if [[ -d "$DEFAULTS_ROOT/gsd" ]]; then
-        link_path "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
-    fi
+    remove_legacy_link "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
 
     # opencode already discovers project commands and skills from
     # ~/.config/opencode. Exposing the same mounted trees through ~/.agents as

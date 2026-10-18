@@ -77,11 +77,6 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/gsd
-        target: /home/paseo/.config/opencode/gsd
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
         source: ${OPENCODE_PLUGINS_PATH:?set managed plugins directory}
         target: /home/paseo/.config/opencode/plugins
         read_only: true

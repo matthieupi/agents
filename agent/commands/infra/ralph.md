@@ -119,7 +119,7 @@ When spawning agents, propagate this directive:
 
 All phases executed. Project milestone finished.
 
-Next: /gsd:audit-milestone or /gsd:complete-milestone
+Next: Review milestone acceptance evidence and remaining work before marking it complete.
 ```
 </completion-output>
 
