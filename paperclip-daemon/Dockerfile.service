@@ -18,6 +18,7 @@ COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 # used by standalone OpenCode; shared HOME's existing links remain valid.
 COPY --from=opencode_inputs scripts/entrypoint.sh /opt/opencode/native-contract.sh
 COPY --from=opencode_inputs scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
+COPY --from=opencode_inputs service-entrypoint.sh /opt/opencode/service-entrypoint.sh
 COPY --from=opencode_inputs --chown=node:node .opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
 COPY --from=opencode_inputs .opencode/config/plugins /opt/opencode/component/.opencode/config/plugins/
 USER node
@@ -42,5 +43,6 @@ RUN test "$AGENT_UID" -gt 0 && test "$AGENT_GID" -gt 0 \
 # sshd is the only persistent service; SSH sessions execute as agent. No runtime
 # chown, package installation, provider credential copy, or execution dispatcher.
 ENV PATH=/opt/opencode/component/.runtime/bin:/opt/pi/runtime/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
-ENTRYPOINT ["/usr/bin/tini", "--"]
+COPY service-entrypoint.sh /opt/paperclip-service-entrypoint.sh
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/opt/paperclip-service-entrypoint.sh"]
 CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/paperclip-sshd.conf"]

@@ -14,6 +14,7 @@ or persistent runnerd coordinator is required.
 | Identity | Same canonical `agent` NSS UID/GID as Pi/OpenCode; root sshd bootstrap, only agent SSH sessions |
 | HOME/workspace | Same `agent_home` and `agent_workspace` bind mounts at identical paths; no provider credential copies |
 | Tools | Same pinned Node base and OpenCode installer/public KDCO inputs as OpenCode; separately pinned Pi CLI; existing shared plugin links resolve |
+| OpenCode config | Same read-only `/opt/agent` and `/opt/opencode-defaults` mounts as standalone OpenCode; shared initializer runs as `agent` before sshd starts |
 | SSH host identity | Dedicated `service_config['paperclip-daemon'].state_path/ssh`, root-only, read-only container mount; never the host sshd key |
 | Authorization | Root-owned `/srv/paperclip-daemon/authorized_keys` mounted outside HOME; shared agent authorized_keys is untouched |
 | Socket | Only `docker_access` emits bind mount, Compose group_add, and image NSS supplementary group; SSH initgroups therefore retains the grant |
@@ -25,6 +26,9 @@ Paperclip stages per-run assets beneath `.paperclip-runtime`; it may inject skil
 and write provider sessions in shared HOME. This is intentionally the **same trust
 boundary**, not isolation between Pi, OpenCode and Paperclip tasks. Do not edit
 shared configuration concurrently or assume agent tasks cannot affect siblings.
+See [the shared config update/conflict contract](../opencode/README.md#shared-workstation-configuration-on-vm-consumers).
+Config changes require fresh OpenCode processes; complete existing Paperclip runs
+before the scoped service reapply. This configuration change has not been deployed.
 
 ## Security boundary
 

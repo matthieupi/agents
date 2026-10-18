@@ -4,7 +4,8 @@
 
 `docker-compose.j2`, `env.j2` and `Dockerfile.service` use the ordinary service
 flow; see [the shared VM contract](../VM-SERVICES.md). The image reuses
-`install_runtime()` and locked KDCO inputs; startup only links the baked plugins.
+`install_runtime()` and locked KDCO inputs. Startup links the complete maintained
+workstation configuration and shared resources, plus the baked KDCO package.
 VM registration/public agent projection and SSH aliases are not part of this
 path. The old managed controller, opt-in workstation runtime, native start/manage
 scripts and static workstation Compose are retired. The installer/init helper,
@@ -16,6 +17,61 @@ DevAI and N3TX Dev add that one exact CORS origin to their pinned backends; dire
 URLs and gateway Basic credentials remain unchanged. CORS preflight is the only
 ordinary unauthenticated API method. PTY WebSockets use the upstream one-time
 ticket exchange, and the gateway rejects legacy `auth_token` query transport.
+
+### Shared workstation configuration on VM consumers
+
+The infrastructure task `tasks/services/opencode-config.yml` delivers all tracked
+regular files from `opencode/.opencode/config/` and `agent/`, preserving the known
+workstation discovery links without following them. It does not curate a separate
+agent list or rewrite models, permissions, providers, TUI settings, or plugins.
+Untracked/ignored files, Git metadata, provider credentials and HOME are not inputs.
+Missing/redirected tracked files and new unreviewed symlink layouts fail explicitly.
+
+```text
+maintained config + shared agent resources
+    -> <service_base_path>/agent-config (root-owned public source)
+    -> /opt/opencode-defaults + /opt/agent (read-only container binds)
+    -> private HOME/.config/opencode discovery links
+       private auth/session/cache data remains in HOME/XDG state
+```
+
+Standalone OpenCode, VM Paseo's embedded OpenCode, and Paperclip daemon use the
+same source mounts and publication helper. Paperclip initializes as `agent` before
+starting sshd as root; it does not initialize root's HOME. Paseo keeps its ephemeral
+HOME and separate persistent provider state. The Hub browser UI is static: its
+agent picker comes from the selected backend, not Hub-local config.
+
+The VM path intentionally uses **live source links**, unlike native
+`initialize-home`'s missing-only seed policy. Existing correct links are reused;
+conflicting local config (including `opencode.jsonc`), plugin names, or redirected
+directories are preserved and block startup. Reconcile those explicitly before
+rollout—do not delete HOME, credentials or sessions. Retired managed files are
+removed only from the dedicated public source tree; startup removes only exact
+retired source links from HOME. Unrelated local files/plugins remain untouched.
+
+**Updates:** pull the intended commits into the deployment source, review the diff,
+then reapply through the ordinary scoped Ansible service flow. In `workspace_copy`
+mode, tracked membership comes from the controller index and content comes from
+its working tree. In `git` mode, the existing source owner materializes the agents
+submodule at the **parent-recorded commit**, not a floating remote branch. Publish
+the nested commit and parent gitlink together; a parent pull alone does not select
+the nested repository's latest branch tip. No startup Git pull or extra repository
+credentials are introduced.
+
+Quiesce all consumers of the shared configuration on the selected host before
+updating: delivery is not a transactional live-config update. Changed config
+requests Compose recreation without a config-only image rebuild. Runtime/KDCO or
+entrypoint changes still use the existing image build path. Restart/recreate every
+affected idle consumer; a running OpenCode session does not hot-reload config.
+A pull alone—or restarting without first delivering the new source—is insufficient.
+Roll out one execution host first, inspect its effective agents/models/permissions
+and prompt/plugin loading through the authenticated backend, then repeat on other
+hosts. Do not redeploy the static Hub UI to change backend agents.
+
+This path is source/fixture-verified only. No image, provider, browser, or live-host
+acceptance is implied. The canonical permissive permissions and model selections
+are deliberately retained; model availability still depends on each host's provider
+account. Headless terminal/notification limitations still apply to workstation plugins.
 
 ## Native workspaces in the workstation container
 
@@ -66,7 +122,7 @@ source downloader, or inactive receipt remains.
 |---|---|
 | CPU/GPU workstation | Image installs defaults; `init.sh` checks/reuses the actual mounted `kdco/` graph under a shared lock, otherwise links installed image defaults |
 | Native | `install` checks/reuses checkout `.opencode/config/kdco` under the same package-local lock; `initialize-home` links that package and three entrypoints |
-| Standard VM Compose | Image installs the same package; product startup links baked plugins into private HOME, without enrollment or VM registration |
+| Standard VM Compose | Image installs the same KDCO package; startup links baked KDCO plus the full read-only maintained config/resources into private HOME, without enrollment or VM registration |
 
 Private config, root package manifests, provider credentials and unrelated plugins
 are not overwritten. Conflicting managed names or redirected private directories
@@ -223,7 +279,7 @@ environment is not a sandbox, and a top-level pin is not a transitive lockfile.
 
 ### Home resources
 
-`initialize-home` directly links only `commands`, `skills`, `system`, `gsd` to
+`initialize-home` directly links only `commands`, `skills`, `system` to
 `$OPENCODE_REPO/agent/`; it does not use Pi's agents mapping. Only literal current
 or explicitly supplied previous targets are reused/retargeted. Known duplicate
 `~/.agents` resource links are removed; unknown links/real directories are
@@ -510,7 +566,7 @@ On startup, this service links its home config directly to the shared `agent/` r
 
 - Shared editable resources live in `/opt/agent/commands` and `/opt/agent/skills`
 - `/opt/agent/prompts` carries shared prompt-oriented content alongside commands
-- OpenCode links `~/.config/opencode/{commands,skills,system,gsd}` directly to that shared source; duplicate legacy `~/.agents` links are removed
+- OpenCode links `~/.config/opencode/{commands,skills,system}` directly to that shared source; duplicate legacy `~/.agents` links are removed
 - Existing real home directories are preserved by moving them aside to `.local*` backups if they conflict during startup
 
 ### Arbitrary config directory
@@ -536,9 +592,27 @@ Shared default agents, commands, and skills live under the shared workspace `age
 - `../agent/commands/` -> `~/.config/opencode/commands`
 - `../agent/skills/` -> `~/.config/opencode/skills`
 - `../agent/system/` -> `~/.config/opencode/system`
-- `../agent/gsd/` -> `~/.config/opencode/gsd`
 
-Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaults are applied to OpenCode. Shared `agents/` stay Claude/Pi-only unless they are converted to OpenCode's native schema.
+Only the `prompts/commands`, `skills/`, and `system/` prompt defaults are applied to OpenCode. Shared `agents/` stay Claude/Pi-only unless they are converted to OpenCode's native schema.
+
+### Retired workflow and DevOps identity
+
+GSD agents, commands, prompts and installation are retired from maintained source.
+Initialization retires only exact former managed `gsd` links; custom links and real
+content are preserved. Native initialization also recognizes the explicitly supplied
+previous checkout. It does not rewrite existing copied configuration: review and
+merge those defaults explicitly before restarting OpenCode. Previously installed
+Claude global workflow files and deployed HOME content are not removed by this
+source cleanup. Historical project planning outputs remain intact.
+
+`DevOps` uses `mode: "all"` (selectable and callable as a subagent). `DevOps Junior`
+is the renamed hidden subagent; its model and permissions remain unchanged.
+Quit and restart OpenCode after updating configuration; running sessions retain
+their loaded configuration.
+
+For VM delivery, deletions must be recorded in the nested Git index/commit before
+source admission: an unstaged deletion still appears in `git ls-files --stage`
+and is correctly rejected as missing. This cleanup does not stage or commit files.
 
 ### Environment Variables
 
@@ -559,7 +633,7 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-6",
+  "model": "openai/gpt-6-astra",
   "small_model": "openai/gpt-5-mini",
   "permission": "allow",
   "provider": {
@@ -570,7 +644,7 @@ Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaul
 }
 ```
 
-System agents inherit the global `openai/gpt-6` model unless overridden. The
+System agents inherit the global `openai/gpt-6-astra` model unless overridden. The
 default TUI theme is `opencode`, set in `.opencode/config/tui.json`.
 Quit and restart OpenCode after changing these settings; running sessions retain
 their loaded configuration.

@@ -8,6 +8,10 @@ The new `docker-compose.j2` / `env.j2` / `config.json.j2` and
 build context, local state, credential ownership and parent integration.
 Paseo still owns embedded OpenCode and native auth/Origin. No workstation SSH or
 provider HOME is mounted. This new path is source-only, not built or accepted.
+The VM path shares the full maintained workstation OpenCode configuration via
+read-only `/opt/agent` and `/opt/opencode-defaults` mounts. Its existing OpenCode
+entrypoint publishes discovery links into ephemeral HOME before Paseo starts;
+provider state remains separate. See the [shared update/conflict contract](../opencode/README.md#shared-workstation-configuration-on-vm-consumers).
 The existing standalone `compose.yaml` / `Dockerfile` instructions below describe
 the separate retained component interface, not the new VM identity or delivery.
 
@@ -43,7 +47,6 @@ Set source variables to **absolute, reviewed paths**, not an entire host HOME.
 | `agent/commands` / `AGENT_RESOURCES_PATH/commands` | same directory, `commands/` |
 | `agent/skills` / `AGENT_RESOURCES_PATH/skills` | same directory, `skills/` |
 | `agent/system` / `AGENT_RESOURCES_PATH/system` | same directory, `system/` |
-| `agent/gsd` / `AGENT_RESOURCES_PATH/gsd` | same directory, `gsd/` |
 | `opencode/.opencode/config/plugins` / `OPENCODE_PLUGINS_PATH` | same directory, `plugins/` (all four current entrypoints) |
 | `opencode/.opencode/config/kdco` | image-installed locked package, linked as same directory's `kdco/` |
 | `SSH_DIR_PATH` (existing identity selector convention) | `/home/paseo/.ssh`, read-only |
@@ -54,7 +57,7 @@ Set source variables to **absolute, reviewed paths**, not an entire host HOME.
 `OPENCODE_CONFIG_DIR=/home/paseo/.config/opencode`, and `OPENCODE_CONFIG` explicitly
 point the inherited child environment at these destinations. `system/` is **not**
 an independent agent registration mechanism: the canonical JSON owns agent names,
-permissions and `{file:./system/...}` / `{file:./gsd/...}` prompt references.
+permissions and `{file:./system/...}` prompt references.
 No duplicate `~/.agents` discovery links are published. Repository resource trees
 currently contain nested symlinks; review their resolved closure before exposure.
 The component does not repair the shared trees or claim recursive discovery safety.
@@ -245,7 +248,7 @@ After a reviewed local build, with **fresh disposable state and a trusted empty
 workspace**, use native Compose `run --rm --no-deps --entrypoint opencode paseo
 debug config`, `debug skill`, and `agent list` (no service ports). These commands
 execute real discovery and potentially trusted plugins; they are not part of the
-default tests. Verify canonical agents/permissions, GSD commands, skills and four
+default tests. Verify canonical agents/permissions, maintained commands, skills and four
 local plugin paths. Check logs for read-only/dependency errors and resolved links.
 Use only private disposable output: resolved configuration can contain credentials.
 Do not run discovery against the existing server HOME. Global config dependency

@@ -31,6 +31,16 @@ services:
       - "/home/paseo:rw,nosuid,nodev,noexec,size=1m,mode=000"
     volumes:
       - type: bind
+        source: {{ (opencode_config_source_path ~ '/agent') | to_json }}
+        target: /opt/agent
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (opencode_config_source_path ~ '/opencode/.opencode/config') | to_json }}
+        target: /opt/opencode-defaults
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
         source: {{ agent_workspace | to_json }}
         target: {{ agent_workspace | to_json }}
         bind: {create_host_path: false}

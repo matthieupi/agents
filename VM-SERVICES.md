@@ -19,7 +19,9 @@ registration, SSH alias or custom launcher in these inputs. The old `venv/` buil
 path is deleted. Workstation run/mgr wrappers and Pi/Claude static Compose remain
 separate. Pi/OpenCode installer/init helpers remain VM build dependencies; native
 start/manage scripts, OpenCode static Compose and the opt-in `runtime/` framework
-are retired. Ordinary VM templates and their delivery inputs are unchanged.
+are retired. VM execution consumers additionally receive the full maintained
+OpenCode configuration through read-only public source mounts; see
+[OpenCode's update and conflict contract](opencode/README.md#shared-workstation-configuration-on-vm-consumers).
 
 Paperclip is an additional ordinary **base UI**, not an execution product. Its
 [own contract](paperclip/README.md) uses a pinned published production image,
@@ -64,9 +66,10 @@ Daemon mounts only its product state and workspace, not host HOME or workstation
 SSH. Its ephemeral HOME uses the same account, not another identity. It installs
 OpenCode in its own image and lets Paseo start the embedded provider process;
 it never connects to the separately selected OpenCode web service. KDCO links are
-published using the unchanged product helper before the existing daemon entry
+published alongside full maintained workstation configuration using the shared product helper before the existing daemon entry
 validates native auth and locks state. No VM agent registration/default policy or
-provider credentials are seeded.
+provider credentials are seeded. Configuration models and permissions are the
+canonical workstation values, not a separate VM agent policy.
 
 Hub binds only its product state as container HOME. It has no provider HOME,
 workspace, SSH or socket. Before rendering, S prepares an **internal** bridge using
@@ -118,6 +121,9 @@ Pi/OpenCode have no native web password: nginx protects every external route and
 strips Authorization before proxying. Host publication stays loopback-only; direct
 bridge access must remain restricted. VM commands explicitly unset native web auth
 variables and do not source host HOME/dotfiles; workstation native auth is unchanged.
+The VM OpenCode backend uses native `opencode serve`, not `web`: a headless server
+must not try to launch `xdg-open`. Host/port/CORS flags, gateway authentication,
+workspace mounts and the separately published UI remain unchanged.
 Preserve existing credential references; do not rotate/copy provider credentials.
 Paseo separately receives protected `paseo_password_hash` and consumes only
 the existing native bcrypt hash (cost 10..16; Hub's existing stricter derivation
@@ -135,6 +141,14 @@ behavior; a loopback backend or healthcheck does not supply those controls.
 
 ## Finite public build-input catalog
 
+Runtime config delivery is separate from these finite installer/build inputs.
+The parent service flow enumerates tracked `agent/` and `opencode/.opencode/config/`
+files into `service_base_path/agent-config`, removes retired public files, and
+preserves the known discovery symlinks without following them. All three execution
+consumers bind its resources at `/opt/agent` and config at `/opt/opencode-defaults`,
+read-only. It is not a full checkout or private HOME mount. Config-only edits
+request native Compose recreation, not a rebuild. KDCO remains image-installed.
+
 Paths below are product-relative; the daemon's parent-root mapping is specified
 below. Dockerfile-specific ignore files exclude everything else,
 including `.env`, runtime state and private configuration. Do **not** recursively
@@ -146,6 +160,7 @@ copy `.opencode`, a KDCO directory containing node_modules, HOME, or the reposit
 | OpenCode | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `scripts/entrypoint.sh`, `scripts/publish-plugins.mjs`, KDCO files and three entrypoints below |
 | Daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `entry.py`; named public OpenCode context below |
 | Hub | `Dockerfile.dockerignore`; conventional `Dockerfile` is copied by the common role |
+| Paperclip daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`; same named public OpenCode inputs |
 
 OpenCode public package files under `.opencode/config/kdco/`:
 
