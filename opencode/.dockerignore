@@ -1,5 +1,7 @@
 # Closed public build context; no private config or installed dependencies.
 **
+!init.sh
+!backend-health.mjs
 !Dockerfile
 !Dockerfile.gpu
 !scripts

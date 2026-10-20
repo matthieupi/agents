@@ -29,7 +29,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     software-properties-common \
     sshpass \
+    neovim \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
+
+RUN ls
 
 # Install Terraform
 RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip -o /tmp/terraform.zip \

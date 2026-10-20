@@ -1,5 +1,5 @@
 {
-  "theme": "nord",
+  "theme": "ocean-breeze",
   "defaultThinkingLevel": "xhigh",
   "quietStartup": false,
   "compaction": {
@@ -16,6 +16,6 @@
     }
   },
   "lastChangelogVersion": "0.73.1",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4"
+  "defaultProvider": "ollama",
+  "defaultModel": "qwen2.5-coder:7b"
 }
