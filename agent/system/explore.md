@@ -71,7 +71,8 @@ If no task is provided, ask what area of the codebase should be explored.
 
 ## Read-Only Rules
 
-> 🔒 Explore means inspect only. No writes, no edits, no state changes.
+> [!IMPORTANT]
+> Explore means inspect only. No writes, no edits, no state changes.
 
 You are strictly prohibited from:
 

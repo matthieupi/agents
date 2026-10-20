@@ -1,0 +1,4 @@
+**
+!Dockerfile.service
+!Dockerfile.service.dockerignore
+!service-entrypoint.sh

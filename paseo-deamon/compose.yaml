@@ -9,11 +9,13 @@ services:
       args:
         PASEO_BASE: ${PASEO_BASE:?set reviewed official version and digest}
         PASEO_VERSION: ${PASEO_VERSION:?set exact stable version >=0.12.0}
+        PASEO_RUNTIME_UID: ${PASEO_UID:-1000}
+        PASEO_RUNTIME_GID: ${PASEO_GID:-1000}
     user: "${PASEO_UID:-1000}:${PASEO_GID:-1000}"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    restart: "no"
+    restart: unless-stopped
     pids_limit: 512
     mem_limit: 4g
     cpus: 2.0
@@ -74,28 +76,13 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/gsd
-        target: /home/paseo/.config/opencode/gsd
+        source: ${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}
+        target: /home/paseo/.config/opencode/plugins
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}/first-prompt-title.js
-        target: /home/paseo/.config/opencode/plugins/first-prompt-title.js
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}/background-subagents.js
-        target: /home/paseo/.config/opencode/plugins/background-subagents.js
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}/session-title.mjs
-        target: /home/paseo/.config/opencode/tui-plugins/session-title.mjs
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}/session-title/tui.js
-        target: /home/paseo/.config/opencode/tui-plugins/session-title/tui.js
+        source: ${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}
+        target: /home/paseo/.config/opencode/tui-plugins
         read_only: true
         bind: {create_host_path: false}
       - type: bind

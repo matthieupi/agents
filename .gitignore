@@ -18,7 +18,7 @@ ssh/
 .claude
 .agents
 
-# OMP defaults/runtime belong to omp/; legacy Pi private state stays ignored.
+# Historical private state stays ignored after product retirement.
 # Keep Pi extension/theme sources allowed; no legacy OMP YAML exceptions.
 !pi/.pi/
 pi/.pi/*
@@ -39,15 +39,10 @@ pi/.pi/agent/*
 /pi/.build.*/
 /pi/.lifecycle.lock
 
-# Standalone OMP: runtime state is private except reviewed starter YAML.
+# Retired product data remains private; no tracked starter exceptions.
 .omp
-!omp/.omp/
-omp/.omp/*
-!omp/.omp/.gitignore
-!omp/.omp/agent/
-omp/.omp/agent/*
-!omp/.omp/agent/config.yml
-!omp/.omp/agent/models.yml
+/omp/
+/t3code/
 
 # Python bytecode: keep after allowlists so caches stay ignored everywhere.
 __pycache__/

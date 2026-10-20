@@ -1,4 +1,4 @@
-"""Pi-only Bash lifecycle tests. Temporary fixtures; no installs or live services."""
+"""Pi installer/init tests. Temporary fixtures; no installs or live services."""
 import json
 import os
 from pathlib import Path
@@ -16,10 +16,7 @@ ROOT = SCRIPTS.parents[1]
 class RootRejection(unittest.TestCase):
     @unittest.skipUnless(os.geteuid() == 0, 'actual root guard requires root runner')
     def test_root_refused_before_account_lookup_or_mutations(self):
-        for script, args in [('entrypoint.sh', ['install']), ('entrypoint.sh', ['initialize-home']),
-                             ('start.sh', ['session']), ('start.sh', ['service']),
-                             ('manage.sh', ['status']), ('manage.sh', ['version']),
-                             ('manage.sh', ['update', 'a' * 40])]:
+        for script, args in [('entrypoint.sh', ['install']), ('entrypoint.sh', ['initialize-home'])]:
             result = subprocess.run(['/bin/bash', SCRIPTS / script, *args],
                                     env={'PATH': '/usr/bin:/bin'}, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
@@ -37,7 +34,7 @@ class RootRejection(unittest.TestCase):
             self.assertNotIn('scripts/entrypoint.sh', docker)
 
 
-@unittest.skipIf(os.geteuid() == 0, 'run fixture Git/build/launch tests as a real non-root user')
+@unittest.skipIf(os.geteuid() == 0, 'run fixture Git/build/init tests as a real non-root user')
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='pi-lifecycle-')
@@ -61,7 +58,8 @@ class LifecycleTests(unittest.TestCase):
                         NODE_OPTIONS='poison', NPM_CONFIG_REGISTRY='https://invalid.example',
                         FIXTURE_NODE=str(self.bin / 'node'), FIXTURE_NPM=str(self.bin / 'npm'))
         self.mock('getent', f"printf '%s\\n' '{self.user}:x:{os.geteuid()}:{os.getegid()}::{self.home}:/bin/bash'")
-        for name in ('skills', 'commands'):
+        (self.component / 'init.sh').write_bytes((ROOT / 'pi/init.sh').read_bytes())
+        for name in ('skills', 'commands', 'system'):
             (self.repo / 'agent' / name).mkdir(parents=True)
             (self.repo / 'agent' / name / '.keep').touch()
         (self.repo / 'agent/prompts').symlink_to('commands')
@@ -201,33 +199,10 @@ for name in ("pi","pi-web"):
         calls = [json.loads(line) for line in self.trace.read_text().splitlines()]
         self.assertTrue(any(str(self.prefix) in c['args'] for c in calls))
 
-    def test_session_service_exact_args_home_uid_pid_and_loopback(self):
-        self.seed_runtime()
-        for mode, args, expected in [('session', ['-p', 'two words', '--resume'], ['-p', 'two words', '--resume']),
-                                     ('service', [], ['--hostname', '127.0.0.1', '--port', '30141', '--no-open'])]:
-            with subprocess.Popen(['/bin/bash', SCRIPTS / 'start.sh', mode, *args], env=self.env,
-                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-                output, error = process.communicate(timeout=10)
-                self.assertEqual(process.returncode, 0, error)
-                data = json.loads(output)
-                self.assertEqual(data['pid'], process.pid)
-            self.assertEqual(data['uid'], os.geteuid())
-            self.assertEqual(data['args'], expected)
-            self.assertEqual(data['home'], str(self.home))
-            self.assertEqual(data['cwd'], str(self.workspace))
-            self.assertTrue(data['provider'])
-            self.assertTrue(data['password'])  # retain original launch environment behavior
-            self.assertIsNone(data['node_options'])
-
-    def test_invalid_service_inputs_and_contract_fail_without_launch(self):
-        self.seed_runtime()
-        for port in ('0', '80', '65536', '030141', '1;id'):
-            self.assert_failed(self.run_script('start.sh', 'service', PI_PORT=port), 'port must')
-        self.assert_failed(self.run_script('start.sh', 'service', '--hostname', '0.0.0.0'), 'no extra flags')
-        self.assert_failed(self.run_script('start.sh', 'service', PI_WEB_PASSWORD=''), 'supply web password')
-        for key, value in [('PI_PREFIX', str(self.home)), ('PI_ROOT', str(self.repo)), ('PI_WORKSPACE', str(self.prefix))]:
-            self.assertNotEqual(self.run_script('start.sh', 'session', **{key: value}).returncode, 0)
-        self.assert_failed(self.run_script('start.sh', 'session', PI_UNIT='--all'), 'invalid unit')
+    def test_invalid_installer_contract_fails_before_install(self):
+        for key, value in [('PI_PREFIX', str(self.home)), ('PI_ROOT', str(self.repo))]:
+            self.assertNotEqual(self.run_script('entrypoint.sh', 'install', **{key: value}).returncode, 0)
+        self.assert_failed(self.run_script('entrypoint.sh', 'install', PI_UNIT='--all'), 'invalid unit')
         self.mock('getent', f"printf '%s\\n' '{self.user}:x:0:0::{self.home}:/bin/bash'")
         self.assert_failed(self.run_script('entrypoint.sh', 'install'), 'non-root account')
         self.mock('getent', f"printf '%s\\n' '{self.user}:x:99999:99999::{self.home}:/bin/bash'")
@@ -310,7 +285,6 @@ for name in ("pi","pi-web"):
         (self.home / '.pi').symlink_to(self.repo)
         self.assert_failed(self.run_script('entrypoint.sh', 'initialize-home'), 'redirected Pi state')
         self.seed_runtime()
-        self.assert_failed(self.run_script('start.sh', 'session'), 'redirected Pi state')
         (self.prefix / 'bin/pi').unlink()
         (self.prefix / 'bin/pi-web').unlink()
         (self.prefix / 'bin').rmdir()
@@ -326,80 +300,8 @@ for name in ("pi","pi-web"):
         self.assertFalse((nested / 'pi/.runtime').exists())
         self.assertFalse(self.trace.exists())
 
-    def update_target(self, collision=False):
-        if collision:
-            with (self.repo / '.gitignore').open('a') as ignore:
-                ignore.write('private.scratch\n')
-            self.git('add', '.gitignore')
-            self.commit('fixture ignore')
-        first = self.git('rev-parse', 'HEAD')
-        self.git('checkout', '-qb', 'fixture-upstream')
-        (self.repo / 'tracked').write_text('upstream edit')
-        self.git('add', 'tracked')
-        if collision:
-            (self.repo / 'private.scratch').write_text('upstream collision')
-            self.git('add', '-f', 'private.scratch')
-        self.commit('fixture upstream')
-        target = self.git('rev-parse', 'HEAD')
-        remote = self.root / 'origin.git'
-        subprocess.run(['/usr/bin/git', 'clone', '-q', '--bare', self.repo, remote], check=True)
-        subprocess.run(['/usr/bin/git', '-C', remote, 'update-ref', 'refs/heads/agents/devai-team', target], check=True)
-        self.git('remote', 'add', 'origin', str(remote))
-        self.git('checkout', '-q', 'agents/devai-team')
-        return first, target
-
-    def test_explicit_update_ff_only_preserves_branch_and_ignored_runtime(self):
-        first, target = self.update_target()
-        self.seed_runtime()
-        result = self.run_script('manage.sh', 'update-check', target)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
-        result = self.run_script('manage.sh', 'update', target)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), target)
-        self.assertEqual(self.git('symbolic-ref', '--short', 'HEAD'), 'agents/devai-team')
-        self.assertTrue((self.prefix / 'bin/pi').exists())
-
-    def test_explicit_update_refuses_dirty_tree_divergence_and_wrong_branch(self):
-        first, target = self.update_target()
-        (self.repo / 'untracked').write_text('keep')
-        self.assert_failed(self.run_script('manage.sh', 'update', target), 'dirty')
-        (self.repo / 'untracked').unlink()
-        (self.repo / 'tracked').write_text('local edit')
-        self.assert_failed(self.run_script('manage.sh', 'update-check', target), 'dirty')
-        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
-        self.git('add', 'tracked')
-        self.commit('fixture local commit')
-        self.assert_failed(self.run_script('manage.sh', 'update', target), 'not a fast-forward')
-        self.git('checkout', '-qb', 'other')
-        self.assert_failed(self.run_script('manage.sh', 'update', target), 'assigned PI_BRANCH')
-
-    def test_explicit_update_refuses_ignored_file_collision(self):
-        first, target = self.update_target(collision=True)
-        (self.repo / 'private.scratch').write_text('private ignored content')
-        result = self.run_script('manage.sh', 'update', target)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), first)
-        self.assertEqual((self.repo / 'private.scratch').read_text(), 'private ignored content')
-
-    def test_status_is_read_only_and_version_does_not_dump_secrets(self):
-        # Intercept exec itself: no host systemctl invocation.
-        result = self.shell('manage.sh', 'exec() { printf "%s\\n" "$@"; }; manage_main status')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ['env', '-i', 'PATH=/usr/bin:/bin', '/usr/bin/systemctl',
-                         '--no-pager', 'show', '--property=Id,LoadState,ActiveState,SubState', 'fixture.service'])
-        self.seed_runtime()
-        result = self.run_script('manage.sh', 'version')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), '0.85.1')
-        self.assert_failed(self.run_script('manage.sh', 'status', 'extra'), 'unexpected arguments')
-
-    def test_lock_bad_commands_and_update_inputs(self):
+    def test_installer_lock_and_bad_commands(self):
         self.assert_failed(self.shell('entrypoint.sh', 'exec 8>"$PI_ROOT/.lifecycle.lock"; flock -n 8; install_runtime'), 'another lifecycle')
-        for command in ('start', 'stop', 'restart', 'logs'):
-            self.assert_failed(self.run_script('manage.sh', command), 'systemctl directly')
-        for sha in ('main', '-x', 'a' * 39, 'A' * 40):
-            self.assert_failed(self.run_script('manage.sh', 'update', sha), 'full lowercase')
         self.assert_failed(self.run_script('entrypoint.sh', 'provision'), 'usage:')
         self.assert_failed(self.run_script('entrypoint.sh', 'install', 'extra'), 'usage:')
 

@@ -1,0 +1,1 @@
+restrict,from="{{ hostvars['localhost'].deployment_config.hosts[hostvars['localhost'].deployment_config.ansible_vars.service_config.paperclip.remote_execution.hub].networking.ip_address }}" {{ _paperclip_daemon_authorized_key.content | b64decode | trim }}

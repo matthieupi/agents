@@ -65,8 +65,10 @@ for (const module of ["runtime-client.js", "v2/agent.js", "v2/runtime.js"]) {
 
 test("Docker build invokes the admitted validator", () => {
   const root = new URL("../", import.meta.url);
-  assert.match(readFileSync(new URL("Dockerfile", root), "utf8"),
-    /RUN node \/opt\/paseo-component\/verify-paseo\.mjs "\$PASEO_VERSION"/);
-  assert.match(readFileSync(new URL("Dockerfile.dockerignore", root), "utf8"),
-    /!paseo-deamon\/verify-paseo\.mjs/);
+  for (const dockerfile of ["Dockerfile", "Dockerfile.service"]) {
+    assert.match(readFileSync(new URL(dockerfile, root), "utf8"),
+      /RUN node \/opt\/paseo-component\/verify-paseo\.mjs "\$PASEO_VERSION"/);
+    assert.match(readFileSync(new URL(`${dockerfile}.dockerignore`, root), "utf8"),
+      /!.*verify-paseo\.mjs/);
+  }
 });

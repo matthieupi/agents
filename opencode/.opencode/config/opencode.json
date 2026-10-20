@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-6",
+  "model": "openai/gpt-6-astra",
   "update": "disable",
   "compaction": { "auto": false, "buffer": 50000 },
   "lsp": true,
@@ -81,204 +81,22 @@
       "system": "{file:./system/devops.md}",
       "model": "openai/gpt-6-astra",
       "request": { "body": { "temperature": 0.2 } },
-      "mode": "primary",
+      "mode": "all",
       "description": "Gilfoyle: secure infrastructure, deployment, reliability, and operations engineering"
     },
-    "DevOps Medium": {
+    "DevOps Junior": {
       "system": "{file:./system/devops.md}",
-      "model": "openai/gpt-5.6-sol",
+      "model": "openai/gpt-6-sol",
       "request": { "body": { "temperature": 0.2 } },
       "mode": "subagent",
       "hidden": true,
       "description": "DevOps specialist for delegated, moderately complex infrastructure and operations tasks that require some thinking and analysis"
-    },
-    "DevOps Low": {
-      "system": "{file:./system/devops.md}",
-      "model": "openai/gpt-5.6-terra",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "hidden": true,
-      "description": "DevOps specialist for delegated simple, narrowly scoped infrastructure and operations tasks that can be executed quickly"
     },
     "SecOps": {
       "system": "{file:./system/secops.md}",
       "request": { "body": { "temperature": 0.1 } },
       "mode": "all",
       "description": "Dan: security hardening, green and red teaming, vulnerability auditing, and remediation"
-    },
-    "gsd-planner": {
-      "system": "{file:./gsd/planner.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "all",
-      "description": "GSD phase and quick-task planner",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "allow" },
-        { "action": "subagent", "resource": "*", "effect": "allow" },
-        { "action": "webfetch", "resource": "*", "effect": "allow" },
-        { "action": "edit", "resource": "*", "effect": "allow" }
-      ]
-    },
-    "gsd-phase-researcher": {
-      "system": "{file:./gsd/phase-researcher.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Researches GSD roadmap phases before planning",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "webfetch", "resource": "*", "effect": "allow" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-plan-checker": {
-      "system": "{file:./gsd/plan-checker.md}",
-      "request": { "body": { "temperature": 0.1 } },
-      "mode": "subagent",
-      "description": "Verifies generated GSD plans for executability and coverage",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "deny" }
-      ]
-    },
-    "gsd-executor": {
-      "system": "{file:./gsd/executor.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Executes GSD plans and writes implementation summaries",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "allow" },
-        { "action": "subagent", "resource": "*", "effect": "allow" },
-        { "action": "webfetch", "resource": "*", "effect": "allow" },
-        { "action": "edit", "resource": "*", "effect": "allow" }
-      ]
-    },
-    "gsd-verifier": {
-      "system": "{file:./gsd/verifier.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Verifies completed GSD phases against goals and requirements",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-project-researcher": {
-      "system": "{file:./gsd/project-researcher.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Researches project dimensions for GSD project and milestone setup",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "webfetch", "resource": "*", "effect": "allow" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-research-synthesizer": {
-      "system": "{file:./gsd/research-synthesizer.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Synthesizes GSD research into planning inputs",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-roadmapper": {
-      "system": "{file:./gsd/roadmapper.md}",
-      "request": { "body": { "temperature": 0.2 } },
-      "mode": "subagent",
-      "description": "Creates and revises GSD roadmaps",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-integration-checker": {
-      "system": "{file:./gsd/integration-checker.md}",
-      "request": { "body": { "temperature": 0.1 } },
-      "mode": "subagent",
-      "description": "Audits GSD milestone integration and end-to-end gaps",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-debugger": {
-      "system": "{file:./gsd/debugger.md}",
-      "request": { "body": { "temperature": 0.1 } },
-      "mode": "subagent",
-      "description": "Investigates GSD debug sessions with persistent evidence",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "allow" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-entity-generator": {
-      "system": "{file:./gsd/entity-generator.md}",
-      "request": { "body": { "temperature": 0.1 } },
-      "mode": "subagent",
-      "description": "Generates GSD codebase intelligence entities",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
-    },
-    "gsd-codebase-mapper": {
-      "system": "{file:./gsd/codebase-mapper.md}",
-      "request": { "body": { "temperature": 0.1 } },
-      "mode": "subagent",
-      "description": "Maps codebase structure into GSD planning documents",
-      "permissions": [
-        { "action": "read", "resource": "*", "effect": "allow" },
-        { "action": "glob", "resource": "*", "effect": "allow" },
-        { "action": "grep", "resource": "*", "effect": "allow" },
-        { "action": "list", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "edit", "resource": "*", "effect": "ask" }
-      ]
     },
     "plan": {
       "system": "{file:./system/plan.md}",

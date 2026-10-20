@@ -1,7 +1,0 @@
-{
-  "name": "t3code-container-runtime",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Provider-neutral immutable T3 container runtime",
-  "dependencies": {"t3": "0.0.40"}
-}

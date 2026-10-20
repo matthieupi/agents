@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     openssh-client \
     bash \
+    util-linux \
     ripgrep \
     fzf \
     curl \
@@ -85,21 +86,23 @@ RUN npm install -g @opencode/cli@latest \
 # Canonical native config and title assets; bind mounts use these same paths.
 COPY init.sh scripts/docker-* /opt/harness/
 RUN chmod 0755 /opt/harness && chmod 0644 /opt/harness/*
-COPY --chown=opencode:opencode .opencode/config/opencode.json .opencode/config/cli.json /home/opencode/.config/opencode/
-COPY --chown=opencode:opencode .opencode/config/plugins/first-prompt-title.js /home/opencode/.config/opencode/plugins/
-COPY --chown=opencode:opencode .opencode/config/plugins/background-subagents.js /home/opencode/.config/opencode/plugins/
-COPY --chown=opencode:opencode .opencode/config/tui-plugins/session-title.mjs /home/opencode/.config/opencode/tui-plugins/
-COPY --chown=opencode:opencode .opencode/config/tui-plugins/session-title/tui.js /home/opencode/.config/opencode/tui-plugins/session-title/
+COPY scripts/publish-plugins.mjs /opt/opencode/publish-plugins.mjs
+COPY .opencode/config/opencode.json .opencode/config/cli.json /opt/opencode-defaults/
+COPY .opencode/config/plugins/first-prompt-title.js /opt/opencode-defaults/plugins/
+COPY .opencode/config/plugins/background-subagents.js /opt/opencode-defaults/plugins/
+COPY .opencode/config/tui-plugins/session-title.mjs /opt/opencode-defaults/tui-plugins/
+COPY .opencode/config/tui-plugins/session-title/tui.js /opt/opencode-defaults/tui-plugins/session-title/
 
 # Preinstall Playwright for frontend workflows.
 RUN npm install -g playwright \
     && playwright install --with-deps chromium
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD python3 /opt/harness/docker-health.py
 
 USER opencode
 WORKDIR /workspace
 
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_EXPERIMENTAL_WORKSPACES=1
 ENV OPENCODE_DOCKER_PORT=4096 OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
 CMD ["bash", "/opt/harness/docker-server.sh"]

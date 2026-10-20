@@ -1,0 +1,26 @@
+# Native VM build. Context contains only the inputs in Dockerfile.service.dockerignore.
+FROM docker:28.4.0-cli AS docker-cli
+FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+ARG AGENT_UID
+ARG AGENT_GID
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates python3 make g++ git openssh-client bash coreutils util-linux tini ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -o node -g node /opt/pi/runtime /opt/pi/build-home
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY scripts/entrypoint.sh /opt/pi/native-contract.sh
+USER node
+# Same paired pins and npm installation shape as the existing component VM image.
+RUN /bin/bash -c 'set -euo pipefail; source /opt/pi/native-contract.sh; env -i HOME=/opt/pi/build-home PATH=/usr/local/bin:/usr/bin:/bin timeout 900 npm install --prefix /opt/pi/runtime --no-audit --no-fund --include=optional --registry=https://registry.npmjs.org "@earendil-works/pi-coding-agent@$PI_VERSION" "@agegr/pi-web@$PI_UI_VERSION"; test "$(/opt/pi/runtime/node_modules/.bin/pi --version)" = "$PI_VERSION"; /opt/pi/runtime/node_modules/.bin/pi-web --help >/dev/null'
+USER root
+RUN test "$AGENT_UID" -gt 0 && test "$AGENT_GID" -gt 0 \
+    && groupmod -n agent -g "$AGENT_GID" node \
+    && usermod -l agent -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent node \
+    && install -d -m 0700 -o agent -g agent /home/agent \
+    && chmod -R a+rX,a-w /opt/pi/runtime
+ENV HOME=/home/agent USER=agent LOGNAME=agent \
+    PATH=/opt/pi/runtime/node_modules/.bin:/usr/local/bin:/usr/bin:/bin \
+    PI_CODING_AGENT_DIR=/home/agent/.pi/agent PI_WEB_SKIP_VERSION_CHECK=1 PI_SKIP_VERSION_CHECK=1
+USER agent
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["pi"]

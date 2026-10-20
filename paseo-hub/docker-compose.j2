@@ -1,0 +1,46 @@
+services:
+  paseo-hub:
+    build:
+      context: .
+      args:
+        PASEO_BASE: {{ service_config.image | to_json }}
+        AGENT_UID: {{ agent_uid | string | to_json }}
+        AGENT_GID: {{ agent_gid | string | to_json }}
+    user: "{{ agent_uid }}:{{ agent_gid }}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: {{ service_config.pids_limit }}
+    mem_limit: {{ service_config.memory_limit | to_json }}
+{% if service_config.cpus is defined %}
+    cpus: {{ service_config.cpus }}
+{% endif %}
+    working_dir: {{ agent_home | to_json }}
+    env_file: [.env]
+    # No host port, provider HOME, workspace, SSH identity or Docker endpoint.
+    volumes:
+      - type: bind
+        source: {{ (agent_home ~ '/.local/state/paseo-hub') | to_json }}
+        target: {{ agent_home | to_json }}
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (docker_service_path ~ '/config.json') | to_json }}
+        target: {{ (agent_home ~ '/.paseo/config.json') | to_json }}
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - "/tmp:rw,nosuid,nodev,noexec,size=64m,uid={{ agent_uid }},gid={{ agent_gid }}"
+      - "/home/paseo:rw,nosuid,nodev,noexec,size=1m,mode=000"
+    networks: [private]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:{{ service_config.container_port }}/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+networks:
+  private:
+    # S creates this INTERNAL bridge with native allocation before rendering.
+    external: true
+    name: {{ paseo_hub_network_name | to_json }}

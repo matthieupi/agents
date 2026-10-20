@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "daemon": {
+    "listen": "0.0.0.0:{{ service_config.container_port }}",
+    "hostnames": {{ service_config.hostnames | to_json }},
+    "trustedProxies": [{{ (paseo_hub_network_gateway ~ '/32') | to_json }}],
+    "auth": {"password": {{ paseo_password_hash | to_json }}},
+    "relay": {"enabled": false},
+    "mcp": {"enabled": false, "injectIntoAgents": false},
+    "enableTerminalAgentHooks": false,
+    "cors": {"allowedOrigins": {{ service_config.allowed_origins | to_json }}},
+    "serviceProxy": {"enabled": false}
+  },
+  "agents": {"providers": {
+    "claude": {"enabled": false}, "codex": {"enabled": false},
+    "copilot": {"enabled": false}, "opencode": {"enabled": false},
+    "pi": {"enabled": false}, "omp": {"enabled": false}
+  }},
+  "features": {"webUi": {"enabled": true}, "dictation": {"enabled": false}, "voiceMode": {"enabled": false}},
+  "log": {"console": {"level": "info", "format": "json"}, "file": {"level": "info", "rotate": {"maxSize": "10m", "maxFiles": 2}}}
+}

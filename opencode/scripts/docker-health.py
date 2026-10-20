@@ -18,7 +18,9 @@ def request_info() -> dict:
                                      headers={"Authorization": "Basic " + auth})
     with urllib.request.urlopen(request, timeout=2) as response:
         info = json.load(response)
-    if not info.get("version", "").startswith("2.") or not isinstance(info.get("pid"), int):
+    if (not isinstance(info, dict) or not isinstance(info.get("version"), str)
+            or not info["version"].startswith("2.")
+            or type(info.get("pid")) is not int or info["pid"] <= 0):
         raise RuntimeError("Not a V2 readiness response")
     return info
 

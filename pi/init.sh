@@ -75,6 +75,7 @@ link_path() {
     local shared_path="$2"
 
     if [[ -L "$current_path" ]]; then
+        [[ "$(readlink -- "$current_path")" != "$shared_path" ]] || return 0
         rm -f "$current_path"
     elif [[ -e "$current_path" ]]; then
         if [[ -d "$current_path" && -d "$shared_path" ]] && dir_empty "$shared_path"; then
@@ -93,23 +94,45 @@ link_path() {
         fi
     fi
 
-    ln -s "$shared_path" "$current_path"
+    ln -sT -- "$shared_path" "$current_path"
 }
 
 ensure_shared_home_root() {
     local shared_root="$1"
     mkdir -p "$shared_root"
     if [[ ! -e "$shared_root/prompts" && ! -L "$shared_root/prompts" ]]; then
-        ln -s commands "$shared_root/prompts"
+        ln -sT -- commands "$shared_root/prompts"
     fi
 }
 
-init_home() {
+cleanup_legacy_self_links() {
+    local root="$1" name parent path
+    root="$(realpath -e -- "$root")"
+    for name in commands skills system; do
+        parent="$root/$name"
+        path="$parent/$name"
+        # Do not traverse redirected parents or remove any custom link/content.
+        [[ -d "$parent" && "$(realpath -e -- "$parent")" == "$parent" ]] || continue
+        if [[ -L "$path" && "$(readlink -- "$path")" == "/opt/agent/$name" ]]; then
+            unlink -- "$path"
+        fi
+    done
+}
+
+init_home() (
     local HOME_ROOT="/home/pi" DEFAULTS_ROOT="/opt/agent"
     local shared_root="$HOME_ROOT/.agents"
     local pi_root="$HOME_ROOT/.pi/agent"
 
     [[ -d "$HOME_ROOT" ]] || return 0
+
+    # Directory-inode locks are shared across bind mounts, without root-owned
+    # lock files. Always acquire shared resources before home state.
+    exec 8<"$DEFAULTS_ROOT"
+    flock -x 8
+    exec 7<"$HOME_ROOT"
+    flock -x 7
+    cleanup_legacy_self_links "$DEFAULTS_ROOT"
 
     import_system_agents "$DEFAULTS_ROOT" "$pi_root/agents"
     ensure_shared_home_root "$shared_root"
@@ -125,7 +148,7 @@ init_home() {
     link_path "$shared_root/agents" "$DEFAULTS_ROOT"
     link_path "$shared_root/commands" "$DEFAULTS_ROOT/commands"
     link_path "$shared_root/skills" "$DEFAULTS_ROOT/skills"
-}
+)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     init_home

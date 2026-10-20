@@ -35,39 +35,50 @@ class DockerV2Tests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.config = self.base / "config"
+        # Mirror the image's finite public closure, not the entire checkout.
+        self.defaults = self.base / 'defaults'
+        for asset in IMAGE_ASSETS:
+            destination = self.defaults / asset
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((ROOT / '.opencode/config' / asset).read_bytes())
 
     def run_init(self):
         home = self.base / "home"
         resources = self.base / "resources"
         home.mkdir(exist_ok=True)
-        for folder in ("commands", "skills", "system", "gsd"):
+        for folder in ("commands", "skills", "system"):
             (resources / folder).mkdir(parents=True, exist_ok=True)
         return subprocess.run(["bash", str(ROOT / "init.sh")], cwd=self.base,
                               env={**os.environ, "HOME": str(home),
-                                   "OPENCODE_CONFIG_DIR": str(self.config),
+                                    "OPENCODE_CONFIG_DIR": str(self.config),
+                                    "OPENCODE_DEFAULTS": str(self.defaults),
+                                    "OPENCODE_PUBLISHER": str(ROOT / 'scripts/publish-plugins.mjs'),
                                    "OPENCODE_RESOURCES": str(resources)},
                               capture_output=True, text=True, timeout=10)
 
-    def test_minimal_init_links_resources_without_projecting_or_overwriting_config(self):
+    def test_init_publishes_canonical_links_and_preserves_private_state(self):
         self.config.mkdir()
-        original = '{"operator":"preserve"}\n'
-        (self.config / "cli.json").write_text(original)
+        original = '{"private":"preserve"}\n'
+        (self.config / "auth.json").write_text(original)
         for _ in range(2):
             result = self.run_init()
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.config / "cli.json").read_text(), original)
-        self.assertFalse((self.config / "opencode.json").exists())
-        for name in ("system", "gsd", "commands", "skills"):
+        self.assertEqual((self.config / "auth.json").read_text(), original)
+        for asset in IMAGE_ASSETS:
+            self.assertEqual((self.config / asset).readlink(), self.defaults / asset)
+        for name in ("system", "commands", "skills"):
             self.assertEqual((self.config / name).resolve(), self.base / "resources" / name)
-        text = (ROOT / "init.sh").read_text()
-        self.assertNotIn("publish-plugins", text)
-        self.assertNotIn("docker-init", text)
+        self.assertFalse((self.config / 'gsd').exists())
+        (self.config / 'cli.json').unlink()
+        (self.config / 'cli.json').write_text('private cli config')
+        result = self.run_init()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.config / 'cli.json').read_text(), 'private cli config')
         self.assertFalse((ROOT / "scripts/docker-init.py").exists())
         self.assertFalse(any((ROOT / ".opencode/config/v2").rglob("*")))
 
     def test_private_or_project_kdco_loaders_fail_actionably_without_deletion(self):
-        for folder in (self.config / "plugins", self.base / "home/.config/opencode/plugin",
-                       self.base / ".opencode/plugins"):
+        for folder in (self.config / "plugins", self.base / ".opencode/plugins"):
             folder.mkdir(parents=True, exist_ok=True)
             plugin = folder / "kdco-worktree.ts"
             plugin.write_text("private-unreviewed-loader")
@@ -76,10 +87,34 @@ class DockerV2Tests(unittest.TestCase):
             result = self.run_init()
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(str(plugin), result.stderr)
-            self.assertIn("Review and remove/port", result.stderr)
+            self.assertIn("preserv", result.stderr.lower())
             self.assertEqual(plugin.read_text(), "private-unreviewed-loader")
             self.assertEqual(unrelated.read_text(), "preserve")
             plugin.unlink()
+
+    def test_redirected_private_config_is_preserved_and_never_followed(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        sentinel = outside / 'private.json'
+        sentinel.write_text('preserve')
+        self.config.symlink_to(outside, target_is_directory=True)
+        result = self.run_init()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.config.is_symlink())
+        self.assertEqual(sentinel.read_text(), 'preserve')
+        self.assertEqual(list(outside.iterdir()), [sentinel])
+
+    def test_only_exact_legacy_resource_self_links_are_retired(self):
+        self.assertEqual(self.run_init().returncode, 0)
+        resources = self.base / 'resources'
+        managed = resources / 'commands/commands'
+        managed.symlink_to('/opt/agent/commands')
+        custom = resources / 'skills/skills'
+        custom.symlink_to('/private/custom-skills')
+        result = self.run_init()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(managed.is_symlink())
+        self.assertEqual(custom.readlink(), Path('/private/custom-skills'))
 
     def test_missing_resource_tree_fails_actionably(self):
         result = subprocess.run(["bash", str(ROOT / "init.sh")], cwd=self.base,
@@ -93,13 +128,12 @@ class DockerV2Tests(unittest.TestCase):
     def test_canonical_config_native_roster_models_permissions_and_title_loading(self):
         config = ROOT / ".opencode/config"
         values = json.loads((config / "opencode.json").read_text())
-        expected = {"Orchestrator", "explore", "reviewer", "COO", "DevOps", "DevOps Medium",
-                    "DevOps Low", "SecOps", "gsd-planner", "gsd-phase-researcher", "gsd-plan-checker",
-                    "gsd-executor", "gsd-verifier", "gsd-project-researcher", "gsd-research-synthesizer",
-                    "gsd-roadmapper", "gsd-integration-checker", "gsd-debugger", "gsd-entity-generator",
-                    "gsd-codebase-mapper", "plan", "build", "plan-inline", "title"}
+        expected = {"Orchestrator", "explore", "reviewer", "COO", "DevOps", "DevOps Junior",
+                    "SecOps", "plan", "build", "plan-inline", "title"}
         self.assertEqual(set(values["agents"]), expected)
-        self.assertEqual(values["model"], "openai/gpt-6")
+        self.assertEqual(values["model"], "openai/gpt-6-astra")
+        self.assertEqual(values["agents"]["DevOps"]["mode"], "all")
+        self.assertEqual(values["agents"]["DevOps Junior"]["model"], "openai/gpt-6-sol")
         self.assertEqual(values["agents"]["title"]["model"], "openai/gpt-5-mini")
         self.assertEqual(values["compaction"], {"auto": False, "buffer": 50000})
         self.assertEqual(values["permissions"], [{"action": "*", "resource": "*", "effect": "allow"}])
@@ -129,6 +163,7 @@ class DockerV2Tests(unittest.TestCase):
         initial = fingerprint()
         self.assertEqual(initial, fingerprint())
         config = self.base / ".opencode/config/opencode.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text('{"model":"openai/changed"}')
         changed = fingerprint()
         self.assertNotEqual(initial, changed)
@@ -136,7 +171,7 @@ class DockerV2Tests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "fixture-key"}):
             self.assertNotEqual(changed, fingerprint())
         plugin = self.base / ".opencode/config/plugins/background-subagents.js"
-        plugin.parent.mkdir()
+        plugin.parent.mkdir(exist_ok=True)
         plugin.write_text((ROOT / ".opencode/config/plugins/background-subagents.js").read_text())
         with_plugin = fingerprint()
         self.assertNotEqual(changed, with_plugin)
@@ -208,6 +243,7 @@ class DockerV2Tests(unittest.TestCase):
         self.assertNotIn("--permission", wrapper)
         self.assertIn("{{.Image}}", wrapper)
         self.assertIn("has_requested_lifecycle_config", wrapper)
+        self.assertIn('!scripts/publish-plugins.mjs', (ROOT / '.dockerignore').read_text())
 
     def run_wrapper(self, *args, existing=False, old_image=False, old_lifecycle=False, old_config=False, stopped=False):
         launcher = self.base / "opencode-run"
@@ -219,7 +255,7 @@ class DockerV2Tests(unittest.TestCase):
         workspace.mkdir(exist_ok=True)
         fake = self.base / "docker"
         fake.write_text('''#!/usr/bin/env python3
-import json, os, sys
+import hashlib, json, os, sys
 args = sys.argv[1:]
 with open(os.environ["DOCKER_TEST_LOG"], "a") as output:
     output.write(json.dumps(args) + "\\n")
@@ -241,6 +277,8 @@ elif args[0] == "inspect":
     elif "cpus" in template: print("8.0")
     elif "memory" in template: print("16g")
     elif "publish" in template: print("")
+    elif "volumes" in template: print(hashlib.sha256(bytes([0])).hexdigest())
+    elif template == "{{.HostConfig.Privileged}}": print("false")
 elif args[0] == "port": print("127.0.0.1:7777")
 ''')
         fake.chmod(0o755)
@@ -266,7 +304,7 @@ elif args[0] == "port": print("127.0.0.1:7777")
         self.assertIn("4", run)
         self.assertIn("8g", run)
         self.assertIn("OPENCODE_PASSWORD", run)
-        for name in ("config", "data", "cache", "state"):
+        for name in ("home-config", "data", "cache", "state"):
             self.assertTrue(any(f"/.opencode/{name}:" in arg for arg in run))
         self.assertFalse(any("/.opencode/v2/" in arg or "/opt/opencode-source" in arg for arg in run))
         self.assertEqual(run[run.index("--name") + 1], "opencode-project-gpu")
@@ -293,8 +331,7 @@ elif args[0] == "port": print("127.0.0.1:7777")
             state.write_bytes(b"keep existing state\x00")
             sentinels.append(state)
         for args in (("--cpus", "4"), ("--memory", "8g"), ("--web", "8888"),
-                     ("--wlan", "7777"), ("--publish", "3000"), ("--gpu", "0"),
-                     ("--agent-web-port", "4096")):
+                     ("--wlan", "7777"), ("--publish", "3000"), ("--gpu", "0")):
             result, calls = self.run_wrapper(*args, existing=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(any(call[0] == "stop" for call in calls))
@@ -303,7 +340,7 @@ elif args[0] == "port": print("127.0.0.1:7777")
         result, calls = self.run_wrapper(existing=True, stopped=True, old_image=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         removed = next(call for call in calls if call[0] == "rm")
-        self.assertNotIn("-f", removed)
+        self.assertIn("-f", removed)
         self.assertTrue(any(call[0] == "run" for call in calls))
         for state in sentinels:
             self.assertEqual(state.read_bytes(), b"keep existing state\x00")
@@ -316,23 +353,11 @@ elif args[0] == "port": print("127.0.0.1:7777")
             self.assertEqual(calls, [])
 
     @unittest.skipUnless(os.environ.get("OPENCODE_DOCKER_SMOKE_IMAGE"), "set disposable smoke image")
-    def test_compose_config_with_disposable_cli_and_no_daemon_access(self):
-        # The host lacks Compose. Validate with its official CLI image instead;
-        # no daemon socket or host directories are mounted into this container.
-        with patch.dict(os.environ, {"OPENCODE_PASSWORD": "disposable-compose-password"}):
-            result = subprocess.run([
-                "docker", "run", "--rm", "-i", "-e", "OPENCODE_PASSWORD", "docker:cli",
-                "docker", "compose", "-p", "v2-disposable-check", "-f", "-", "config", "--quiet"],
-                input=(ROOT / "docker-compose.yml").read_text(), text=True,
-                capture_output=True, timeout=180)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    @unittest.skipUnless(os.environ.get("OPENCODE_DOCKER_SMOKE_IMAGE"), "set disposable smoke image")
     def test_real_disposable_server_auth_client_and_canonical_config(self):
         image = os.environ["OPENCODE_DOCKER_SMOKE_IMAGE"]
         original = json.loads((ROOT / ".opencode/config/opencode.json").read_text())
         agent = self.base / "agent"
-        for folder in ("commands", "skills", "system", "gsd"):
+        for folder in ("commands", "skills", "system"):
             (agent / folder).mkdir(parents=True)
         for definition in original["agents"].values():
             if "system" not in definition:
@@ -381,7 +406,8 @@ elif args[0] == "port": print("127.0.0.1:7777")
         documents = [item["info"] for item in json.loads(configs.stdout) if item["type"] == "document"]
         public = next(item for item in documents if "agents" in item)
         self.assertEqual(set(public["agents"]), set(original["agents"]))
-        self.assertEqual(public["model"], {"providerID": "openai", "model": "gpt-6"})
+        provider, model = original["model"].split("/", 1)
+        self.assertEqual(public["model"], {"providerID": provider, "model": model})
         self.assertEqual(public["agents"]["Orchestrator"]["system"], "Disposable prompt resource: system/orchestrator.md")
         self.assertEqual(public["agents"]["build"]["request"], {"body": {"temperature": 0.3}})
         self.assertEqual(public["providers"]["ollama"]["package"], "@opencode/ai/providers/openai-compatible")
@@ -401,8 +427,8 @@ elif args[0] == "port": print("127.0.0.1:7777")
             self.assertEqual(registered[name]["mode"], definition["mode"])
             self.assertTrue(registered[name]["system"].startswith("Disposable prompt resource: "), name)
         links = docker("exec", container, "python3", "-c",
-                       "from pathlib import Path; import json; print(json.dumps({n:str(Path('/home/opencode/.config/opencode',n).readlink()) for n in ['system','gsd','commands','skills']}))")
-        self.assertEqual(json.loads(links.stdout), {name: "/opt/agent/" + name for name in ("system", "gsd", "commands", "skills")})
+                       "from pathlib import Path; import json; print(json.dumps({n:str(Path('/home/opencode/.config/opencode',n).readlink()) for n in ['system','commands','skills']}))")
+        self.assertEqual(json.loads(links.stdout), {name: "/opt/agent/" + name for name in ("system", "commands", "skills")})
         self.assertIn("first-prompt-title.js", plugins.stdout, logs.stdout + logs.stderr + configs.stdout)
         self.assertNotIn("kdco-", plugins.stdout)
         title = next(item for item in json.loads(plugins.stdout)["data"] if item.get("id") == "first-prompt-title")
