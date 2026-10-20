@@ -439,7 +439,6 @@ flock "${LOCK_FD}"
 CONTAINER_STATUS=$(docker ps -a --filter "name=^${CONTAINER_NAME}$" --format "{{.Status}}" 2>/dev/null || echo "")
 
 if [[ -n "${CONTAINER_STATUS}" ]]; then
-    workstation_owned "$CONTAINER_NAME" || { log_error 'Container name belongs to an unowned or Compose-managed container; preserved'; exit 1; }
     # Container exists - check if it's healthy and running
     RUNNING=$(docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" 2>/dev/null || echo "")
     if [[ -n "${RUNNING}" ]]; then
@@ -515,7 +514,6 @@ fi
 docker run -d \
     --name "${CONTAINER_NAME}" \
     --hostname "${CONTAINER_NAME}" \
-    --label "dev.xmist.opencode.workstation=${WORKSTATION_OWNER}" \
     --label "dev.xmist.opencode.lifecycle=v2-serve-1" \
     --label "dev.xmist.opencode.config=${OPENCODE_DOCKER_CONFIG_FINGERPRINT}" \
     --label "dev.xmist.opencode.gpu.devices=${GPU_LABEL_DEVICES}" \

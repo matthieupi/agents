@@ -24,7 +24,7 @@ OpenCode Container Manager
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-    list, ls              List this checkout/user's owned workstation containers
+    list, ls              List containers matching name=opencode-
     rebuild, update       Rebuild CPU image and refresh containers
     rebuild gpu           Rebuild GPU CUDA devel image and refresh containers
     rebuild all           Rebuild CPU and GPU images and refresh containers
@@ -44,9 +44,9 @@ Examples:
     $(basename "$0") stop opencode-myproject
     $(basename "$0") stop all
     $(basename "$0") clean
-All management commands exclude unowned containers and Compose services.
-Rebuild does not reset private state or credentials. Unlabelled legacy containers
-are preserved; review their ownership separately before removing them manually.
+Bulk commands select name=opencode-; explicit targets are used directly.
+Legacy and Compose-managed containers are included, regardless of labels.
+Removal interrupts sessions but does not delete volumes, private state or credentials.
 EOF
     exit 0
 }
@@ -54,11 +54,8 @@ EOF
 # List all opencode containers
 list_containers() {
     log_info "OpenCode containers:"
-    local ids container
-    ids="$(workstation_ids -aq)"
-    for container in $ids; do
-        docker inspect --format '{{.Name}} {{.State.Status}}' "$container"
-    done
+    docker ps -a --filter "name=opencode-" \
+        --format "table {{.Names}}\t{{.Status}}\t{{.Size}}"
 }
 
 # Stop containers
@@ -72,11 +69,10 @@ stop_containers() {
     if [[ "$target" == "all" ]]; then
         log_info "Stopping all opencode containers..."
         local ids
-        ids="$(workstation_ids -q)"
+        ids="$(docker ps -q --filter "name=opencode-")"
         [[ -z "$ids" ]] || docker stop $ids
     else
         log_info "Stopping container: $target"
-        workstation_owned "$target" || { log_error 'Not an owned workstation container'; exit 1; }
         docker stop "$target"
     fi
 }
@@ -90,7 +86,6 @@ start_container() {
     fi
 
     log_info "Starting container: $name"
-    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker start "$name"
 }
 
@@ -108,12 +103,11 @@ remove_containers() {
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             local ids
-            ids="$(workstation_ids -aq)"
+            ids="$(docker ps -aq --filter "name=opencode-")"
             [[ -z "$ids" ]] || docker rm -f $ids
         fi
     else
         log_info "Removing container: $target"
-        workstation_owned "$target" || { log_error 'Not an owned workstation container'; exit 1; }
         docker rm -f "$target"
     fi
 }
@@ -125,12 +119,12 @@ clean_containers() {
 
     if [[ "$force" == "-f" ]]; then
         log_warn "Force clean: stopping all opencode containers first..."
-        ids="$(workstation_ids -q)"
+        ids="$(docker ps -q --filter "name=opencode-")"
         [[ -z "$ids" ]] || docker stop $ids
     fi
 
     log_info "Removing stopped opencode containers..."
-    ids="$(workstation_ids -aq --filter status=exited)"
+    ids="$(docker ps -aq --filter "name=opencode-" --filter status=exited)"
     [[ -z "$ids" ]] || docker rm $ids
 }
 
@@ -142,7 +136,6 @@ show_logs() {
         exit 1
     fi
 
-    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker logs -f "$name"
 }
 
@@ -154,7 +147,6 @@ open_shell() {
         exit 1
     fi
 
-    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "$name" /bin/bash
 }
 
@@ -176,7 +168,7 @@ refresh_workspace_containers() {
     local scope="${1:-existing opencode workspace}"
 
     local container_ids
-    container_ids="$(workstation_ids -aq)"
+    container_ids="$(docker ps -aq --filter "name=opencode-")"
     if [[ -n "${container_ids}" ]]; then
         log_warn "Refreshing ${scope} containers..."
         docker rm -f ${container_ids} > /dev/null

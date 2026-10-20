@@ -11,7 +11,7 @@ import sys
 
 
 def directory(path: Path, *, private: bool = False) -> None:
-    if path.is_symlink() or path.resolve() != path:
+    if private and (path.is_symlink() or path.resolve() != path):
         raise ValueError(f"Redirected directory: {path}")
     path.mkdir(mode=0o700, exist_ok=True)
     if not private:

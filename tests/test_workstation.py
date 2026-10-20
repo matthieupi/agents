@@ -137,19 +137,15 @@ if tool == 'docker':
                           for line in Path(os.environ['CALLS']).read_text().splitlines())
             if scenario != 'stale' or created:
                 print('fixture-id')
-        elif any(a.startswith('label=dev.xmist.opencode.workstation=') for a in args):
-            print('fixture-one\\nfixture-two\\ncompose-service\\nunowned')
+        elif 'name=opencode-' in args:
+            print('opencode-legacy\\nopencode-compose')
         elif scenario in ('reuse', 'stale', 'mismatch', 'old-image', 'old-lifecycle', 'old-config', 'legacy', 'unready-reuse', 'compose', 'unowned'):
             print('Up fixture' if scenario != 'stale' else 'Exited fixture')
     elif args[0] == 'inspect':
         fmt = args[2]
-        if 'opencode.workstation' in fmt:
-            owner = os.environ['FIXTURE_OWNER']
-            print(owner + '|compose' if args[-1] == 'compose-service' or scenario == 'compose' else
-                  'foreign|' if args[-1] == 'unowned' or scenario == 'unowned' else owner + '|')
-            sys.exit(0)
         print(('sha256:old' if scenario == 'old-image' else 'sha256:new') if fmt == '{{.Image}}' else
-              ('v1' if scenario in ('legacy', 'old-lifecycle') else 'v2-serve-1') if 'lifecycle' in fmt else
+              ('v1' if scenario in ('legacy', 'old-lifecycle', 'compose', 'unowned') else 'v2-serve-1') if 'lifecycle' in fmt else
+              'compose-project' if 'com.docker.compose.project' in fmt else
               ('old-config' if scenario == 'old-config' or os.environ.get('EXPOSURE', '') != os.environ.get('OPENCODE_DOCKER_WEB_ENDPOINT', '') else os.environ['OPENCODE_DOCKER_CONFIG_FINGERPRINT']) if 'opencode.config' in fmt else
               os.environ.get('PRIVILEGED', 'false') if fmt == '{{.HostConfig.Privileged}}' else
               'no' if fmt == '{{.HostConfig.RestartPolicy.Name}}' else
@@ -191,7 +187,6 @@ elif tool == 'python3':
         (self.bin / 'id').write_text(f'#!/bin/bash\ncase "$1" in -u) echo {self.uid};; -g) echo {self.gid};; esac\n')
         (self.bin / 'id').chmod(0o755)
         self.env['FIXTURE_USER'] = f'{self.uid}:{self.gid}'
-        self.env['FIXTURE_OWNER'] = hashlib.sha256(f'{component}\0{self.uid}'.encode()).hexdigest()
 
     def run_copy(self, script, arguments, scenario='fresh', stdin=''):
         source = ROOT / script
@@ -311,7 +306,7 @@ elif tool == 'python3':
             sentinel.parent.mkdir(parents=True, exist_ok=True)
             sentinel.write_bytes(b'preserve existing state\x00')
             sentinels.append(sentinel)
-        for scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'old-image', 'old-config'):
+        for scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'compose', 'unowned', 'old-image', 'old-config'):
             with self.subTest(scenario=scenario):
                 result, calls = self.run_copy('opencode/opencode-run', ['.'], scenario)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -324,6 +319,8 @@ elif tool == 'python3':
                     self.assertLess(operations.index('rm'), operations.index('run'))
                     self.assertIn('active sessions will be interrupted', result.stdout)
                 self.assertEqual(operations[-1], 'exec')
+                self.assertFalse(any('-v' in call or '--volumes' in call for call in calls if call[0] == 'rm'))
+                self.assertFalse(any('opencode.workstation' in str(call) for call in calls))
                 for sentinel in sentinels:
                     self.assertEqual(sentinel.read_bytes(), b'preserve existing state\x00')
                 self.assertFalse((self.root / 'opencode/.opencode/v2').exists())
@@ -550,36 +547,39 @@ elif tool == 'python3':
         self.assertIn('non-root', result.stderr)
         self.assertEqual(calls, [])
 
-    def test_missing_or_redirected_bind_sources_fail_without_repair(self):
+    def test_application_state_symlink_is_accepted_and_retained(self):
         data = self.root / 'opencode/.opencode/data'
         data.symlink_to(self.workspace)
+        sentinel = self.workspace / 'session-state'
+        sentinel.write_text('preserve')
         result, calls = self.run_copy('opencode/opencode-run', ['-r', '.'], 'old-image')
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(data.is_symlink())
-        self.assertFalse(any(call[0] in ('build', 'run', 'stop', 'rm') for call in calls))
-        data.unlink()
+        self.assertEqual(sentinel.read_text(), 'preserve')
+        self.assertTrue(any(call[0] == 'run' for call in calls))
+
+    def test_missing_bind_sources_fail_without_repair(self):
         (self.root / 'opencode/ssh').rmdir()
         result, calls = self.run_copy('opencode/opencode-run', ['-r', '.'], 'old-image')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / 'opencode/ssh').exists())
         self.assertFalse(any(call[0] in ('build', 'run', 'stop', 'rm') for call in calls))
 
-    def test_owned_cleanup_excludes_compose_and_foreign_containers(self):
+    def test_name_scoped_cleanup_includes_legacy_and_compose_containers(self):
+        sentinel = self.root / 'opencode/.opencode/config/private-state'
+        sentinel.write_text('preserve')
         for argv in (['rebuild'], ['clean'], ['fclean'], ['remove', 'all'], ['stop', 'all']):
             result, calls = self.run_copy('opencode/opencode-mgr', argv, stdin='y\n')
             self.assertEqual(result.returncode, 0, result.stderr)
             for call in calls:
                 if call[0] in ('rm', 'stop'):
-                    self.assertNotIn('compose-service', call)
-                    self.assertNotIn('unowned', call)
+                    self.assertIn('opencode-legacy', call)
+                    self.assertIn('opencode-compose', call)
+                    self.assertNotIn('-v', call)
+            self.assertTrue(all('name=opencode-' in call for call in calls if call[0] == 'ps'))
+            self.assertFalse(any(call[0] == 'inspect' for call in calls))
+            self.assertEqual(sentinel.read_text(), 'preserve')
             self.assertTrue(any(call[0] in ('rm', 'stop') for call in calls))
-        for scenario in ('compose', 'unowned'):
-            for script, argv in [('opencode/opencode-run', ['.']),
-                                 ('opencode/opencode-mgr', ['remove', 'fixture']),
-                                 ('opencode/opencode-mgr', ['stop', 'fixture'])]:
-                result, calls = self.run_copy(script, argv, scenario)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(any(call[0] in ('run', 'exec', 'rm', 'stop') for call in calls))
 
     def test_leading_rebuild_differs_from_manager_update(self):
         for flags, image in [([], 'lab/opencode:latest'), (['--gpu', '0,1'], 'lab/opencode:gpu')]:
@@ -598,7 +598,7 @@ elif tool == 'python3':
             builds = [argv for argv in calls if argv[0] == 'build']
             self.assertEqual(len(builds), count)
             self.assertTrue(all('--pull' in argv for argv in builds))
-            self.assertEqual(calls[-1], ['rm', '-f', 'fixture-one', 'fixture-two'])
+            self.assertEqual(calls[-1], ['rm', '-f', 'opencode-legacy', 'opencode-compose'])
 
     def test_direct_manager_destructive_commands_are_only_recorded(self):
         for argv, expected in [(['stop', 'fixture name'], ['stop', 'fixture name']),
@@ -609,13 +609,13 @@ elif tool == 'python3':
             result, calls = self.run_copy('opencode/opencode-mgr', argv)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(calls[-1], expected)
-            self.assertEqual(calls[0][0], 'inspect')
+            self.assertEqual(calls, [expected])
         result, calls = self.run_copy('opencode/opencode-mgr', ['remove', 'all'], stdin='n\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [])
         result, calls = self.run_copy('opencode/opencode-mgr', ['remove', 'all'], stdin='y\n')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls[-1], ['rm', '-f', 'fixture-one', 'fixture-two'])
+        self.assertEqual(calls[-1], ['rm', '-f', 'opencode-legacy', 'opencode-compose'])
         result, calls = self.run_copy('opencode/opencode-mgr', ['stop'])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(calls, [])
