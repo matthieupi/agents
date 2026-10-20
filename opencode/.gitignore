@@ -33,3 +33,4 @@ node_modules/
 /.opencode/cache/
 /.opencode/state/
 /.opencode/home-config/
+/.opencode/workstation-private/

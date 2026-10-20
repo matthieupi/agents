@@ -21,7 +21,7 @@ Run Mode (default):
     $(basename "$0") [options] [path]     Run OpenCode in a workspace
         -d, --dangerous                   Auto-approve client permission prompts (--auto)
         --privileged, --priviliged        Grant full host-root access (persists until recreated)
-        -r, --rebuild                     Rebuild CPU and GPU images
+        -r, --rebuild                     Rebuild selected image, then launch (CPU unless --gpu)
         -w, --web [port]                  Expose localhost browser endpoint and return
         --wlan [port]                     Expose LAN browser endpoint and return
         --port <port>                     Port for --web/--wlan mode
@@ -33,7 +33,7 @@ Run Mode (default):
 
 Management Commands:
     menu, tui                             Open guided launcher menu
-    list, ls                              List all opencode containers
+    list, ls                              List this checkout/user's owned workstation containers
     rebuild, update                       Rebuild CPU image and refresh containers
     rebuild gpu                           Rebuild GPU CUDA devel image and refresh containers
     rebuild all                           Rebuild CPU and GPU images and refresh containers
@@ -55,12 +55,16 @@ Examples:
     $(basename "$0") --cpus 4 --memory 8g . Run with custom resources
     $(basename "$0") --publish 3000 .     Expose host port 3000 to container port 3000
     $(basename "$0") -v /host/docs:/docs:ro . Mount host docs read-only at /docs
-    $(basename "$0") -r .                 Rebuild CPU and GPU images
+    $(basename "$0") -r .                 Rebuild CPU, start/reconcile server, attach TUI
     $(basename "$0") rebuild              Rebuild image and refresh containers
     $(basename "$0") rebuild gpu          Rebuild GPU image and refresh containers
     $(basename "$0") menu                 Open guided launcher menu
     $(basename "$0") list                 List all containers
     $(basename "$0") fclean               Stop all and clean
+Local backend password: protected persistent automatic credential unless
+OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD is supplied. No Vault required.
+Run on the Docker host as your non-root user; no devai-xmist network required.
+Management excludes unowned containers and Compose services, even by explicit name.
 EOF
     exit 0
 }

@@ -24,6 +24,7 @@ NC='\033[0m' # No Color
 log_info() { echo -e "${GREEN}[opencode]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[opencode]${NC} $*"; }
 log_error() { echo -e "${RED}[opencode]${NC} $*" >&2; }
+source "${SCRIPT_DIR}/scripts/workstation-common.sh"
 
 # Parse optional flags
 DANGEROUS_ARGS=()
@@ -111,8 +112,13 @@ add_volume() {
         exit 1
     fi
 
+    [[ "$canonical_source" != *','* && "$destination" != *','* ]] || {
+        log_error 'Volume paths cannot contain commas'; exit 1;
+    }
     VOLUME_SPECS+=("${canonical_source}:${destination}:${access}")
-    VOLUME_ARGS+=(-v "${canonical_source}:${destination}:${access}")
+    local mount="type=bind,src=${canonical_source},dst=${destination}"
+    [[ "$access" != ro ]] || mount+=",readonly"
+    VOLUME_ARGS+=(--mount "$mount")
 }
 
 while [[ $# -gt 0 ]]; do
@@ -226,20 +232,6 @@ if [[ "${PRIVILEGED_MODE}" == "true" ]]; then
     log_warn "Access persists across container restarts. Relaunch without --privileged to remove it."
 fi
 
-# Handle rebuild if requested
-if [[ -n "${REBUILD_IMAGE}" ]]; then
-    log_info "Rebuilding OpenCode CPU image..."
-    docker build -t "${CPU_IMAGE_NAME}" "${SCRIPT_DIR}"
-    log_info "CPU image rebuilt successfully"
-
-    log_info "Rebuilding OpenCode GPU image..."
-    docker build -f "${SCRIPT_DIR}/Dockerfile.gpu" -t "${GPU_IMAGE_NAME}" "${SCRIPT_DIR}"
-    log_info "GPU image rebuilt successfully"
-
-    log_info "OpenCode images rebuilt successfully"
-    exit 0
-fi
-
 # Restore positional parameters
 set -- "${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}"
 
@@ -251,6 +243,45 @@ WORKSPACE_PATH="$(realpath "${WORKSPACE_PATH}")"
 if [[ ! -d "${WORKSPACE_PATH}" ]]; then
     log_error "Directory does not exist: ${WORKSPACE_PATH}"
     exit 1
+fi
+
+workstation_local
+[[ "${OPENCODE_SERVER_USERNAME:-opencode}" == opencode ]] || { log_error 'V2 requires username opencode'; exit 1; }
+# Validate/create local state before building or replacing anything. No chown/reset.
+OPENCODE_PASSWORD="$(python3 "${SCRIPT_DIR}/scripts/workstation-state.py" "$SCRIPT_DIR")"
+export OPENCODE_PASSWORD
+CONFIG_DIR="${SCRIPT_DIR}/.opencode/home-config"
+DATA_DIR="${SCRIPT_DIR}/.opencode/data"
+CACHE_DIR="${SCRIPT_DIR}/.opencode/cache"
+STATE_DIR="${SCRIPT_DIR}/.opencode/state"
+AGENT_DIR="$(realpath -e "${SCRIPT_DIR}/../agent")"
+INIT_SCRIPT="${SCRIPT_DIR}/init.sh"
+SSH_DIR="$(realpath -e "${SSH_DIR_PATH:-${SCRIPT_DIR}/ssh}")"
+[[ -d "$SSH_DIR" && -d "$AGENT_DIR" && -r "$INIT_SCRIPT" && -d "$SCRIPT_DIR/.opencode/config" ]] || {
+    log_error 'Missing workstation bind source (shared resources, config, init or SSH directory)'; exit 1;
+}
+# --mount fails if a source is absent on the daemon host; -v would silently
+# create a root-owned directory there. These paths must be host-visible paths.
+MOUNT_ARGS=()
+for binding in \
+    "$WORKSPACE_PATH|/workspace|rw" "$AGENT_DIR|/opt/agent|rw" \
+    "$INIT_SCRIPT|/opt/harness/init.sh|ro" "$SCRIPT_DIR/.opencode/config|/opt/opencode-defaults|ro" \
+    "$CONFIG_DIR|/home/opencode/.config/opencode|rw" "$DATA_DIR|/home/opencode/.local/share/opencode|rw" \
+    "$CACHE_DIR|/home/opencode/.cache/opencode|rw" "$STATE_DIR|/home/opencode/.local/state/opencode|rw" \
+    "$SSH_DIR|/home/opencode/.ssh|ro"; do
+    IFS='|' read -r source destination access <<< "$binding"
+    [[ "$source" != *','* && "$access" =~ ^(ro|rw)$ ]] || { log_error 'Unsupported bind path delimiter'; exit 1; }
+    mount="type=bind,src=$source,dst=$destination"
+    [[ "$access" != ro ]] || mount+=",readonly"
+    MOUNT_ARGS+=(--mount "$mount")
+done
+
+if [[ -n "${REBUILD_IMAGE}" ]]; then
+    BUILD_FILE="${SCRIPT_DIR}/Dockerfile"
+    [[ -z "${GPU_MODE}" ]] || BUILD_FILE="${SCRIPT_DIR}/Dockerfile.gpu"
+    log_info "Rebuilding selected image: ${IMAGE_NAME}"
+    docker build --pull --build-arg "LOCAL_UID=$WORKSTATION_UID" --build-arg "LOCAL_GID=$WORKSTATION_GID" \
+        -f "$BUILD_FILE" -t "$IMAGE_NAME" "$SCRIPT_DIR"
 fi
 
 # Generate unique container name based on workspace path and runtime profile.
@@ -270,9 +301,9 @@ if [[ -z "${IMAGE_ID}" || "${IMAGE_LIFECYCLE}" != v2-serve-1 ]]; then
     log_error "Build the Docker V2 image first (opencode rebuild or opencode -r .); selected image lacks lifecycle v2-serve-1."
     exit 1
 fi
-export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"
-if [[ -z "${OPENCODE_PASSWORD}" || "${OPENCODE_SERVER_USERNAME:-opencode}" != opencode ]]; then
-    log_error "Docker V2 requires OPENCODE_PASSWORD (or OPENCODE_SERVER_PASSWORD), and username opencode."
+IMAGE_USER="$(docker image inspect --format '{{.Config.User}}' "$IMAGE_NAME")"
+if [[ "$IMAGE_USER" != "$WORKSTATION_UID:$WORKSTATION_GID" ]]; then
+    log_error 'Image account differs from invoking UID/GID; rebuild selected image with -r. No ownership changes made.'
     exit 1
 fi
 
@@ -292,6 +323,7 @@ import sys
 
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
+digest.update(f'{os.getuid()}:{os.getgid()}'.encode() + b'\0')
 digest.update(str(root).encode() + b'\0' + sys.argv[2].encode() + b'\0')
 for name in ('OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
              'OPENROUTER_API_KEY', 'OLLAMA_HOST', 'OPENAI_COMPAT_API_KEY',
@@ -407,6 +439,7 @@ flock "${LOCK_FD}"
 CONTAINER_STATUS=$(docker ps -a --filter "name=^${CONTAINER_NAME}$" --format "{{.Status}}" 2>/dev/null || echo "")
 
 if [[ -n "${CONTAINER_STATUS}" ]]; then
+    workstation_owned "$CONTAINER_NAME" || { log_error 'Container name belongs to an unowned or Compose-managed container; preserved'; exit 1; }
     # Container exists - check if it's healthy and running
     RUNNING=$(docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" 2>/dev/null || echo "")
     if [[ -n "${RUNNING}" ]]; then
@@ -457,25 +490,6 @@ if ! docker image inspect "${IMAGE_NAME}" > /dev/null 2>&1; then
     exit 1
 fi
 
-# Prepare config directory
-CONFIG_DIR="${SCRIPT_DIR}/.opencode/home-config"
-mkdir -p "${CONFIG_DIR}"
-
-# Prepare data directory for session/auth persistence
-DATA_DIR="${SCRIPT_DIR}/.opencode/data"
-mkdir -p "${DATA_DIR}"
-
-# Prepare cache directory for provider/plugin state persistence
-CACHE_DIR="${SCRIPT_DIR}/.opencode/cache"
-mkdir -p "${CACHE_DIR}"
-STATE_DIR="${SCRIPT_DIR}/.opencode/state"
-mkdir -p "${STATE_DIR}"
-AGENT_DIR="${SCRIPT_DIR}/../agent"
-INIT_SCRIPT="${SCRIPT_DIR}/init.sh"
-
-# SSH directory for remote access
-SSH_DIR="${SSH_DIR_PATH:-${SCRIPT_DIR}/ssh}"
-
 log_info "Running OpenCode with UID $(id -u):$(id -g)"
 
 PORT_ARGS=()
@@ -501,6 +515,7 @@ fi
 docker run -d \
     --name "${CONTAINER_NAME}" \
     --hostname "${CONTAINER_NAME}" \
+    --label "dev.xmist.opencode.workstation=${WORKSTATION_OWNER}" \
     --label "dev.xmist.opencode.lifecycle=v2-serve-1" \
     --label "dev.xmist.opencode.config=${OPENCODE_DOCKER_CONFIG_FINGERPRINT}" \
     --label "dev.xmist.opencode.gpu.devices=${GPU_LABEL_DEVICES}" \
@@ -509,16 +524,16 @@ docker run -d \
     --label "dev.xmist.opencode.publish=$(publish_label)" \
     --label "dev.xmist.opencode.volumes=$(volume_label)" \
     --restart "${RESTART_POLICY}" \
-    --user "1000:1000" \
+    --user "$WORKSTATION_UID:$WORKSTATION_GID" \
     -e "HOME=/home/opencode" \
     -e "PATH=/home/opencode/.local/bin:/usr/local/bin:/usr/bin:/bin" \
     -e "OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode" \
-    -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
-    -e "OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
-    -e "GEMINI_API_KEY=${GEMINI_API_KEY:-}" \
-    -e "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}" \
+    -e ANTHROPIC_API_KEY \
+    -e OPENAI_API_KEY \
+    -e GEMINI_API_KEY \
+    -e OPENROUTER_API_KEY \
     -e "OLLAMA_HOST=${OLLAMA_HOST:-http://ollama.xmist.dev:11434}" \
-    -e "OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}" \
+    -e OPENAI_COMPAT_API_KEY \
     -e "OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}" \
     -e OPENCODE_PASSWORD \
     -e "NVIDIA_VISIBLE_DEVICES=${GPU_DEVICES}" \
@@ -530,20 +545,11 @@ docker run -d \
     -e "GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-opencode@xmist.dev}" \
     -e "GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-opencode-xmist}" \
     -e "GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-opencode@xmist.dev}" \
-    -v "${WORKSPACE_PATH}:/workspace:rw" \
-    -v "${AGENT_DIR}:/opt/agent:rw" \
-    -v "${INIT_SCRIPT}:/opt/harness/init.sh:ro" \
-    -v "${SCRIPT_DIR}/.opencode/config:/opt/opencode-defaults:ro" \
-    -v "${CONFIG_DIR}:/home/opencode/.config/opencode:rw" \
-    -v "${DATA_DIR}:/home/opencode/.local/share/opencode:rw" \
-    -v "${CACHE_DIR}:/home/opencode/.cache/opencode:rw" \
-    -v "${STATE_DIR}:/home/opencode/.local/state/opencode:rw" \
-    -v "${SSH_DIR}:/home/opencode/.ssh:ro" \
+    "${MOUNT_ARGS[@]}" \
     "${VOLUME_ARGS[@]}" \
     "${PRIVILEGED_ARGS[@]}" \
     "${PORT_ARGS[@]}" \
     "${GPU_ARGS[@]}" \
-    --network devai-xmist \
     --memory "${MEMORY_LIMIT}" \
     --cpus "${CPU_LIMIT}" \
     "${IMAGE_NAME}" > /dev/null

@@ -49,9 +49,11 @@ RUN python3 -m pip install --break-system-packages \
     jmespath
 
 # Non-root user setup with sudo access
+ARG LOCAL_UID=1000
+ARG LOCAL_GID=1000
 RUN deluser --remove-home node 2>/dev/null || true \
-    && groupadd -g 1000 opencode \
-    && useradd -u 1000 -g opencode -s /bin/bash -m opencode \
+    && groupadd -g ${LOCAL_GID} opencode \
+    && useradd -u ${LOCAL_UID} -g opencode -s /bin/bash -m opencode \
     && echo "opencode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/opencode \
     && chmod 0440 /etc/sudoers.d/opencode
 
@@ -90,7 +92,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD python3 /opt/harness/docker-health.py
 
 # Switch to opencode user
-USER opencode
+USER ${LOCAL_UID}:${LOCAL_GID}
 WORKDIR /workspace
 
 ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_EXPERIMENTAL_WORKSPACES=1

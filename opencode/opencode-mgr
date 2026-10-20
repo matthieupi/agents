@@ -14,6 +14,7 @@ NC='\033[0m'
 log_info() { echo -e "${GREEN}[opencode-mgr]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[opencode-mgr]${NC} $*"; }
 log_error() { echo -e "${RED}[opencode-mgr]${NC} $*" >&2; }
+source "${SCRIPT_DIR}/scripts/workstation-common.sh"
 
 # Show usage
 usage() {
@@ -23,7 +24,7 @@ OpenCode Container Manager
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-    list, ls              List all opencode containers
+    list, ls              List this checkout/user's owned workstation containers
     rebuild, update       Rebuild CPU image and refresh containers
     rebuild gpu           Rebuild GPU CUDA devel image and refresh containers
     rebuild all           Rebuild CPU and GPU images and refresh containers
@@ -43,6 +44,9 @@ Examples:
     $(basename "$0") stop opencode-myproject
     $(basename "$0") stop all
     $(basename "$0") clean
+All management commands exclude unowned containers and Compose services.
+Rebuild does not reset private state or credentials. Unlabelled legacy containers
+are preserved; review their ownership separately before removing them manually.
 EOF
     exit 0
 }
@@ -50,8 +54,11 @@ EOF
 # List all opencode containers
 list_containers() {
     log_info "OpenCode containers:"
-    docker ps -a --filter "name=opencode-" \
-        --format "table {{.Names}}\t{{.Status}}\t{{.Size}}" || true
+    local ids container
+    ids="$(workstation_ids -aq)"
+    for container in $ids; do
+        docker inspect --format '{{.Name}} {{.State.Status}}' "$container"
+    done
 }
 
 # Stop containers
@@ -64,9 +71,12 @@ stop_containers() {
 
     if [[ "$target" == "all" ]]; then
         log_info "Stopping all opencode containers..."
-        docker ps -q --filter "name=opencode-" | xargs -r docker stop
+        local ids
+        ids="$(workstation_ids -q)"
+        [[ -z "$ids" ]] || docker stop $ids
     else
         log_info "Stopping container: $target"
+        workstation_owned "$target" || { log_error 'Not an owned workstation container'; exit 1; }
         docker stop "$target"
     fi
 }
@@ -80,6 +90,7 @@ start_container() {
     fi
 
     log_info "Starting container: $name"
+    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker start "$name"
 }
 
@@ -96,10 +107,13 @@ remove_containers() {
         read -p "Are you sure? (y/N) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            docker ps -aq --filter "name=opencode-" | xargs -r docker rm -f
+            local ids
+            ids="$(workstation_ids -aq)"
+            [[ -z "$ids" ]] || docker rm -f $ids
         fi
     else
         log_info "Removing container: $target"
+        workstation_owned "$target" || { log_error 'Not an owned workstation container'; exit 1; }
         docker rm -f "$target"
     fi
 }
@@ -107,14 +121,17 @@ remove_containers() {
 # Clean stopped containers
 clean_containers() {
     local force="${1:-}"
+    local ids
 
     if [[ "$force" == "-f" ]]; then
         log_warn "Force clean: stopping all opencode containers first..."
-        docker ps -q --filter "name=opencode-" | xargs -r docker stop
+        ids="$(workstation_ids -q)"
+        [[ -z "$ids" ]] || docker stop $ids
     fi
 
     log_info "Removing stopped opencode containers..."
-    docker ps -aq --filter "name=opencode-" --filter "status=exited" | xargs -r docker rm
+    ids="$(workstation_ids -aq --filter status=exited)"
+    [[ -z "$ids" ]] || docker rm $ids
 }
 
 # Show logs
@@ -125,6 +142,7 @@ show_logs() {
         exit 1
     fi
 
+    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker logs -f "$name"
 }
 
@@ -136,18 +154,21 @@ open_shell() {
         exit 1
     fi
 
+    workstation_owned "$name" || { log_error 'Not an owned workstation container'; exit 1; }
     docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "$name" /bin/bash
 }
 
 rebuild_cpu_image() {
+    workstation_local
     log_info "Rebuilding ${CPU_IMAGE_NAME} from local workspace..."
-    docker build --pull -t "${CPU_IMAGE_NAME}" "${SCRIPT_DIR}"
+    docker build --pull --build-arg "LOCAL_UID=$WORKSTATION_UID" --build-arg "LOCAL_GID=$WORKSTATION_GID" -t "${CPU_IMAGE_NAME}" "${SCRIPT_DIR}"
     log_info "CPU image rebuilt successfully"
 }
 
 rebuild_gpu_image() {
+    workstation_local
     log_info "Rebuilding ${GPU_IMAGE_NAME} from local workspace..."
-    docker build --pull -f "${SCRIPT_DIR}/Dockerfile.gpu" -t "${GPU_IMAGE_NAME}" "${SCRIPT_DIR}"
+    docker build --pull --build-arg "LOCAL_UID=$WORKSTATION_UID" --build-arg "LOCAL_GID=$WORKSTATION_GID" -f "${SCRIPT_DIR}/Dockerfile.gpu" -t "${GPU_IMAGE_NAME}" "${SCRIPT_DIR}"
     log_info "GPU image rebuilt successfully"
 }
 
@@ -155,7 +176,7 @@ refresh_workspace_containers() {
     local scope="${1:-existing opencode workspace}"
 
     local container_ids
-    container_ids="$(docker ps -aq --filter "name=opencode-")"
+    container_ids="$(workstation_ids -aq)"
     if [[ -n "${container_ids}" ]]; then
         log_warn "Refreshing ${scope} containers..."
         docker rm -f ${container_ids} > /dev/null

@@ -19,7 +19,10 @@ inputs, auth, account, state, Docker grants and ingress ownership.
 - [OpenCode V2](opencode/README.md): CPU/GPU dispatcher/menu/run/mgr, installer/init
   helper, native title/background plugins and retained volume/privilege/GPU flags.
   One `serve` backend, explicit `--server` clients; automatic recreation interrupts
-  sessions. Optional dispatch/ssh-remote remain default-off and V1-targeted.
+  sessions. Local `-r` rebuilds CPU (GPU only with `--gpu`), then starts/attaches;
+  protected automatic local backend credentials require no infrastructure Vault.
+  Manager operations exclude unowned containers and managed Compose services.
+  Optional dispatch/ssh-remote remain default-off and V1-targeted.
 - `claudecode/`: existing workstation component.
 - [Paseo daemon](paseo-deamon/README.md): VM templates and separately retained
   standalone component interface; embedded OpenCode belongs to Paseo.

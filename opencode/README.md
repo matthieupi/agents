@@ -113,17 +113,30 @@ Guided menus additionally use [`gum`](https://github.com/charmbracelet/gum).
 Run from `agents/opencode/`; configure provider access separately.
 
 ```sh
-# Supply OPENCODE_PASSWORD through a protected environment loader first.
-# The wrapper does not source .env; .env.example is a reference.
+# Run as your non-root user on the Docker host, not inside another container.
+# The wrapper does not source .env; provider access remains separately configured.
 mkdir -p workspace ssh
-docker network create devai-xmist   # only if the external network is absent
-./opencode rebuild
-./opencode ./workspace
+./opencode -r ./workspace           # build CPU, start/reconcile server, attach TUI
 ./opencode menu                    # alias: tui
 ```
 
-Every server requires `OPENCODE_PASSWORD`, including loopback/TUI-only use.
-`OPENCODE_SERVER_PASSWORD` is a fallback when the preferred value is unset/empty.
+Every server requires a password, including loopback/TUI-only use. The local wrapper
+automatically generates and reuses a random backend credential in
+`.opencode/workstation-private/backend-password`: owner-only directory `0700`, file
+`0600`, excluded from Git/build context and not explicitly mounted. A directory lock and
+atomic publication serialize concurrent first launches. Invalid, redirected,
+hard-linked, wrong-owner or incorrectly permissioned credentials fail closed without
+reset or ownership repair. Preserve this directory across launches/rebuilds.
+
+Explicit `OPENCODE_PASSWORD` takes precedence; `OPENCODE_SERVER_PASSWORD` is the
+fallback when the preferred value is unset/empty. Overrides neither replace nor
+rotate the saved local password; removing an override returns to the saved value.
+No infrastructure Vault access is needed. Managed VM Vault reuse is **not** part of
+this local path, and the VM service authentication contract above is unchanged.
+Like provider state, the saved file is accessible to the same UID if the checkout
+is selected as a workspace or exposed through a custom bind; this is not isolation
+from trusted local agents. Do not share the private directory or enable shell tracing
+around credential-bearing wrapper invocations.
 Username is fixed to **`opencode`**. The client inherits credentials from the
 container environment, not client argv/URLs; Docker administrators can inspect
 that environment. Provider login may be interactive; an API key is not required
@@ -156,7 +169,8 @@ docker exec -it <container-name> bash /opt/harness/docker-client.sh
 ./opencode -v /srv/docs:/docs:ro --volume ./shared-data:/data:rw .
 ./opencode --privileged .          # alias: --priviliged; full host-root access
 
-./opencode -r .                    # build CPU AND GPU images only, then exit
+./opencode -r .                    # rebuild CPU, reconcile/start server, attach TUI
+./opencode -r --gpu 0,1 .          # rebuild GPU only, use explicitly selected GPUs
 ./opencode rebuild                 # CPU build + refresh workspace containers
 ./opencode rebuild gpu             # GPU build + refresh workspace containers
 ./opencode rebuild all             # both; update is a rebuild alias
@@ -169,8 +183,10 @@ docker exec -it <container-name> bash /opt/harness/docker-client.sh
 ./opencode shell <name>
 ```
 
-No host port is published by default; `--port` alone does not publish. Backend
-port 4096 is reserved: use web options, not `-p`, for it. `--agent-web-port` is
+No host port is published by default; `--port` alone does not publish. The backend
+uses Docker's default networking; there is no `devai-xmist` network prerequisite.
+Provider DNS/reachability remains the caller's responsibility.
+Port 4096 is reserved: use web options, not `-p`, for it. `--agent-web-port` is
 removed. Extra ports accept `PORT`, `HOST:CONTAINER` or explicit
 `127.0.0.1|0.0.0.0:HOST:CONTAINER`; unqualified mappings normally expose all host
 interfaces. Dev servers must listen on `0.0.0.0` inside the container. Docker
@@ -200,8 +216,12 @@ or privilege mode differ. **Active sessions are interrupted**; this behavior is
 intentional and user-authorized, not a live migration. Repeat all desired flags
 for reuse; omitting a publication/mount removes it by recreation. Matching running
 containers are reused; stopped/stale containers are recreated. `start` does not
-reconcile settings. Manager rebuild/update removes matching workspace containers
-across profiles. Names use workspace basenames (plus `-gpu`); equal basenames collide.
+reconcile settings. Manager rebuild/update removes owned workspace containers
+across profiles. All manager operations require this canonical checkout/user's
+`dev.xmist.opencode.workstation` ownership label and exclude Compose-labelled services,
+including explicitly named targets. Legacy unlabelled containers are not adopted or
+deleted; launch stops on such a name collision. Review actual ownership before any
+manual removal. Names use workspace basenames (plus `-gpu`); equal basenames collide.
 CPU/GPU containers have separate names but share canonical state.
 
 | Workstation host path | Container use |
@@ -210,12 +230,26 @@ CPU/GPU containers have separate names but share canonical state.
 | `.opencode/home-config` | `~/.config/opencode`, private writable directory with selected managed links |
 | `.opencode/data` | `~/.local/share/opencode`, sessions/provider authentication |
 | `.opencode/cache`, `.opencode/state` | private persistent XDG cache/state |
+| `.opencode/workstation-private` | protected local backend credential; no dedicated bind |
 | `../agent` | `/opt/agent`, writable shared commands/skills/system resources |
 | selected workspace | `/workspace`, writable project |
 | `SSH_DIR_PATH` (default `./ssh`) | `~/.ssh`, read-only dedicated keys/config/known_hosts |
 
-Wrapper containers use **1000:1000**, irrespective of the caller. Check mount
-ownership, not recursive chown of unrelated HOME/checkouts. Retain private paths
+Wrapper builds create the named account/HOME using the invoking non-root **UID:GID**;
+containers run with that identity. Root/sudo launches and mismatched image accounts
+are rejected; use `-r` to rebuild for the correct user, not runtime chown. Shared image
+tags are local defaults, so another user's rebuild may require rebuilding again.
+Checkout/private-state roots must be caller-owned, non-redirected and not group/other
+writable; newly created state directories are `0700`. Existing state is never reset
+or permission-repaired. Check mount ownership, not recursive chown of HOME/checkouts.
+
+Use the local Docker host filesystem and Unix-socket daemon, not a remote Docker
+context or a container with differently mapped host paths. A local socket alone does
+not prove filesystem identity. All normal bind sources must already exist on the
+daemon host (`--mount` fails rather than creating root-owned directories); paths with
+commas are unsupported. Create the dedicated SSH directory explicitly, even if empty.
+No host-path translation, account impersonation or automatic mount repair is supplied.
+Retain private paths
 across replacement; do not delete auth/session databases to troubleshoot. V1 database
 conversion and real old-session recovery remain unverified. Retained bytes do not
 prove compatibility or rollback. Workstation images include passwordless sudo and
@@ -296,6 +330,7 @@ no installs, providers or deployments. Useful source checks from the repository 
 git diff --check
 node --test opencode/tests/config.test.mjs opencode/tests/service-entrypoint.test.mjs
 python3 -B -m unittest discover -s opencode/tests -p 'test_backend.py' -v
+python3 -B tests/test_workstation.py -v  # isolated fake Docker/temp HOME; no builds
 ```
 
 For failures inspect `./opencode logs <name>` or the deployed service's Compose
