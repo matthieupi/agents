@@ -94,6 +94,12 @@ Unrelated plugins are not silently deleted. Review project-local discovery too:
 workstation init rejects discovered obsolete `kdco-*` loaders. No KDCO package,
 dependency install or GSD resource publication remains.
 
+`cli.json` is user-owned: startup creates a private regular file only when absent.
+Existing CLI preferences and unrelated plugins are preserved; only maintained
+plugin registrations are reconciled (including the retired title-module path).
+Already-correct files are not rewritten. Invalid JSON/plugin-list shapes and
+unknown redirected files remain untouched and produce an actionable error.
+
 **Updates:** pull reviewed commits, then reapply through the scoped ordinary
 Ansible service flow. `workspace_copy` uses controller-index membership and
 working-tree content; `git` materializes the agents submodule at the

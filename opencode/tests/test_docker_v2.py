@@ -65,11 +65,21 @@ class DockerV2Tests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.config / "auth.json").read_text(), original)
         for asset in IMAGE_ASSETS:
-            self.assertEqual((self.config / asset).readlink(), self.defaults / asset)
+            if asset == "cli.json":
+                self.assertFalse((self.config / asset).is_symlink())
+                self.assertEqual((self.config / asset).read_bytes(), (self.defaults / asset).read_bytes())
+            else:
+                self.assertEqual((self.config / asset).readlink(), self.defaults / asset)
         for name in ("system", "commands", "skills"):
             self.assertEqual((self.config / name).resolve(), self.base / "resources" / name)
         self.assertFalse((self.config / 'gsd').exists())
-        (self.config / 'cli.json').unlink()
+        preferences = {"theme": {"name": "custom"}, "plugins": ["private-plugin"]}
+        (self.config / 'cli.json').write_text(json.dumps(preferences))
+        result = self.run_init()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.config / 'cli.json').read_text()), {
+            **preferences, "plugins": ["private-plugin", "./tui-plugins/session-title"],
+        })
         (self.config / 'cli.json').write_text('private cli config')
         result = self.run_init()
         self.assertNotEqual(result.returncode, 0)

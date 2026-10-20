@@ -1,7 +1,7 @@
 // Exercise actual VM startup shell/publication with only absolute paths relocated.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, readlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, readlink, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ async function fixture(t) {
   const canonical = JSON.stringify({ plugins: ['./plugins/first-prompt-title.js', './plugins/background-subagents.js'] });
   await writeFile(join(defaults, 'opencode.json'), canonical);
   for (const name of ['first-prompt-title', 'background-subagents']) await writeFile(join(defaults, `plugins/${name}.js`), `export default '${name}'`);
-  await writeFile(join(defaults, 'cli.json'), '{"plugins":["./tui-plugins/session-title.mjs"]}');
+  await writeFile(join(defaults, 'cli.json'), '{"plugins":["./tui-plugins/session-title"]}');
   await writeFile(join(defaults, 'tui-plugins/session-title.mjs'), 'export {}');
   await writeFile(join(defaults, 'tui-plugins/session-title/tui.js'), 'export {}');
   const helper = fileURLToPath(new URL('../scripts/publish-plugins.mjs', import.meta.url));
@@ -39,12 +39,99 @@ test('VM startup publishes V2 config, both server plugins and CLI assets before 
   assert.equal(first.status, 0, first.stderr);
   assert.equal(first.stdout, 'launched:exact argument');
   for (const relative of ['opencode.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
-    'cli.json', 'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js']) {
+    'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js']) {
     assert.equal(await readlink(join(f.destination, relative)), join(f.defaults, relative));
   }
+  assert.equal((await lstat(join(f.destination, 'cli.json'))).isFile(), true);
+  assert.equal(await readFile(join(f.destination, 'cli.json'), 'utf8'), await readFile(join(f.defaults, 'cli.json'), 'utf8'));
   assert.equal(f.launch().status, 0);
   await writeFile(join(f.defaults, 'plugins/background-subagents.js'), 'updated');
   assert.equal(await readFile(join(f.destination, 'plugins/background-subagents.js'), 'utf8'), 'updated');
+});
+
+test('existing CLI preferences allow startup and gain only required plugin registration idempotently', async t => {
+  const f = await fixture(t);
+  await mkdir(f.destination, { recursive: true });
+  const path = join(f.destination, 'cli.json');
+  const settings = { theme: { name: 'custom' }, keybinds: { leader: 'ctrl+x' }, plugins: ['private-plugin'] };
+  await writeFile(path, JSON.stringify(settings));
+  const sourceBefore = await readFile(join(f.defaults, 'cli.json'), 'utf8');
+  const first = f.launch();
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stdout, 'launched:exact argument');
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), {
+    ...settings, plugins: ['private-plugin', './tui-plugins/session-title'],
+  });
+  assert.equal((await lstat(path)).isFile(), true);
+  const after = await readFile(path, 'utf8');
+  assert.equal(f.launch().status, 0);
+  assert.equal(await readFile(path, 'utf8'), after);
+  assert.equal(await readFile(join(f.defaults, 'cli.json'), 'utf8'), sourceBefore);
+});
+
+test('existing CLI settings without plugins preserve preferences without applying public defaults', async t => {
+  const f = await fixture(t);
+  await mkdir(f.destination, { recursive: true });
+  const settings = { theme: { name: 'custom' }, custom: { enabled: false } };
+  await writeFile(join(f.destination, 'cli.json'), JSON.stringify(settings));
+  assert.equal(f.launch().status, 0);
+  assert.deepEqual(JSON.parse(await readFile(join(f.destination, 'cli.json'), 'utf8')), {
+    ...settings, plugins: ['./tui-plugins/session-title'],
+  });
+});
+
+test('already registered CLI plugin preserves bytes and configured plugin options', async t => {
+  for (const registration of ['./tui-plugins/session-title', ['./tui-plugins/session-title', { enabled: true }]]) {
+    const f = await fixture(t);
+    await mkdir(f.destination, { recursive: true });
+    const path = join(f.destination, 'cli.json');
+    const content = JSON.stringify({ plugins: [registration, 'private-plugin'], theme: { name: 'custom' } }, null, 4);
+    await writeFile(path, content);
+    const result = f.launch();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(await readFile(path, 'utf8'), content);
+  }
+});
+
+test('retired title-module registration is replaced without removing unrelated plugins', async t => {
+  const f = await fixture(t);
+  await mkdir(f.destination, { recursive: true });
+  await writeFile(join(f.destination, 'cli.json'), JSON.stringify({
+    plugins: ['private-plugin', './tui-plugins/session-title.mjs'], theme: { name: 'custom' },
+  }));
+  const result = f.launch();
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(await readFile(join(f.destination, 'cli.json'), 'utf8')), {
+    plugins: ['private-plugin', './tui-plugins/session-title'], theme: { name: 'custom' },
+  });
+});
+
+test('invalid CLI JSON or plugin-list shape is preserved and blocks before managed publication', async t => {
+  for (const content of ['{broken', 'null', '[]', '{"plugins":"private-plugin"}']) {
+    const f = await fixture(t);
+    await mkdir(f.destination, { recursive: true });
+    const path = join(f.destination, 'cli.json');
+    await writeFile(path, content);
+    const result = f.launch();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /invalid CLI configuration.*cli\.json/i);
+    assert.equal(result.stdout, '');
+    assert.equal(await readFile(path, 'utf8'), content);
+    await assert.rejects(readlink(join(f.destination, 'opencode.json')), { code: 'ENOENT' });
+  }
+});
+
+test('unknown CLI symlink is preserved without modifying its target', async t => {
+  const f = await fixture(t);
+  await mkdir(f.destination, { recursive: true });
+  const target = join(f.home, 'private-cli.json');
+  const content = '{"theme":{"name":"custom"}}';
+  await writeFile(target, content);
+  await symlink(target, join(f.destination, 'cli.json'));
+  const result = f.launch();
+  assert.notEqual(result.status, 0);
+  assert.equal(await readlink(join(f.destination, 'cli.json')), target);
+  assert.equal(await readFile(target, 'utf8'), content);
 });
 
 test('private config conflicts block launch and leave managed files/wrappers untouched', async t => {
@@ -65,7 +152,7 @@ test('private config conflicts block launch and leave managed files/wrappers unt
 test('promotes exact public V1 snapshot and retires only recognized wrappers; private state survives', async t => {
   const f = await fixture(t);
   await mkdir(join(f.destination, 'plugins'), { recursive: true });
-  const old = execFileSync('git', ['show', 'origin/master:opencode/.opencode/config/opencode.json'],
+  const old = execFileSync('git', ['show', 'c19d250:opencode/.opencode/config/opencode.json'],
     { cwd: fileURLToPath(new URL('../..', import.meta.url)) });
   await writeFile(join(f.destination, 'opencode.json'), old);
   await symlink('/opt/opencode/component/.opencode/config/plugins/kdco-notify.ts', join(f.destination, 'plugins/kdco-notify.ts'));
@@ -183,10 +270,12 @@ test('complete canonical public source closure publishes without docs/test entry
   const resources = fileURLToPath(new URL('../../agent', import.meta.url));
   await publishConfig(source, resources, f.destination);
   assert.equal(await readFile(join(f.destination, 'opencode.json'), 'utf8'), await readFile(join(source, 'opencode.json'), 'utf8'));
-  for (const relative of ['cli.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+  for (const relative of ['plugins/first-prompt-title.js', 'plugins/background-subagents.js',
     'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js']) {
     assert.equal(await readlink(join(f.destination, relative)), join(source, relative));
   }
+  assert.equal((await lstat(join(f.destination, 'cli.json'))).isFile(), true);
+  assert.equal(await readFile(join(f.destination, 'cli.json'), 'utf8'), await readFile(join(source, 'cli.json'), 'utf8'));
   for (const name of ['README.md', 'run-tests.mjs', 'session-title.test.mjs']) {
     await assert.rejects(readFile(join(f.destination, 'tui-plugins', name)), { code: 'ENOENT' });
   }

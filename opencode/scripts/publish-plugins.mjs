@@ -1,6 +1,6 @@
 // Shared V2 public configuration publisher. Callers hold resource then HOME locks.
 // No dependency installation, plugin imports, private-state copying or service control.
-import { mkdir, realpath, lstat, readlink, symlink, readdir, readFile, unlink, rename } from 'node:fs/promises';
+import { mkdir, realpath, lstat, readlink, symlink, readdir, readFile, writeFile, unlink, rename } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,6 +31,31 @@ async function physicalDirectory(path) {
     catch (error) { if (error.code !== 'EEXIST') throw error; }
     if (!(await lstat(current)).isDirectory()) throw new Error(`Redirected private directory refused: ${current}`);
   }
+}
+
+// CLI preferences belong to the user. Only reconcile maintained registrations;
+// never replace their theme, keybinds, or unrelated plugin settings with defaults.
+function reconcileCliPlugins(bytes, defaults, path) {
+  let config, maintained;
+  try {
+    config = JSON.parse(bytes.toString('utf8'));
+    maintained = JSON.parse(defaults.toString('utf8'));
+    for (const value of [config, maintained]) {
+      if (!value || Array.isArray(value) || typeof value !== 'object' ||
+          (value.plugins !== undefined && !Array.isArray(value.plugins))) throw new Error();
+    }
+  } catch {
+    throw new Error(`Invalid CLI configuration: ${path}; expected a JSON object with an optional plugins array. File preserved.`);
+  }
+  const required = maintained.plugins ?? [];
+  const current = config.plugins ?? [];
+  const plugins = current.filter(plugin =>
+    plugin !== './tui-plugins/session-title.mjs' || !required.includes('./tui-plugins/session-title'));
+  for (const plugin of required) {
+    if (!plugins.some(entry => (Array.isArray(entry) ? entry[0] : entry) === plugin)) plugins.push(plugin);
+  }
+  if (plugins.length === current.length && plugins.every((plugin, index) => plugin === current[index])) return;
+  return `${JSON.stringify({ ...config, plugins }, null, 2)}\n`;
 }
 
 export async function publishConfig(source, resources, destination) {
@@ -103,8 +128,18 @@ export async function publishConfig(source, resources, destination) {
     else throw new Error('Preserved conflicting configuration: opencode.jsonc');
   }
   const replace = new Set();
+  const cliWrites = new Map();
   for (const [name, from] of links) {
     const to = join(destination, name), info = await stat(to);
+    if (name === 'cli.json' && (!info || info.isFile())) {
+      const defaults = await readFile(from);
+      const bytes = info ? await readFile(to) : defaults;
+      cliWrites.set(name, {
+        bytes: reconcileCliPlugins(bytes, defaults, to) ?? (info ? undefined : bytes),
+        mode: info ? info.mode & 0o777 : 0o600,
+      });
+      continue;
+    }
     if (!info) continue;
     if (info.isSymbolicLink()) {
       const target = await readlink(to);
@@ -129,7 +164,15 @@ export async function publishConfig(source, resources, destination) {
   // resource/HOME locks serialize cooperating publishers, not active sessions.
   for (const [name, from] of links) {
     const to = join(destination, name);
-    if (replace.has(name)) {
+    if (cliWrites.has(name)) {
+      const { bytes, mode } = cliWrites.get(name);
+      if (bytes === undefined) continue;
+      const temporary = `${to}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, bytes, { flag: 'wx', mode });
+        await rename(temporary, to);
+      } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+    } else if (replace.has(name)) {
       const temporary = `${to}.${randomUUID()}.tmp`;
       try { await symlink(from, temporary); await rename(temporary, to); }
       finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
