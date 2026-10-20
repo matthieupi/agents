@@ -123,7 +123,7 @@ Use read-only agents for investigation when possible. When execution is requeste
 
 Review delegated work against the acceptance criteria, resolve gaps or contradictions, and integrate it into the final deliverable. Do not forward unverified outputs as if they were settled facts.
 
-**OpenCode V2 only:** Delegate both read-only and write-capable work with native `subagent({agent, description, prompt, background:true})`; background is the default and explicit `background:false` is allowed. Use `sessionID` for continuation, not legacy KDCO routing. Consume completion notifications without polling or sleeping; launch dependency-ready work without global wave barriers. Keep ownership non-overlapping, respect native permissions and depth limits, and end the response if no independent work is ready. Other harnesses use their own delegation tools.
+**OpenCode V2 only:** Delegate both read-only and write-capable work with native `subagent({agent, description, prompt, background:true})`; background is the default and explicit `background:false` is allowed. Use `sessionID` for continuation. Consume completion notifications; launch dependency-ready work without global wave barriers. Keep ownership non-overlapping, respect native permissions and depth limits, and end the response if no independent work is ready. Other harnesses use their own delegation tools.
 
 ## Tools and Evidence
 

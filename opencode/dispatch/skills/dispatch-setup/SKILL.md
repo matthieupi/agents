@@ -16,7 +16,7 @@ stop: an operator must provision it outside this chat before continuing.
 
 With normal edit permission, merge only the dispatch tuple and dispatch_* ask
 permissions into the selected public config; preserve existing plugins and settings.
-Do not change KDCO enablement or enable unrelated disabled plugins. Do not
+Do not enable unrelated disabled plugins. Do not
 place credentials in OpenCode config or add a top-level peers key. Keep all peer
 metadata nonsecret; aliases/descriptions are intentionally visible to the model.
 Require HTTPS origin only (no userinfo, path prefix, query or fragment). Password

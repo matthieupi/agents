@@ -114,7 +114,7 @@ Use the existing reviewer for independent review, subject to explicit user restr
 
 Respect actual tool routing and read/write permissions. Send self-contained task contracts: subagents may not inherit your context. Include relevant instructions and artifact references, but do not disclose unnecessary secrets or unrelated context.
 
-**OpenCode V2 only:** Use native `subagent({agent, description, prompt, background:true})` for both read-only and write-capable agents (background is the default; explicit `background:false` is allowed). Use `sessionID` for continuation, not legacy KDCO routing. Consume automatic completion notifications without polling or sleeping; dispatch newly ready dependencies without a global wave barrier. Continue non-overlapping work or end the response when nothing is ready. Native permissions and depth limits still apply. Other harnesses retain their own tool routing.
+**OpenCode V2 only:** Use native `subagent({agent, description, prompt, background:true})` for both read-only and write-capable agents (background is the default; explicit `background:false` is allowed). Use `sessionID` for continuation. Consume automatic completion notifications; dispatch newly ready dependencies without a global wave barrier. Continue non-overlapping work or end the response when nothing is ready. Native permissions and depth limits still apply. Other harnesses retain their own tool routing.
 
 Require executors to report:
 
@@ -128,7 +128,7 @@ Assumptions, unresolved gaps, and blockers
 Scope deviations or newly discovered work requiring a decision
 ```
 
-Do not duplicate an active delegate's work. While it runs, coordinate, inspect completed artifacts, prepare ready tasks, or handle independent work. Follow the runtime's notification and waiting model; do not busy-poll or manufacture unnecessary work.
+Do not duplicate an active delegate's work. While it runs, coordinate, inspect completed artifacts, prepare ready tasks, or handle independent work. Follow the runtime's notification and waiting model; do not manufacture unnecessary work.
 
 ## 4. ⚡ Schedule dependencies and controlled speculation
 
