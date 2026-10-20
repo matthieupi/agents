@@ -8,8 +8,7 @@ services:
       dockerfile: paseo-deamon/Dockerfile
       args:
         PASEO_BASE: ${PASEO_BASE:?set reviewed official version and digest}
-        PASEO_VERSION: ${PASEO_VERSION:?set exact stable version}
-        OPENCODE_VERSION: ${OPENCODE_VERSION:?set exact stable version}
+        PASEO_VERSION: ${PASEO_VERSION:?set exact stable version >=0.12.0}
         PASEO_RUNTIME_UID: ${PASEO_UID:-1000}
         PASEO_RUNTIME_GID: ${PASEO_GID:-1000}
     user: "${PASEO_UID:-1000}:${PASEO_GID:-1000}"
@@ -57,8 +56,8 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${OPENCODE_TUI_CONFIG_PATH:?set managed tui.json}
-        target: /home/paseo/.config/opencode/tui.json
+        source: ${OPENCODE_CLI_CONFIG_PATH:?set managed cli.json}
+        target: /home/paseo/.config/opencode/cli.json
         read_only: true
         bind: {create_host_path: false}
       - type: bind
@@ -77,13 +76,13 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${AGENT_RESOURCES_PATH:?set managed agent tree}/gsd
-        target: /home/paseo/.config/opencode/gsd
+        source: ${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}
+        target: /home/paseo/.config/opencode/plugins
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${OPENCODE_PLUGINS_PATH:?set managed plugins directory}
-        target: /home/paseo/.config/opencode/plugins
+        source: ${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}
+        target: /home/paseo/.config/opencode/tui-plugins
         read_only: true
         bind: {create_host_path: false}
       - type: bind

@@ -7,9 +7,6 @@ import re
 import stat
 
 
-KDCO_SOURCE = Path("/opt/opencode/component/.opencode/config/kdco")
-
-
 def validate_config(path: Path) -> dict:
     metadata = path.lstat()
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
@@ -24,33 +21,12 @@ def validate_config(path: Path) -> dict:
     return config
 
 
-def ensure_kdco_link(config_home: Path, source: Path = KDCO_SOURCE) -> None:
-    """Expose the baked KDCO tree through the private ephemeral config root."""
-    target = config_home / "opencode" / "kdco"
-    if not source.is_dir() or source.is_symlink():
-        raise ValueError("Unexpected KDCO source asset path")
-    if not target.parent.is_dir() or target.parent.is_symlink():
-        raise ValueError("Unexpected KDCO config root")
-    try:
-        existing = target.readlink()
-    except FileNotFoundError:
-        target.symlink_to(source, target_is_directory=True)
-    except OSError as error:
-        raise ValueError("Unexpected KDCO runtime asset path") from error
-    else:
-        if existing != source:
-            raise ValueError("Unexpected KDCO runtime asset path")
-
-
 def main() -> None:
     if os.getuid() == 0 or os.getgid() == 0:
         raise ValueError("Numeric non-root UID and GID required")
     if "PASEO_PASSWORD" in os.environ:
         raise ValueError("Plaintext password environment overrides are forbidden")
     os.umask(0o077)
-    # The private ephemeral config root keeps the baked KDCO dependency outside
-    # the suppressed upstream HOME volume; host-provided descendants stay RO.
-    ensure_kdco_link(Path(os.environ["XDG_CONFIG_HOME"]))
     home = Path(os.environ["PASEO_HOME"])
     validate_config(home / "config.json")
     # Locks survive exec and prevent concurrent component writers, without a broker.

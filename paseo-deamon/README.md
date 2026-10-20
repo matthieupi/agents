@@ -1,180 +1,130 @@
-# Paseo execution daemon + embedded OpenCode
+# Paseo execution daemon + native OpenCode V2
+
+📍 The spelling **paseo-deamon** is intentional. The maintained VM interface is an
+ordinary Compose service, not the retired runtime/venv lifecycle. These are source
+changes only: no image build, live deployment or provider acceptance is claimed.
 
 ## Standard VM Compose service
 
-The new `docker-compose.j2` / `env.j2` / `config.json.j2` and
-`Dockerfile.service` use one `agent` account with NSS-derived IDs. See
-[VM service inputs](../VM-SERVICES.md) for metadata, the finite named OpenCode
-build context, local state, credential ownership and parent integration.
-Paseo still owns embedded OpenCode and native auth/Origin. No workstation SSH or
-provider HOME is mounted. This new path is source-only, not built or accepted.
-The existing standalone `compose.yaml` / `Dockerfile` instructions below describe
-the separate retained component interface, not the new VM identity or delivery.
-
-📍 Spelling **paseo-deamon** is intentional. This component remains the maintained
-image/runtime ingredient. VM deployment uses the ordinary service catalog rather
-than the retired dedicated lifecycle. No live deployment or adapter patch is
-implied; acceptance remains deferred.
+`docker-compose.j2`, `env.j2`, `config.json.j2` and `Dockerfile.service` retain the
+ordinary service catalog interface and canonical `agent` NSS UID/GID. See
+[VM service inputs](../VM-SERVICES.md) for parent delivery and ingress ownership.
 
 ```text
-future TLS proxy -> loopback published Paseo :6767
-                          |
-                          +-> upstream OpenCode adapter -> opencode serve child
-                                 | managed config (RO)
-                                 | dedicated provider state (RW)
-                                 + workspace + execution egress
+parent finite public staging -> named opencode-inputs build context
+                               installer + publisher + service wrapper
+parent config delivery ------> /opt/opencode-defaults + /opt/agent (read-only)
+                               |
+                        shared service-entrypoint
+                               |
+                        native Paseo supervisor
+                               |
+                        embedded OpenCode V2 child
 ```
 
-OpenCode is installed in the same image. Paseo owns its child process; do not
-configure an existing OpenCode URL or start a second server in this component.
-Pi and other CLIs are not installed or assumed. The existing hub stays on its
-existing internal/no-egress network; this separate Compose bridge permits provider,
-Git and package-registry egress. It is not a destination-filtering firewall.
+The inherited `/opt/opencode/service-entrypoint.sh` makes one config-publication
+call before executing the daemon entrypoint:
 
-## Discovery mapping and identity
-
-Sources below are relative to `services/agents` unless a variable is named.
-Set source variables to **absolute, reviewed paths**, not an entire host HOME.
-
-| Repository source / selector | Container discovery destination |
-|---|---|
-| `opencode/.opencode/config/opencode.json` / `OPENCODE_CONFIG_PATH` | `/home/paseo/.config/opencode/opencode.json` |
-| `opencode/.opencode/config/tui.json` / `OPENCODE_TUI_CONFIG_PATH` | same directory, `tui.json` |
-| `agent/commands` / `AGENT_RESOURCES_PATH/commands` | same directory, `commands/` |
-| `agent/skills` / `AGENT_RESOURCES_PATH/skills` | same directory, `skills/` |
-| `agent/system` / `AGENT_RESOURCES_PATH/system` | same directory, `system/` |
-| `agent/gsd` / `AGENT_RESOURCES_PATH/gsd` | same directory, `gsd/` |
-| `opencode/.opencode/config/plugins` / `OPENCODE_PLUGINS_PATH` | same directory, `plugins/` (all four current entrypoints) |
-| `opencode/.opencode/config/kdco` | image-installed locked package, linked as same directory's `kdco/` |
-| `SSH_DIR_PATH` (existing identity selector convention) | `/home/paseo/.ssh`, read-only |
-| `GITCONFIG_PATH` (existing identity selector convention) | `/home/paseo/.gitconfig`, read-only |
-| `WORKSPACE_PATH` | `/workspace`, read-write; keep this path stable across recreations |
-
-`HOME=/home/paseo`, `XDG_CONFIG_HOME=/home/paseo/.config`,
-`OPENCODE_CONFIG_DIR=/home/paseo/.config/opencode`, and `OPENCODE_CONFIG` explicitly
-point the inherited child environment at these destinations. `system/` is **not**
-an independent agent registration mechanism: the canonical JSON owns agent names,
-permissions and `{file:./system/...}` / `{file:./gsd/...}` prompt references.
-No duplicate `~/.agents` discovery links are published. Repository resource trees
-currently contain nested symlinks; review their resolved closure before exposure.
-The component does not repair the shared trees or claim recursive discovery safety.
-
-Plugin entrypoints stay enabled, including `first-prompt-title.js` and the three
-KDCO plugins. Their executable code is deliberately trusted, not harmless data.
-KDCO source/dependencies are baked using the maintained lock; rebuild whenever its
-source/lock or the mounted KDCO entrypoints change. Do not mix incompatible revisions.
-The config-root `package-lock.json` is not mounted: it is not agent registration,
-and KDCO owns a separate maintained nested manifest/lock.
-
-The config root is a private, bounded, ephemeral tmpfs so startup can create the
-single `kdco/` symlink to its immutable baked source. It is not host state and is
-discarded on recreation. Every managed config file, resource tree, plugin, SSH
-directory and Git file remains an explicit read-only descendant mount. OpenCode may
-attempt its own dependency preparation when loading a project; this component adds
-**no** startup installer and does not disable plugin/skill discovery to conceal
-failures. Read-only managed config, local plugins, built-in provider plugins and
-fresh-cache behavior require actual image acceptance. Project-triggered package/tool
-downloads are distinct from installing/updating daemon/CLI binaries and remain
-execution authority of trusted projects. Do not call this an offline runtime.
-
-## Private state and confinement
-
-Prepare new, disjoint, UID-owned **0700** directories:
-
-| Selector | Container target | Ownership |
-|---|---|---|
-| `PASEO_STATE_PATH` | `/state/paseo` (`PASEO_HOME`) | Paseo session/device/log state only |
-| `PASEO_PROVIDER_STATE_PATH` | `/state/provider` | fresh OpenCode `data/`, `cache/`, `state/` via XDG |
-| `PASEO_CONFIG_PATH` | `/state/paseo/config.json`, read-only | protected native config, owner-only 0600/0400 |
-
-Never select the existing OpenCode server's data/cache/state or HOME; never overlap
-either state directory with the workspace, identities, config sources, or each
-other. Host path review is mandatory: runtime locks cannot identify an unrelated
-server's state. The component holds advisory locks on both state roots across exec;
-all launches sharing them must honor those locks. One instance only. Authenticate
-providers independently into this new state; do not copy credentials. No provider
-secrets are baked, forwarded implicitly, or included in Compose examples.
-
-Numeric `PASEO_UID:PASEO_GID` defaults to `1000:1000`; both values are required
-Docker build inputs as well as runtime settings. OpenCode installation remains a
-build-time `1000:1000` operation, after which the image maps only its existing
-`paseo` passwd/group and image-owned directories to the requested positive non-root
-IDs. Missing, zero, malformed, out-of-range, or passwd/group-colliding IDs fail the
-build. There is no runtime fallback, root startup chown, host account mutation,
-sudo, socket, Docker group, privileged broker or host-network mode. Capabilities
-are dropped and no-new-privileges is enabled; rootfs is read-only. Writable paths
-are the workspace, dedicated state and bounded `/tmp`. The upstream anonymous HOME
-volume is suppressed by a tiny `/home/paseo` tmpfs owned by the configured numeric
-UID/GID. A second, equally private bounded tmpfs at
-`/home/paseo/.config/opencode` prevents root-owned bind-target parents from blocking
-startup; managed descendants mount read-only above it. Startup creates only an exact
-symlink from `kdco/` to the immutable baked KDCO source—no dependency tree is copied.
-No host HOME is mounted.
-
-Read-only SSH means no interactive known-host enrollment here. Supply reviewed
-known_hosts beforehand and least-privilege keys; do not disable verification.
-Use an empty dedicated SSH directory and empty Git file when no identity is needed.
-Workspace content and config plugins can execute with all these granted rights;
-this is a container boundary, not per-agent credential isolation.
-
-The VM Compose template omits host SSH and Git identity mounts and uses baked KDCO
-inputs, not the standalone public-config projection described above. Authenticate
-providers in its dedicated state; extend identity exposure only through review.
-
-## Native auth configuration
-
-`config.example.json` is deliberately **not startable**. Native shape:
-
-```text
-version: 1
-daemon.listen: string (container default 0.0.0.0:6767)
-daemon.auth.password: bcrypt hash string ($2a/$2b/$2y, cost 10..16)
-daemon.relay.enabled: false
-daemon.mcp.enabled: false
-features.webUi.enabled: true
-worktrees.root: /workspace/.paseo-worktrees
+```sh
+node /opt/opencode/component/scripts/publish-plugins.mjs config /opt/opencode-defaults /opt/agent "$OPENCODE_CONFIG_DIR"
 ```
 
-As the selected ordinary account, prepare a private new staging home and place the
-example there as `config.json`. With an already installed, reviewed Paseo version:
+The named context contains only `scripts/entrypoint.sh`,
+`scripts/publish-plugins.mjs` and `service-entrypoint.sh`. Public config and resource
+trees are runtime mounts, not copied checkout contents or image dependencies.
+The local service build context admits only `entry.py` and `verify-paseo.mjs`.
+Parent delivery must include the verifier alongside the existing entrypoint.
+See the [shared update/conflict contract](../opencode/README.md#shared-workstation-configuration-on-vm-consumers).
+
+The VM HOME is ephemeral. Only dedicated daemon/provider state and the workspace
+are writable host binds; no workstation SSH, Git identity or provider HOME is
+mounted. Authenticate providers independently into this state, without copying
+credentials. Shared config keeps canonical models, agents and permissions; no
+separate VM agent policy or registration is introduced.
+
+## Build and provider compatibility
+
+- Select an externally reviewed official `PASEO_BASE` image pinned by version and
+  digest and matching exact stable `PASEO_VERSION` **>=0.12.0**. Existing configured
+  image/version values are not silently replaced by this source change.
+- Both Dockerfiles execute `verify-paseo.mjs` against the installed CLI/server
+  packages. It checks exact package versions, the native `@opencode/client` V2
+  dependency and published V2 provider module paths. Paseo 0.12.0's published
+  server contains actual V2 runtime detection; old adapters are not supported by
+  merely changing a version string. Packaging drift requires explicit review.
+- OpenCode uses `opencode/scripts/entrypoint.sh:install_runtime()` to install
+  **`@opencode/cli@latest`** at build time into the scoped
+  `/opt/opencode/component/.runtime` prefix. The shared verifier checks installed
+  package metadata against isolated native CLI output. No OpenCode version input
+  is required; startup never installs or updates the CLI.
+- Images record `/opt/opencode-version.txt`, `/opt/opencode-install.json` and
+  `/opt/paseo-version.txt`. Record those alongside image ID/digest, platform and
+  source revision after a real build. `latest` is intentional, not a reproducible
+  transitive dependency lock; refresh only through an explicit reviewed rebuild.
+
+Paseo owns embedded OpenCode and its generated secured backend credential. Do not
+start another `serve` wrapper, configure an external OpenCode URL, publish the
+child port or substitute the parent web service's password. Paseo native bcrypt
+auth, Host/Origin controls and parent TLS ingress remain separate boundaries.
+
+## Native auth, state and confinement
+
+`entry.py` retains native owner-only bcrypt config validation and advisory locks on
+both state roots across exec. Prepare disjoint UID-owned mode-0700 daemon and
+provider directories, and an agent-owned mode-0600 protected `config.json`.
+`config.json.j2` consumes the existing protected hash, never a plaintext password
+environment override. Parent rendering must suppress logs/diffs for this file.
+
+For standalone preparation, `config.example.json` is deliberately not startable.
+As the selected ordinary account, use a fresh private staging HOME and an already
+reviewed Paseo CLI's interactive native command:
 
 ```sh
 paseo daemon set-password --home /absolute/private/staging-home
 ```
 
-Use its interactive prompt, never passwords in env, argv, URLs, shell history or
-examples. This writes the native bcrypt hash. Set `PASEO_CONFIG_PATH` to that
-owner-only file. Do not point the command at a live daemon or the read-only mounted
-file. A built image can also run this native command with `--entrypoint paseo`,
-`--user <uid>:<gid>`, `--network none` and **only** the private staging-home bind;
-no published ports. No such operation was run in this workstream.
+Do not place passwords in argv, environment, URLs, examples or shell history, and
+do not run this against a live daemon or read-only mounted config. No credential
+generation or live-state operation was performed by this merge.
 
-Startup rejects missing/example/plaintext auth and insecure ownership/mode, then
-executes the upstream foreground supervisor. Upstream schema validation still owns
-the complete config. Change auth through the protected source and explicitly
-recreate later; no auto-restart/reload workflow is introduced. Bcrypt does not
-replace TLS. Static web UI and `/api/health` are public upstream; verify other HTTP
-and WebSocket surfaces reject missing/incorrect passwords before acceptance.
+The VM service retains read-only rootfs, dropped capabilities,
+`no-new-privileges`, bounded tmpfs, loopback publication and native healthcheck.
+Only OpenCode is enabled; other providers, relay, MCP, service proxy, terminal
+hooks and voice features remain disabled. Public `/api/health` does not establish
+authenticated API/WebSocket or provider acceptance.
 
-## Explicit build/update (native commands only)
+## Retained standalone Compose interface
 
-No build ran here. Registry metadata observed on 2026-09-12: OpenCode **1.18.30**,
-Paseo CLI **0.8.0**. These are observations, not installed-version evidence or a
-compatibility claim. The website still labels 0.8 beta; use registry/release
-verification rather than inferring freshness from prose.
+`compose.yaml` / `Dockerfile` remain a separate local component interface, not the
+VM identity/delivery contract. The build context is the repository parent (`..`),
+with a finite Dockerfile-specific ignore file. Runtime UID/GID defaults remain
+`1000:1000`; the image remaps only its existing account and image-owned paths.
+No root startup chown, host account changes or privilege grants are introduced.
 
-1. Read current stable metadata (`npm view opencode-ai dist-tags.latest` and
-   `npm view @getpaseo/cli dist-tags.latest`, or the registry endpoints below).
-   These commands query metadata; do not run `npm install` on the host.
-2. Review the corresponding exact official image and release:
-   `docker buildx imagetools inspect ghcr.io/getpaseo/paseo:<stable-version>`.
-   Set `PASEO_BASE=ghcr.io/getpaseo/paseo:<stable-version>@sha256:<reviewed-digest>`.
-   Select the native host platform; no implicit remote builder or emulation.
-3. Set exact stable `PASEO_VERSION`, `OPENCODE_VERSION`, and a new local
-   `PASEO_IMAGE` tag. Set all required source/state/identity variables above.
-   Use a private operator env file (never commit it). Compose does not hash secrets
-   and its render must never contain plaintext passwords.
-4. From this directory, with an explicitly inspected **local** Docker context:
+Set reviewed absolute paths; never select a whole HOME or existing server state:
+
+| Selector | Container destination |
+|---|---|
+| `WORKSPACE_PATH` | `/workspace`, read-write |
+| `PASEO_STATE_PATH` | `/state/paseo`, private daemon state |
+| `PASEO_PROVIDER_STATE_PATH` | `/state/provider`, fresh provider XDG state |
+| `PASEO_CONFIG_PATH` | `/state/paseo/config.json`, read-only |
+| `OPENCODE_CONFIG_PATH` | `~/.config/opencode/opencode.json`, read-only V2 config |
+| `OPENCODE_CLI_CONFIG_PATH` | same directory, `cli.json` |
+| `AGENT_RESOURCES_PATH/{commands,skills,system}` | same directory, matching resource tree |
+| `OPENCODE_PLUGINS_PATH` | same directory, `plugins/` |
+| `OPENCODE_TUI_PLUGINS_PATH` | same directory, `tui-plugins/` |
+| `SSH_DIR_PATH`, `GITCONFIG_PATH` | `~/.ssh`, `~/.gitconfig`, read-only |
+
+Here `~` means `/home/paseo`. Supply a dedicated empty SSH directory and Git file
+if no identity is needed. Pre-enroll reviewed known_hosts; never disable host
+verification. Config/plugin/resource trees are trusted executable inputs: inspect
+their symlink closure and do not mount dependency trees or private files.
+No obsolete resource projection or plugin dependency installation is revived.
+
+Select a local `PASEO_IMAGE` tag, `PASEO_BASE`, `PASEO_VERSION` and source/state
+paths in a private operator env file. Inspect both Docker context and Buildx
+builder endpoints before a separately approved local build:
 
 ```sh
 docker context inspect <local-context>
@@ -183,95 +133,48 @@ docker --context <local-context> compose --env-file /absolute/private/component.
 docker --context <local-context> image inspect <new-local-image-tag>
 ```
 
-Review context endpoint AND Buildx builder endpoint before building. Do not run
-against TCP/SSH/remote Docker. `--pull` is an explicit build-time base refresh,
-constrained by its digest, not startup behavior. The Dockerfile context is exactly
-`services/agents` (`..` in Compose), Dockerfile `paseo-deamon/Dockerfile`.
-Its Dockerfile-specific ignore file admits only startup code, the maintained native
-installer, publication helper and KDCO public sources/lock. No config credentials,
-private runtime, other services or whole checkout are copied into the image.
+Do not build against TCP/SSH/remote Docker. Later approved startup uses
+`up --no-build --pull never`; this source work authorizes no activation.
+Standalone loopback publication defaults to `127.0.0.1:6767`; bridge execution
+egress is not a destination-filtering firewall or a substitute for TLS.
 
-Paseo installation is inherited from its official version/digest image; OpenCode
-installation reuses `opencode/scripts/entrypoint.sh:install_runtime()` (also used
-by the ordinary VM images). No independent package installer is
-introduced. Required helper is copied to `component/scripts/publish-plugins.mjs`.
-Build checks actual OpenCode output and both Paseo package versions; records them
-in `/opt/opencode-version.txt` and `/opt/paseo-version.txt`. Record those plus image
-ID/digest/platform and source revision in the approved deployment record after a real build.
-Exact direct versions are not a fully reproducible OS/transitive-dependency lock;
-the existing native installer permits lifecycle hooks and registry access at build.
-
-Updating means repeat metadata/release review, change explicit inputs, rebuild,
-verify, then choose new private state or perform a separately reviewed state
-migration/backup. No startup pull, package installer, update timer or automatic
-activation. Compose `pull_policy: never`; later approved startup must use
-`up --no-build --pull never`. This source cleanup grants no deployment authorization.
-
-## Method Signature Surface
-
-```python
-# entry.py (new)
-def validate_config(path: Path) -> dict: ...
-def ensure_kdco_link(config_home: Path, source: Path = KDCO_SOURCE) -> None: ...
-def main() -> None: ...
-```
-
-```text
-# maintained dependency, reused read-only, not changed
-opencode/scripts/entrypoint.sh: install_runtime()  [Bash subshell function]
-# tests/test_component.py (new unittest methods; no custom fixtures/helpers)
-ComponentTests.test_native_auth_validation(self)
-ComponentTests.test_kdco_link_is_safe_and_never_copies(self)
-ComponentTests.test_mount_mapping_and_real_prompt_parity(self)
-ComponentTests.test_confinement(self)
-ComponentTests.test_maintained_installer_and_no_startup_install(self)
-ComponentTests.test_real_compose_render(self)
-```
-
-## Verification and acceptance gates
+## Verification and deferred acceptance
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+node --test paseo-deamon/tests/verify-paseo.test.mjs
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s paseo-deamon/tests -p 'test_service.py' -v
 git diff --check -- paseo-deamon
 ```
 
-Tests require existing PyYAML (no automatic install). They validate native auth
-shape/modes, actual repository prompt references, mount parity and privilege
-invariants. The render test invokes real `docker compose config`, without contacting
-a daemon; it skips explicitly when Docker is absent. YAML parsing is not Compose
-rendering. Synthetic bcrypt syntax is not an authentication test.
+Rendering requires Jinja2/PyYAML and Compose config support. To bypass a Docker
+CLI shim or missing plugin, explicitly select a standalone Compose executable:
 
-After a reviewed local build, with **fresh disposable state and a trusted empty
-workspace**, use native Compose `run --rm --no-deps --entrypoint opencode paseo
-debug config`, `debug skill`, and `agent list` (no service ports). These commands
-execute real discovery and potentially trusted plugins; they are not part of the
-default tests. Verify canonical agents/permissions, GSD commands, skills and four
-local plugin paths. Check logs for read-only/dependency errors and resolved links.
-Use only private disposable output: resolved configuration can contain credentials.
-Do not run discovery against the existing server HOME. Global config dependency
-preparation/plugin loading must pass without introducing a startup installer;
-if it fails, extend the maintained build-time ingredient in a separately scoped
-change rather than disabling discovery or making shared config writable.
+```sh
+DOCKER_COMPOSE_BINARY=/absolute/path/to/docker-compose PYTHONDONTWRITEBYTECODE=1 \
+  /workspace/opencode-migration-checks/bin/python -m unittest discover -s paseo-deamon/tests -p 'test_service.py' -v
+```
 
-| Gate still required | Evidence needed |
-|---|---|
-| Local build/platform | actual version files, image ID, native platform, upstream entrypoint compatibility |
-| Real discovery | complete agents/commands/skills/plugins, fresh-cache behavior, no symlink loops |
-| Paseo integration | provider availability, Paseo-owned `opencode serve` child, successful session/tool work |
-| Security | missing/wrong auth rejected for API/WS, correct bcrypt auth succeeds, no child port published |
-| State/runtime | provider login in new state, lock exclusion, signal/restart behavior, arbitrary UID if selected |
-| Network/TLS | execution egress, loopback bind, future proxy HTTP + WS routing, exact hostnames/trusted proxies |
-| Infrastructure | explicit target/account/path decisions and later Ansible wiring; hub unchanged |
+The override accepts an executable path, not a shell command. Tests invoke it
+directly (without the `docker compose` prefix), with isolated HOME/Docker config.
+An unsupported default Docker Compose config command skips with this setup hint;
+invalid templates and a broken explicit override still fail. Render cases cover
+Paseo, Paperclip with/without its socket grant, and OpenCode with/without its socket
+grant, including backend auth, exact serve arguments and health-helper COPY closure.
 
-No live port was exposed. Default publication is configurable loopback
-`PASEO_BIND_ADDRESS=127.0.0.1`, `PASEO_PORT=6767`; changing the address is an explicit
-exposure decision, not a TLS substitute. Future TLS integration must keep native
-auth, route WebSocket upgrades, constrain hostnames and trusted proxies, and avoid
-attaching this execution daemon to the hub's internal network just to gain routing.
+Tests use synthetic temporary package fixtures and rendered public templates;
+they do not install packages, access credentials or touch live state. The old
+component/projection test suite and progress document are retired, not restored.
+Cross-file checks derive the publisher command from the shared entrypoint and
+resolve its installed source through all three service Dockerfiles. Disposable
+COPY-layout fixtures execute both daemon wrapper chains with a stub publisher
+and terminal service, proving the installed path is reached exactly once before
+handoff. They are not image builds: only absolute fixture paths are rebased;
+account switching and actual daemon/sshd execution are not exercised.
 
-Read-only references: upstream `docs/docker.md`, configuration docs at
-https://paseo.sh/docs/configuration, official `docker/base/Dockerfile` and its
-`paseo-docker-entrypoint`, plus registry metadata at
-https://registry.npmjs.org/opencode-ai/latest and
-https://registry.npmjs.org/@getpaseo/cli/latest. Upstream contracts can drift; the
-selected image's paths/version checks must pass before use.
+🧪 Still required after parent integration: finite-input delivery including the
+verifier, native image builds on the selected platform, actual version records,
+fresh-state native config/agent/skill/plugin discovery, V2 provider session/tool
+work, generated child password behavior, correct/wrong/missing auth for API/WS,
+exact Host/Origin/TLS/streaming ingress, state exclusion and signal/restart tests.
+Preserve existing parent credential custody; do not rotate or copy secrets to
+make acceptance pass.

@@ -5,6 +5,7 @@ FROM node:22-bookworm
 LABEL maintainer="sys-ops"
 LABEL description="OpenCode Containerized AI Coding Assistant"
 LABEL version="1.0.0"
+LABEL dev.xmist.opencode.lifecycle="v2-serve-1"
 
 # Avoid prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -67,28 +68,31 @@ RUN mkdir -p /home/opencode/.config/opencode \
     && chown -R opencode:opencode /home/opencode
 
 # Install OpenCode globally
-RUN npm install -g opencode-ai@latest \
+RUN npm install -g @opencode/cli@latest \
     && npm cache clean --force
 
-# Public defaults; a mounted config gets dependencies through init.sh instead.
-COPY .opencode/config/kdco /opt/opencode-defaults/kdco/
-COPY .opencode/config/plugins/kdco-*.ts /opt/opencode-defaults/plugins/
-COPY scripts/publish-plugins.mjs /opt/opencode-publish-plugins.mjs
-RUN npm ci --prefix /opt/opencode-defaults/kdco --ignore-scripts --no-audit --no-fund
+# Canonical native config and title assets; bind mounts use these same paths.
+COPY init.sh scripts/docker-* /opt/harness/
+RUN chmod 0755 /opt/harness && chmod 0644 /opt/harness/*
+COPY scripts/publish-plugins.mjs /opt/opencode/publish-plugins.mjs
+COPY .opencode/config/opencode.json .opencode/config/cli.json /opt/opencode-defaults/
+COPY .opencode/config/plugins/first-prompt-title.js /opt/opencode-defaults/plugins/
+COPY .opencode/config/plugins/background-subagents.js /opt/opencode-defaults/plugins/
+COPY .opencode/config/tui-plugins/session-title.mjs /opt/opencode-defaults/tui-plugins/
+COPY .opencode/config/tui-plugins/session-title/tui.js /opt/opencode-defaults/tui-plugins/session-title/
 
 # Preinstall Playwright for frontend workflows
 RUN npm install -g playwright \
     && playwright install --with-deps chromium
 
-COPY init.sh backend-health.mjs /opt/harness/
-ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_EXPERIMENTAL_WORKSPACES=1
-# Authenticated HTTP health, allowing time for first-run dependency installation.
+# Readiness checks the authenticated V2 API, not merely the installed binary.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD node /opt/harness/backend-health.mjs
+    CMD python3 /opt/harness/docker-health.py
 
 # Switch to opencode user
 USER opencode
 WORKDIR /workspace
 
-# One foreground backend; terminals use opencode attach.
-CMD ["bash", "-lc", "/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false"]
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_EXPERIMENTAL_WORKSPACES=1
+ENV OPENCODE_DOCKER_PORT=4096 OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
+CMD ["bash", "/opt/harness/docker-server.sh"]

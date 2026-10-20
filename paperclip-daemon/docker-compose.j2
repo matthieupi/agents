@@ -6,7 +6,6 @@ services:
       additional_contexts:
         opencode_inputs: {{ service_config.opencode_build_context | to_json }}
       args:
-        OPENCODE_VERSION: {{ service_config.opencode_version | to_json }}
         PI_VERSION: {{ service_config.pi_version | to_json }}
         AGENT_UID: {{ agent_uid | string | to_json }}
         AGENT_GID: {{ agent_gid | string | to_json }}
@@ -28,6 +27,16 @@ services:
       - "{{ ansible_host }}:{{ service_config.host_port }}:{{ service_config.container_port }}"
     networks: [backends]
     volumes:
+      - type: bind
+        source: {{ (opencode_config_source_path ~ '/agent') | to_json }}
+        target: /opt/agent
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (opencode_config_source_path ~ '/opencode/.opencode/config') | to_json }}
+        target: /opt/opencode-defaults
+        read_only: true
+        bind: {create_host_path: false}
       - type: bind
         source: {{ agent_home | to_json }}
         target: {{ agent_home | to_json }}

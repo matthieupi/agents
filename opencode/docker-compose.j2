@@ -4,7 +4,6 @@ services:
       context: .
       dockerfile: Dockerfile.service
       args:
-        OPENCODE_VERSION: {{ service_config.version | to_json }}
         AGENT_UID: {{ agent_uid | string | to_json }}
         AGENT_GID: {{ agent_gid | string | to_json }}
     user: "{{ agent_uid }}:{{ agent_gid }}"
@@ -16,21 +15,15 @@ services:
     cpus: {{ service_config.cpus }}
     working_dir: {{ agent_workspace | to_json }}
     env_file: [.env]
-    # Gateway-only auth; do not inherit native web credentials at server launch.
+    # Gateway authentication is separate from V2's required backend credential.
+    # The proxy must replace client Authorization with backend Basic auth.
     command:
-      - env
-      - -u
-      - OPENCODE_SERVER_PASSWORD
-      - -u
-      - OPENCODE_SERVER_USERNAME
       - opencode
-      - web
+      - serve
       - --hostname
       - "0.0.0.0"
       - --port
       - {{ service_config.container_port | string | to_json }}
-      - --mdns
-      - "false"
 {% for origin in service_config.allowed_origins %}
       - --cors
       - {{ origin | to_json }}
@@ -39,6 +32,16 @@ services:
       - "127.0.0.1:{{ service_config.upstream_port }}:{{ service_config.container_port }}"
     networks: [backends]
     volumes:
+      - type: bind
+        source: {{ (opencode_config_source_path ~ '/agent') | to_json }}
+        target: /opt/agent
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: {{ (opencode_config_source_path ~ '/opencode/.opencode/config') | to_json }}
+        target: /opt/opencode-defaults
+        read_only: true
+        bind: {create_host_path: false}
       - type: bind
         source: {{ agent_home | to_json }}
         target: {{ agent_home | to_json }}
@@ -55,7 +58,7 @@ services:
     group_add: [{{ agent_docker_gid | string | to_json }}]
 {% endif %}
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:{{ service_config.container_port }}/global/health').then(async r=>process.exit(r.ok&&(await r.json()).healthy===true?0:1)).catch(()=>process.exit(1))"]
+      test: [CMD, node, /opt/opencode/backend-health.mjs, "{{ service_config.container_port }}"]
       interval: 30s
       timeout: 5s
       retries: 3

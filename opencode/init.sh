@@ -1,74 +1,6 @@
 #!/bin/bash
+# Publish maintained V2 inputs without copying or overwriting private HOME state.
 set -euo pipefail
-
-HOME_ROOT="/home/opencode"
-DEFAULTS_ROOT="/opt/agent"
-
-dir_empty() {
-    local path="$1"
-    [[ -d "$path" && -z "$(ls -A "$path" 2>/dev/null)" ]]
-}
-
-next_backup_path() {
-    local path="$1"
-    local candidate="${path}.local"
-    local index=1
-
-    while [[ -e "$candidate" || -L "$candidate" ]]; do
-        candidate="${path}.local.${index}"
-        index=$((index + 1))
-    done
-
-    printf '%s\n' "$candidate"
-}
-
-ensure_real_dir() {
-    local path="$1"
-
-    if [[ -L "$path" ]]; then
-        rm -f "$path"
-    elif [[ -e "$path" && ! -d "$path" ]]; then
-        rm -f "$path"
-    fi
-
-    mkdir -p "$path"
-}
-
-link_path() {
-    local current_path="$1"
-    local shared_path="$2"
-
-    if [[ -L "$current_path" ]]; then
-        [[ "$(readlink -- "$current_path")" != "$shared_path" ]] || return 0
-        rm -f "$current_path"
-    elif [[ -e "$current_path" ]]; then
-        if [[ -d "$current_path" && -d "$shared_path" ]] && dir_empty "$shared_path"; then
-            rmdir "$shared_path"
-            mv "$current_path" "$shared_path"
-        else
-            local backup
-            backup="$(next_backup_path "$current_path")"
-            mv "$current_path" "$backup"
-
-            if [[ -d "$backup" && -d "$shared_path" ]]; then
-                cp -a -n "$backup/." "$shared_path/" 2>/dev/null || true
-            elif [[ -f "$backup" && ! -e "$shared_path" ]]; then
-                cp -a "$backup" "$shared_path"
-            fi
-        fi
-    fi
-
-    ln -sT -- "$shared_path" "$current_path"
-}
-
-remove_legacy_link() {
-    local current_path="$1"
-    local shared_path="$2"
-
-    if [[ -L "$current_path" && "$(readlink "$current_path")" == "$shared_path" ]]; then
-        rm -f "$current_path"
-    fi
-}
 
 cleanup_legacy_self_links() {
     local root="$1" name parent path
@@ -76,7 +8,6 @@ cleanup_legacy_self_links() {
     for name in commands skills system; do
         parent="$root/$name"
         path="$parent/$name"
-        # Do not traverse redirected parents or remove any custom link/content.
         [[ -d "$parent" && "$(realpath -e -- "$parent")" == "$parent" ]] || continue
         if [[ -L "$path" && "$(readlink -- "$path")" == "/opt/agent/$name" ]]; then
             unlink -- "$path"
@@ -85,52 +16,39 @@ cleanup_legacy_self_links() {
 }
 
 init_home() (
-    local shared_root="$HOME_ROOT/.agents"
-    local opencode_root="$HOME_ROOT/.config/opencode"
+    local home_root="${HOME:-/home/opencode}"
+    local resources="${OPENCODE_RESOURCES:-/opt/agent}"
+    local source="${OPENCODE_DEFAULTS:-/opt/opencode-defaults}"
+    local config="${OPENCODE_CONFIG_DIR:-$home_root/.config/opencode}"
+    local publisher="${OPENCODE_PUBLISHER:-/opt/opencode/publish-plugins.mjs}"
 
-    [[ -d "$HOME_ROOT" ]] || return 0
-
-    # Directory-inode locks are shared across bind mounts, without root-owned
-    # lock files. Always acquire shared resources before home state.
-    exec 8<"$DEFAULTS_ROOT"
+    [[ -d "$home_root" ]] || { echo 'Missing private HOME' >&2; return 1; }
+    [[ -d "$resources" ]] || {
+        echo "Missing shared resources: $resources; mount the complete agent tree" >&2
+        return 1
+    }
+    # Coordinate shared source publication before locking private HOME. No
+    # root-owned lock files, no deletion of unknown config or redirected roots.
+    exec 8<"$resources"
     flock -x 8
-    exec 7<"$HOME_ROOT"
+    exec 7<"$home_root"
     flock -x 7
-    cleanup_legacy_self_links "$DEFAULTS_ROOT"
+    cleanup_legacy_self_links "$resources"
 
-    ensure_real_dir "$HOME_ROOT/.config"
-    ensure_real_dir "$opencode_root"
+    # Project-local obsolete loaders are outside the publisher's ownership.
+    # Preserve them and stop rather than silently starting a mixed V1/V2 engine.
+    python3 - <<'PY'
+from pathlib import Path
+import sys
 
-    # A workstation bind hides image-layer node_modules. Install into the actual
-    # mounted nested package, not the user's config-root package.json.
-    if [[ -d "$opencode_root/kdco" && ! -L "$opencode_root/kdco" ]]; then
-        flock -x "$opencode_root/kdco/.kdco-install.lock" \
-            node /opt/opencode-publish-plugins.mjs install "$opencode_root/kdco"
-        node /opt/opencode-publish-plugins.mjs "$opencode_root" "$opencode_root"
-    else
-        node /opt/opencode-publish-plugins.mjs /opt/opencode-defaults "$opencode_root"
-    fi
-
-    [[ -d "$DEFAULTS_ROOT/commands" ]] || return 0
-    [[ -d "$DEFAULTS_ROOT/skills" ]] || return 0
-    [[ -d "$DEFAULTS_ROOT/system" ]] || return 0
-
-    link_path "$opencode_root/commands" "$DEFAULTS_ROOT/commands"
-    link_path "$opencode_root/skills" "$DEFAULTS_ROOT/skills"
-    link_path "$opencode_root/system" "$DEFAULTS_ROOT/system"
-    if [[ -d "$DEFAULTS_ROOT/gsd" ]]; then
-        link_path "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
-    fi
-
-    # opencode already discovers project commands and skills from
-    # ~/.config/opencode. Exposing the same mounted trees through ~/.agents as
-    # well makes opencode scan duplicate roots and can amplify symlink loops
-    # into paths like skills/skills/skills/... and commands/commands/commands/...
-    remove_legacy_link "$shared_root/commands" "$DEFAULTS_ROOT/commands"
-    remove_legacy_link "$shared_root/skills" "$DEFAULTS_ROOT/skills"
-    remove_legacy_link "$shared_root/system" "$DEFAULTS_ROOT/system"
-    remove_legacy_link "$shared_root/gsd" "$DEFAULTS_ROOT/gsd"
-    remove_legacy_link "$shared_root/prompts" "commands"
+roots = [root / '.opencode' for root in (Path.cwd(), *Path.cwd().parents)]
+stale = sorted({str(path) for root in roots for folder in ('plugin', 'plugins')
+                for path in (root / folder).glob('**/kdco-*')
+                if path.suffix in ('.js', '.ts', '.mjs', '.cjs')})
+if stale:
+    sys.exit('Preserved obsolete project loaders; review and remove/port explicitly:\n' + '\n'.join(stale))
+PY
+    node "$publisher" config "$source" "$resources" "$config"
 )
 
 init_home

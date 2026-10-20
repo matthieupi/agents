@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import tempfile
 import unittest
 
 
@@ -12,39 +11,40 @@ HEALTH = ROOT / 'opencode/backend-health.mjs'
 
 
 class BackendHealth(unittest.TestCase):
-    def probe(self, body, *, wait=False, password='', username=''):
+    def probe(self, body, *, wait=False, password='', username='', port=None):
         # Exercise the actual Node helper, replacing only its HTTP boundary.
         script = '''
 import assert from 'node:assert/strict';
 let attempts = 0;
 globalThis.fetch = async (url, options) => {
-  assert.equal(url, 'http://127.0.0.1:4096/global/health');
-  const password = process.env.OPENCODE_SERVER_PASSWORD;
+  assert.equal(url, EXPECTED_URL);
+  const password = process.env.OPENCODE_PASSWORD ?? process.env.OPENCODE_SERVER_PASSWORD;
   assert.deepEqual(options.headers, password ? {
-    Authorization: 'Basic ' + Buffer.from((process.env.OPENCODE_SERVER_USERNAME || 'opencode') + ':' + password).toString('base64')
+    Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64')
   } : {});
   assert.ok(options.signal instanceof AbortSignal);
   attempts++;
   BODY
 };
 await import(HELPER);
-'''.replace('BODY', body).replace('HELPER', json.dumps(HEALTH.as_uri()))
+'''.replace('BODY', body).replace('HELPER', json.dumps(HEALTH.as_uri())).replace(
+            'EXPECTED_URL', json.dumps(f'http://127.0.0.1:{port or 4096}/api/info'))
         return subprocess.run(
-            ['node', '--input-type=module', '-e', script, *(['--', '--wait'] if wait else [])],
-            env=dict(os.environ, OPENCODE_SERVER_PASSWORD=password, OPENCODE_SERVER_USERNAME=username),
+            ['node', '--input-type=module', '-e', script, '--', 'backend-health.mjs', *([str(port)] if port else []), *(['--wait'] if wait else [])],
+             env=dict(os.environ, OPENCODE_PASSWORD=password, OPENCODE_SERVER_PASSWORD='ignored-legacy', OPENCODE_SERVER_USERNAME=username),
             capture_output=True, text=True, timeout=6)
 
     def test_healthy_authenticated_and_anonymous(self):
         for password, username in [('', ''), ('secret:with spaces', 'alice'), ('secret', '')]:
-            result = self.probe('return {ok: true, json: async () => ({healthy: true})};',
+            result = self.probe('return {ok: true, json: async () => ({version: "2.0.32"})};',
                                 password=password, username=username)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout + result.stderr, '')
 
     def test_http_failure_invalid_body_and_connection_failure(self):
         for body in [
-            'return {ok: false, json: async () => ({healthy: true})};',
-            'return {ok: true, json: async () => ({healthy: false})};',
+            'return {ok: false, json: async () => ({version: "2.0.32"})};',
+            'return {ok: true, json: async () => ({version: "1.0.0"})};',
             'return {ok: true, json: async () => ({})};',
             'return {ok: true, json: async () => {throw Error("not JSON")}};',
             'throw Error("connection refused")',
@@ -55,49 +55,39 @@ await import(HELPER);
                 self.assertEqual(result.stdout + result.stderr, '')
 
     def test_wait_retries_transient_startup(self):
-        result = self.probe('return {ok: true, json: async () => ({healthy: attempts >= 2})};', wait=True)
+        result = self.probe('return {ok: attempts >= 2, json: async () => ({version: "2.0.32"})};', wait=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_service_template_port_argument(self):
+        result = self.probe('return {ok: true, json: async () => ({version: "2.1.1"})};', port=4196, password='disposable')
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_hung_http_body_has_hard_deadline(self):
         result = self.probe('return {ok: true, json: () => new Promise(() => {})};')
         self.assertEqual(result.returncode, 1, result.stderr)
 
-    def test_cpu_gpu_startup_and_health_match(self):
-        for name in ('Dockerfile', 'Dockerfile.gpu'):
-            text = (ROOT / 'opencode' / name).read_text()
-            self.assertIn('npm install -g opencode-ai@latest', text)
-            self.assertIn('COPY init.sh backend-health.mjs /opt/harness/', text)
-            self.assertIn('CMD node /opt/harness/backend-health.mjs', text)
-            self.assertIn('--start-period=120s', text)
-            self.assertIn('exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false', text)
-            self.assertNotIn('CMD ["opencode"]', text)
+    def test_vm_image_uses_shared_v2_installer_without_baked_config_or_kdco(self):
+        text = (ROOT / 'opencode/Dockerfile.service').read_text()
+        self.assertIn('USER node\nRUN /bin/bash', text)
+        self.assertIn('; install_runtime', text)
+        self.assertIn('USER agent', text)
+        self.assertNotIn('OPENCODE_VERSION', text)
+        self.assertNotIn('kdco', text.lower())
+        self.assertNotIn('COPY .opencode', text)
+        ignore = (ROOT / 'opencode/Dockerfile.service.dockerignore').read_text()
+        self.assertTrue(ignore.startswith('**\n'))
+        self.assertNotIn('!.opencode', ignore)
 
-
-class BackendStartup(unittest.TestCase):
-    def test_init_once_then_foreground_exec_and_init_failure_blocks_backend(self):
-        dockerfile = (ROOT / 'opencode/Dockerfile').read_text()
-        command = json.loads(next(line[4:] for line in dockerfile.splitlines() if line.startswith('CMD [')))[-1]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            init = root / 'init.sh'
-            init.write_text('#!/bin/bash\nprintf "init\\n" >> "$CALLS"\nexit "$INIT_STATUS"\n')
-            init.chmod(0o755)
-            backend = root / 'opencode'
-            backend.write_text('#!/bin/bash\nprintf "backend:%s:%s\\n" "$$" "$*" >> "$CALLS"\n')
-            backend.chmod(0o755)
-            command = command.replace('/opt/harness/init.sh', str(init)).replace('exec opencode ', f'exec {backend} ')
-            for status in ('0', '42'):
-                calls = root / 'calls'
-                calls.unlink(missing_ok=True)
-                process = subprocess.Popen(['/bin/bash', '-c', command],
-                                           env=dict(os.environ, CALLS=str(calls), INIT_STATUS=status),
-                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                stdout, stderr = process.communicate(timeout=5)
-                self.assertEqual(process.returncode, int(status), stdout + stderr)
-                expected = ['init']
-                if status == '0':
-                    expected.append(f'backend:{process.pid}:web --hostname 0.0.0.0 --port 4096 --mdns false')
-                self.assertEqual(calls.read_text().splitlines(), expected)
+    def test_installer_checks_v2_package_and_binary_before_and_after_promotion(self):
+        text = (ROOT / 'opencode/scripts/entrypoint.sh').read_text()
+        self.assertIn('"@opencode/cli@latest"', text)
+        self.assertIn('node_modules/@opencode/cli/package.json', text)
+        self.assertIn('Number(p.version.split(".")[0])<2', text)
+        self.assertIn('verify_runtime "$stage/runtime" "$stage/home"', text)
+        self.assertIn('verify_runtime "$OPENCODE_PREFIX" "$stage/home" "$resolved"', text)
+        self.assertIn('previous runtime restored', text)
+        self.assertIn('never root', text)
+        self.assertNotIn('kdco', text.lower())
 
 
 if __name__ == '__main__':

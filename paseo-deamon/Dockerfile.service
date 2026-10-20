@@ -3,7 +3,6 @@
 ARG PASEO_BASE
 FROM ${PASEO_BASE}
 ARG PASEO_VERSION
-ARG OPENCODE_VERSION
 ARG AGENT_UID
 ARG AGENT_GID
 USER root
@@ -15,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 util-li
 COPY --from=opencode-inputs scripts/entrypoint.sh /opt/opencode/native-contract.sh
 COPY --from=opencode-inputs scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
 COPY --from=opencode-inputs service-entrypoint.sh /opt/opencode/service-entrypoint.sh
-COPY --from=opencode-inputs --chown=1000:1000 .opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
-COPY --from=opencode-inputs .opencode/config/plugins/kdco-*.ts /opt/opencode/component/.opencode/config/plugins/
+COPY verify-paseo.mjs /opt/paseo-component/verify-paseo.mjs
+RUN node /opt/paseo-component/verify-paseo.mjs "$PASEO_VERSION"
 USER 1000:1000
-RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER="$(id -un)" OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime OPENCODE_VERSION; install_runtime'
+RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER="$(id -un)" OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime; install_runtime; verify_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME"; isolated_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME" --version > /opt/opencode/component/version.txt'
 USER root
 RUN set -eu; test "$AGENT_UID" -gt 0; test "$AGENT_GID" -gt 0; \
     account="$(getent passwd 1000 | cut -d: -f1)"; \
@@ -27,7 +26,9 @@ RUN set -eu; test "$AGENT_UID" -gt 0; test "$AGENT_GID" -gt 0; \
     usermod -l agent -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent "$account"; \
     install -d -m 0700 -o agent -g agent /home/agent /home/agent/.config/opencode /state/paseo /state/provider; \
     chmod -R a+rX,a-w /opt/opencode/component
-RUN node -e 'const v=process.argv[1]; if(!/^\d+\.\d+\.\d+$/.test(v)||require("/usr/local/lib/node_modules/@getpaseo/cli/package.json").version!==v||require("/usr/local/lib/node_modules/@getpaseo/server/package.json").version!==v)process.exit(1)' "$PASEO_VERSION"
+RUN cp /opt/opencode/component/version.txt /opt/opencode-version.txt \
+    && cp /opt/opencode/component/.runtime/.native-install.json /opt/opencode-install.json \
+    && printf '%s\n' "$PASEO_VERSION" > /opt/paseo-version.txt
 COPY entry.py /opt/paseo-component/entry.py
 ENV HOME=/home/agent USER=agent LOGNAME=agent \
     PASEO_HOME=/state/paseo XDG_CONFIG_HOME=/home/agent/.config \

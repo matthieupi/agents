@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
 
 // Only mock the host-supplied renderer: no OpenTUI installation or live TUI.
 const hooks = registerHooks({
@@ -61,41 +62,69 @@ test("Unicode letters normalize consistently; no-letter titles fall back", () =>
   assert.equal(titleColorKey(undefined), "primary");
 });
 
-test("module and registration match the TUI-only contract", async () => {
+test("module and registration match the V2 CLI-only contract and return cleanup", () => {
   let registration;
+  const cleanup = () => {};
   assert.equal(plugin.id, "local.session-title");
   assert.equal("server" in plugin, false);
-  await plugin.tui({ slots: { register(value) { registration = value; } } });
-  assert.deepEqual(Object.keys(registration.slots), ["session_prompt_right"]);
-  assert.equal("id" in registration, false);
+  assert.equal("tui" in plugin, false);
+  assert.equal(plugin.setup({ ui: { slot(value) { registration = value; return cleanup; } } }), cleanup);
+  assert.deepEqual(Object.keys(registration), ["append", "render"]);
+  assert.equal(registration.append, "prompt.footer.status");
 });
 
-test("render getters read current session, route props, and theme; layout stays bounded", async () => {
+function theme(prefix) {
+  return {
+    hue: { interactive: { 200: `${prefix}-primary` }, accent: { 200: `${prefix}-accent` } },
+    categorical: [{ 200: `${prefix}-secondary` }],
+    text: { feedback: Object.fromEntries(["success", "warning", "info"].map((key) => [key, { base: `${prefix}-${key}` }])) },
+  };
+}
+
+test("render getters read current session, slot props, and V2 theme; layout stays bounded", () => {
   let registration;
   const sessions = { one: { title: "Alpha" }, two: { title: "Beta" } };
   const api = {
-    slots: { register(value) { registration = value; } },
-    state: { session: { get(id) { return sessions[id]; } } },
-    theme: { current: { secondary: "old-secondary", accent: "old-accent" } },
+    ui: { slot(value) { registration = value; } },
+    data: { session: { get(id) { assert.equal(typeof id, "string"); return sessions[id]; } } },
+    theme: theme("old"),
   };
-  await plugin.tui(api);
-  const props = { session_id: "one" };
-  const view = registration.slots.session_prompt_right({}, props);
+  plugin.setup(api);
+  const props = { sessionID: "one" };
+  const view = registration.render(props);
   assert.equal(view.type, "text");
   assert.equal(view.props.content, "Alpha");
   assert.equal(view.props.fg, "old-secondary");
   sessions.one.title = "a".repeat(36);
   assert.equal(view.props.content, "a".repeat(34) + "…");
-  props.session_id = "two";
+  props.sessionID = "two";
   assert.equal(view.props.content, "Beta");
   assert.equal(view.props.fg, "old-accent");
-  api.theme.current = { accent: "new-accent" };
+  api.theme = theme("new");
   assert.equal(view.props.fg, "new-accent");
-  props.session_id = "missing";
+  for (const title of ["B", "C", "D", "E", "F", "G"]) {
+    sessions.two.title = title;
+    assert.equal(view.props.fg, `new-${titleColorKey(title)}`);
+  }
+  props.sessionID = "missing";
   assert.equal(view.props.content, "");
+  props.sessionID = undefined;
+  assert.equal(view.props.content, "");
+  assert.equal(view.props.fg, "new-primary");
   assert.equal(view.props.maxWidth, 35);
   assert.equal(view.props.minWidth, 0);
+  assert.equal(view.props.flexShrink, 1);
   assert.equal(view.props.height, 1);
   assert.equal(view.props.wrapMode, "none");
   assert.equal(view.props.truncate, true);
+});
+
+test("cli.json targets a directory with a tui.js entrypoint, not the skipped single file", async () => {
+  const config = JSON.parse(await readFile(new URL("../cli.json", import.meta.url), "utf8"));
+  assert.equal(config.$schema, "https://opencode.ai/v2/cli.json");
+  assert.deepEqual(config.plugins, ["./tui-plugins/session-title"]);
+  const entry = new URL(`${config.plugins[0]}/tui.js`, new URL("../", import.meta.url));
+  // The module was already loaded with the mock renderer above; the shim adds no imports.
+  assert.equal((await import(entry)).default, plugin);
+  assert.deepEqual(Object.keys(await import(entry)), ["default"]);
 });

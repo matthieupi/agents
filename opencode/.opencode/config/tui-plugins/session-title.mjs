@@ -20,25 +20,36 @@ export function titleColorKey(title) {
   return letter ? ACCENTS[letter.toLowerCase().codePointAt(0) % ACCENTS.length] : ACCENTS[0];
 }
 
-/** @param {import("@opencode-ai/plugin/tui").TuiPluginApi} api */
-async function tui(api) {
-  api.slots.register({
-    slots: {
-      session_prompt_right(_context, props) {
-        const title = () => api.state.session.get(props.session_id)?.title;
+export default {
+  id: "local.session-title",
+  /** @param {import("@opencode/plugin/tui/context").Context} context */
+  setup(context) {
+    return context.ui.slot({
+      append: "prompt.footer.status",
+      render(props) {
+        const title = () => props.sessionID ? context.data.session.get(props.sessionID)?.title : undefined;
         // jsx/spread tracks these getters against the host's Solid state/theme.
         return jsx("text", {
           get content() { return formatTitle(title()); },
-          get fg() { return api.theme.current[titleColorKey(title())]; },
+          get fg() {
+            const theme = context.theme;
+            return {
+              primary: theme.hue.interactive[200],
+              secondary: theme.categorical[0][200],
+              accent: theme.hue.accent[200],
+              success: theme.text.feedback.success.base,
+              warning: theme.text.feedback.warning.base,
+              info: theme.text.feedback.info.base,
+            }[titleColorKey(title())];
+          },
           maxWidth: LIMIT,
           minWidth: 0,
+          flexShrink: 1,
           height: 1,
           wrapMode: "none",
           truncate: true,
         });
       },
-    },
-  });
-}
-
-export default { id: "local.session-title", tui };
+    });
+  },
+};

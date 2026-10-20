@@ -26,11 +26,10 @@ log_warn() { echo -e "${YELLOW}[opencode]${NC} $*"; }
 log_error() { echo -e "${RED}[opencode]${NC} $*" >&2; }
 
 # Parse optional flags
-PERMISSION_JSON='{}'
+DANGEROUS_ARGS=()
 PRIVILEGED_MODE="false"
 PRIVILEGED_ARGS=()
 RESTART_POLICY="unless-stopped"
-BACKEND_LIFECYCLE="web-v1"
 REBUILD_IMAGE=""
 WEB_MODE=""
 WEB_BIND_HOST="127.0.0.1"
@@ -123,8 +122,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -d|--dangerous)
-            PERMISSION_JSON='{"*":"allow"}'
-            log_warn "DANGEROUS MODE applies to the shared backend and all its clients!"
+            DANGEROUS_ARGS=(--auto)
+            log_warn "Running with --auto: permissions auto-approved unless explicitly denied."
             shift
             ;;
         -r|--rebuild)
@@ -209,6 +208,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+for spec in "${PUBLISH_SPECS[@]}"; do
+    if [[ "${spec##*:}" == 4096 ]]; then
+        log_error "Port 4096 belongs to the V2 server; use --web/--wlan, not --publish."
+        exit 1
+    fi
+done
+
 if [[ -n "${GPU_MODE}" ]]; then
     IMAGE_NAME="${GPU_IMAGE_NAME}"
 fi
@@ -256,6 +262,64 @@ if [[ -n "${GPU_MODE}" ]]; then
     CONTAINER_NAME="${CONTAINER_NAME}-gpu"
 fi
 
+# Validate the selected image before removing/reusing any container. A mutable
+# tag match alone must never reuse an idle V1 tail container or an older build.
+IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${IMAGE_NAME}" 2>/dev/null || true)"
+IMAGE_LIFECYCLE="$(docker image inspect --format '{{ index .Config.Labels "dev.xmist.opencode.lifecycle" }}' "${IMAGE_NAME}" 2>/dev/null || true)"
+if [[ -z "${IMAGE_ID}" || "${IMAGE_LIFECYCLE}" != v2-serve-1 ]]; then
+    log_error "Build the Docker V2 image first (opencode rebuild or opencode -r .); selected image lacks lifecycle v2-serve-1."
+    exit 1
+fi
+export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"
+if [[ -z "${OPENCODE_PASSWORD}" || "${OPENCODE_SERVER_USERNAME:-opencode}" != opencode ]]; then
+    log_error "Docker V2 requires OPENCODE_PASSWORD (or OPENCODE_SERVER_PASSWORD), and username opencode."
+    exit 1
+fi
+
+export OPENCODE_DOCKER_WEB_ENDPOINT=""
+if [[ -n "$WEB_MODE" ]]; then
+    OPENCODE_DOCKER_WEB_ENDPOINT="${WEB_BIND_HOST}:${WEB_PORT}"
+fi
+
+# Recreate on canonical config, workspace, resource-root or credential changes.
+# Only a digest is labelled; no credentials are placed in Docker argv/logs.
+export OPENCODE_DOCKER_CONFIG_FINGERPRINT
+OPENCODE_DOCKER_CONFIG_FINGERPRINT="$(python3 - "$SCRIPT_DIR" "$WORKSPACE_PATH" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+digest.update(str(root).encode() + b'\0' + sys.argv[2].encode() + b'\0')
+for name in ('OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
+             'OPENROUTER_API_KEY', 'OLLAMA_HOST', 'OPENAI_COMPAT_API_KEY',
+             'OPENAI_COMPAT_BASE_URL', 'SSH_DIR_PATH', 'OPENCODE_DOCKER_WEB_ENDPOINT'):
+    digest.update(name.encode() + b'\0' + os.environ.get(name, '').encode() + b'\0')
+config = root / '.opencode/config'
+files = [root / 'init.sh', root / 'scripts/publish-plugins.mjs',
+         config / 'opencode.json', config / 'opencode.jsonc', config / 'cli.json']
+files += sorted((root / 'scripts').glob('docker-*'))
+for folder in ('plugins', 'tui-plugins'):
+    files += sorted(path for path in (config / folder).rglob('*')
+                    if path.is_file() and 'node_modules' not in path.parts)
+for path in files:
+    digest.update(str(path.relative_to(root)).encode() + b'\0')
+    digest.update(path.read_bytes() if path.is_file() else b'<missing>')
+    digest.update(b'\0')
+print(digest.hexdigest())
+PY
+)"
+
+has_requested_lifecycle_config() {
+    local lifecycle
+    lifecycle="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.lifecycle" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+    local fingerprint
+    fingerprint="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.config" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+    [[ "${lifecycle}" == v2-serve-1 && "${fingerprint}" == "$OPENCODE_DOCKER_CONFIG_FINGERPRINT" ]]
+}
+
 has_requested_web_port() {
     local published
     published="$(docker port "${CONTAINER_NAME}" "4096/tcp" 2>/dev/null || true)"
@@ -290,18 +354,16 @@ has_requested_publish_config() {
     [[ "${configured_publish}" == "$(publish_label)" ]]
 }
 
+replace_active_container() {
+    log_warn "Recreating ${CONTAINER_NAME}: requested $1 changed; active sessions will be interrupted."
+    docker stop "${CONTAINER_NAME}" > /dev/null
+    docker rm "${CONTAINER_NAME}" > /dev/null
+}
+
 has_requested_volume_config() {
     local configured_volumes
     configured_volumes="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.volumes" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
     [[ "${configured_volumes}" == "$(volume_label)" ]]
-}
-
-has_requested_backend_config() {
-    local lifecycle permission exposure
-    lifecycle="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.lifecycle" }}' "${CONTAINER_NAME}")"
-    permission="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.permission" }}' "${CONTAINER_NAME}")"
-    exposure="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.web" }}' "${CONTAINER_NAME}")"
-    [[ "${lifecycle}" == "${BACKEND_LIFECYCLE}" && "${permission}" == "${PERMISSION_JSON}" && "${exposure}" == "${WEB_EXPOSURE}" ]]
 }
 
 has_requested_privileged_config() {
@@ -316,10 +378,10 @@ has_requested_privileged_config() {
 }
 
 connect_backend() {
-    log_info "Waiting for authenticated backend readiness (up to 120 seconds)..."
-    if ! timeout --kill-after=5s 125 docker exec "${CONTAINER_NAME}" node /opt/harness/backend-health.mjs --wait; then
+    log_info "Waiting for authenticated V2 backend readiness (up to 90 seconds)..."
+    if ! timeout --kill-after=5s 95 docker exec "${CONTAINER_NAME}" python3 /opt/harness/docker-health.py --wait; then
         log_error "Backend did not become ready; no client was attached. Inspect: docker logs '${CONTAINER_NAME}'"
-        log_error "If the installed OpenCode lacks web/attach support, rebuild with: opencode update"
+        log_error "Rebuild the V2 image if needed with: opencode update"
         exit 1
     fi
     # Never hold the lifecycle lock for the lifetime of a TUI.
@@ -331,11 +393,9 @@ connect_backend() {
     fi
     log_info "Attaching TUI to shared backend: ${CONTAINER_NAME}"
     # docker exec inherits the container's credentials, not the invoking shell's.
-    exec docker exec -it "${CONTAINER_NAME}" opencode attach http://127.0.0.1:4096 --dir /workspace
+    exec docker exec -it "${CONTAINER_NAME}" bash /opt/harness/docker-client.sh "${DANGEROUS_ARGS[@]}"
 }
 
-WEB_EXPOSURE="none"
-[[ -n "${WEB_MODE}" ]] && WEB_EXPOSURE="${WEB_BIND_HOST}:${WEB_PORT}"
 # Coordinate launchers in this checkout, including workspaces with equal basenames.
 LOCK_DIR="${SCRIPT_DIR}/.opencode/locks"
 mkdir -p "${LOCK_DIR}"
@@ -351,40 +411,31 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
     RUNNING=$(docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" 2>/dev/null || echo "")
     if [[ -n "${RUNNING}" ]]; then
         # Verify it's using the current image
-        CONTAINER_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "")
-        if [[ "${CONTAINER_IMAGE}" == "${IMAGE_NAME}" ]]; then
-            if ! has_requested_backend_config; then
-                log_warn "Backend lifecycle, permissions, or exposure changed; recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
-            elif ! has_requested_privileged_config; then
-                log_warn "Host privilege mode changed; recreating (existing sessions will disconnect)..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+        CONTAINER_IMAGE=$(docker inspect --format '{{.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "")
+        if [[ "${CONTAINER_IMAGE}" == "${IMAGE_ID}" ]] && has_requested_lifecycle_config; then
+            if ! has_requested_privileged_config; then
+                replace_active_container "host privilege mode"
             elif [[ -n "${WEB_MODE}" ]] && ! has_requested_web_port; then
-                log_warn "Container lacks requested web port mapping (${WEB_BIND_HOST}:${WEB_PORT}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "web port mapping (${WEB_BIND_HOST}:${WEB_PORT})"
             elif [[ -n "${GPU_MODE}" ]] && ! has_requested_gpu_config; then
-                log_warn "Container lacks requested GPU configuration (${GPU_DEVICES}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "GPU configuration (${GPU_DEVICES})"
             elif ! has_requested_resource_config; then
-                log_warn "Container lacks requested resource configuration (cpus=${CPU_LIMIT}, memory=${MEMORY_LIMIT}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "resources (cpus=${CPU_LIMIT}, memory=${MEMORY_LIMIT})"
             elif ! has_requested_publish_config; then
-                log_warn "Container lacks requested published ports ($(publish_label)), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "published ports ($(publish_label))"
             elif ! has_requested_volume_config; then
-                log_warn "Container lacks requested custom volume configuration, recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "custom volume configuration"
             else
                 connect_backend
             fi
         else
-            log_warn "Container uses old image (${CONTAINER_IMAGE}), recreating..."
-            docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+            replace_active_container "image/lifecycle/config (current image ${CONTAINER_IMAGE})"
         fi
     else
-        # Container exists but is stopped/restarting/dead - remove and recreate
-        log_warn "Removing stale container: ${CONTAINER_NAME} (${CONTAINER_STATUS})"
-        docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+        # Restarting/dead containers are stale too. Replacement is intentional,
+        # including any sessions that race with this serialized launcher.
+        log_warn "Removing stale container: ${CONTAINER_NAME} (${CONTAINER_STATUS}); existing sessions may disconnect"
+        docker rm -f "${CONTAINER_NAME}" > /dev/null
     fi
 fi
 
@@ -407,7 +458,7 @@ if ! docker image inspect "${IMAGE_NAME}" > /dev/null 2>&1; then
 fi
 
 # Prepare config directory
-CONFIG_DIR="${SCRIPT_DIR}/.opencode/config"
+CONFIG_DIR="${SCRIPT_DIR}/.opencode/home-config"
 mkdir -p "${CONFIG_DIR}"
 
 # Prepare data directory for session/auth persistence
@@ -417,6 +468,8 @@ mkdir -p "${DATA_DIR}"
 # Prepare cache directory for provider/plugin state persistence
 CACHE_DIR="${SCRIPT_DIR}/.opencode/cache"
 mkdir -p "${CACHE_DIR}"
+STATE_DIR="${SCRIPT_DIR}/.opencode/state"
+mkdir -p "${STATE_DIR}"
 AGENT_DIR="${SCRIPT_DIR}/../agent"
 INIT_SCRIPT="${SCRIPT_DIR}/init.sh"
 
@@ -428,9 +481,6 @@ log_info "Running OpenCode with UID $(id -u):$(id -g)"
 PORT_ARGS=()
 if [[ -n "${WEB_MODE}" ]]; then
     PORT_ARGS=(-p "${WEB_BIND_HOST}:${WEB_PORT}:4096")
-    if [[ "${WEB_BIND_HOST}" == "0.0.0.0" && -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-        log_warn "LAN web mode is exposed without OPENCODE_SERVER_PASSWORD"
-    fi
 fi
 
 for publish_spec in "${PUBLISH_SPECS[@]}"; do
@@ -451,9 +501,8 @@ fi
 docker run -d \
     --name "${CONTAINER_NAME}" \
     --hostname "${CONTAINER_NAME}" \
-    --label "dev.xmist.opencode.lifecycle=${BACKEND_LIFECYCLE}" \
-    --label "dev.xmist.opencode.permission=${PERMISSION_JSON}" \
-    --label "dev.xmist.opencode.web=${WEB_EXPOSURE}" \
+    --label "dev.xmist.opencode.lifecycle=v2-serve-1" \
+    --label "dev.xmist.opencode.config=${OPENCODE_DOCKER_CONFIG_FINGERPRINT}" \
     --label "dev.xmist.opencode.gpu.devices=${GPU_LABEL_DEVICES}" \
     --label "dev.xmist.opencode.cpus=${CPU_LIMIT}" \
     --label "dev.xmist.opencode.memory=${MEMORY_LIMIT}" \
@@ -471,12 +520,9 @@ docker run -d \
     -e "OLLAMA_HOST=${OLLAMA_HOST:-http://ollama.xmist.dev:11434}" \
     -e "OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}" \
     -e "OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}" \
-    -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
-    -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
-    -e "OPENCODE_PERMISSION=${PERMISSION_JSON}" \
+    -e OPENCODE_PASSWORD \
     -e "NVIDIA_VISIBLE_DEVICES=${GPU_DEVICES}" \
     -e "NVIDIA_DRIVER_CAPABILITIES=compute,utility" \
-    -e "OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json" \
     -e "OPENCODE_DISABLE_AUTOUPDATE=1" \
     -e "OPENCODE_EXPERIMENTAL_WORKSPACES=1" \
     -e "TERM=xterm-256color" \
@@ -487,10 +533,11 @@ docker run -d \
     -v "${WORKSPACE_PATH}:/workspace:rw" \
     -v "${AGENT_DIR}:/opt/agent:rw" \
     -v "${INIT_SCRIPT}:/opt/harness/init.sh:ro" \
-    -v "${SCRIPT_DIR}/backend-health.mjs:/opt/harness/backend-health.mjs:ro" \
+    -v "${SCRIPT_DIR}/.opencode/config:/opt/opencode-defaults:ro" \
     -v "${CONFIG_DIR}:/home/opencode/.config/opencode:rw" \
     -v "${DATA_DIR}:/home/opencode/.local/share/opencode:rw" \
     -v "${CACHE_DIR}:/home/opencode/.cache/opencode:rw" \
+    -v "${STATE_DIR}:/home/opencode/.local/state/opencode:rw" \
     -v "${SSH_DIR}:/home/opencode/.ssh:ro" \
     "${VOLUME_ARGS[@]}" \
     "${PRIVILEGED_ARGS[@]}" \
@@ -499,10 +546,7 @@ docker run -d \
     --network devai-xmist \
     --memory "${MEMORY_LIMIT}" \
     --cpus "${CPU_LIMIT}" \
-    --health-cmd 'node /opt/harness/backend-health.mjs' \
-    --health-interval 30s --health-timeout 5s --health-start-period 120s --health-retries 3 \
-    "${IMAGE_NAME}" \
-    bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false' > /dev/null
+    "${IMAGE_NAME}" > /dev/null
 
 log_info "Container created successfully"
 

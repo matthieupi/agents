@@ -19,7 +19,9 @@ registration, SSH alias or custom launcher in these inputs. The old `venv/` buil
 path is deleted. Workstation run/mgr wrappers and Pi/Claude static Compose remain
 separate. Pi/OpenCode installer/init helpers remain VM build dependencies; native
 start/manage scripts, OpenCode static Compose and the opt-in `runtime/` framework
-are retired. Ordinary VM templates and their delivery inputs are unchanged.
+are retired. VM execution consumers additionally receive the full maintained
+OpenCode configuration through read-only public source mounts; see
+[OpenCode's update and conflict contract](opencode/README.md#shared-workstation-configuration-on-vm-consumers).
 
 Paperclip is an additional ordinary **base UI**, not an execution product. Its
 [own contract](paperclip/README.md) uses a pinned published production image,
@@ -31,9 +33,11 @@ cloud mode or custom execution guard is added; an instance administrator remains
 capable of deliberately configuring local adapters. Its optional direct SSH
 environment targets `paperclip-daemon` over exact container SSH egress. That service
 shares agent HOME/workspace and explicitly granted socket access with Pi/OpenCode,
-but owns separate persistent SSH host keys and authorization outside HOME. Native
+but owns separate persistent SSH host keys and authorization outside HOME. Prior native
 transport/callback acceptance passed; provider smoke was rejected by account/model
-compatibility and the agent is paused. See the Paperclip daemon contract and parent
+compatibility and the agent is paused. This does not establish OpenCode V2 adapter
+compatibility: session/tool/provider acceptance remains unverified, and `latest`
+does not prove adapter support. See the Paperclip daemon contract and parent
 deployment record for the approved sensitive Hub custody boundary.
 
 ## Identity, paths and grants
@@ -63,10 +67,12 @@ Prerequisites create missing local directories without recursive repair:
 Daemon mounts only its product state and workspace, not host HOME or workstation
 SSH. Its ephemeral HOME uses the same account, not another identity. It installs
 OpenCode in its own image and lets Paseo start the embedded provider process;
-it never connects to the separately selected OpenCode web service. KDCO links are
-published using the unchanged product helper before the existing daemon entry
+it never connects to the separately selected OpenCode service. Selected maintained
+V2 config/plugin assets and resource links are published using the shared product
+helper before the existing daemon entry
 validates native auth and locks state. No VM agent registration/default policy or
-provider credentials are seeded.
+provider credentials are seeded. Configuration models and permissions are the
+canonical workstation values, not a separate VM agent policy.
 
 Hub binds only its product state as container HOME. It has no provider HOME,
 workspace, SSH or socket. Before rendering, S prepares an **internal** bridge using
@@ -100,11 +106,10 @@ S projects endpoint/auth metadata from its existing authorities, not new host fi
 | `memory_limit`, `pids_limit` | configured Compose memory string, positive integer | all |
 | `cpus` | configured positive number; optional and omitted when absent on Hub | Pi/OpenCode/daemon configured; Hub currently absent |
 | `hostnames` | unique exact DNS names; canonical for Hub, endpoint projection elsewhere | Pi allowed hosts; Paseo native config; OpenCode ingress |
-| `version` | exact stable `X.Y.Z` string | OpenCode and daemon |
+| `version` | exact stable Paseo `X.Y.Z`, >=0.12.0 with actual V2 adapter packaging | daemon; not an OpenCode version selector |
 | `image` | configured upstream reference, passed unchanged; daemon has a digest, Hub currently `ghcr.io/getpaseo/paseo:latest` | both Paseo build bases; no new pin enforcement/admission |
-| `opencode_version` | exact stable `X.Y.Z` string | daemon embedded provider |
-| `opencode_build_context` | S-derived absolute path to finite public staging below | daemon only |
-| `allowed_origins` | S-derived unique exact HTTPS origins from canonical endpoints; no reflection/wildcards | both Paseo native configs |
+| `opencode_build_context` | S-derived absolute path to finite public staging below | daemon and Paperclip daemon |
+| `allowed_origins` | S-derived unique exact HTTPS origins from canonical endpoints; no reflection/wildcards | OpenCode CORS and both Paseo native configs |
 | `trusted_proxies` | S-observed exact proxy source CIDRs | daemon only |
 
 Hub network facts are separate template inputs: `paseo_hub_network_name` and
@@ -112,13 +117,28 @@ Hub network facts are separate template inputs: `paseo_hub_network_name` and
 `container_address` service metadata is required. Existing Hub `password_ref`,
 `password_environment`, `certificate_authority` and `dns` stay S-owned inputs.
 
-`pi_web_password` and `opencode_server_password` are protected **gateway credential
-facts only**, never native VM environment inputs. As in the old managed path,
-Pi/OpenCode have no native web password: nginx protects every external route and
-strips Authorization before proxying. Host publication stays loopback-only; direct
-bridge access must remain restricted. VM commands explicitly unset native web auth
-variables and do not source host HOME/dotfiles; workstation native auth is unchanged.
-Preserve existing credential references; do not rotate/copy provider credentials.
+`pi_web_password` and `opencode_server_password` remain protected **gateway
+credential facts**, not the OpenCode backend password. Pi's gateway-only auth
+contract remains separate. OpenCode V2 requires a new protected, single-line
+**`opencode_backend_password`** fact, rendered by `opencode/env.j2` into protected
+`.env` as **`OPENCODE_PASSWORD`**, with no-log/diff suppression and no committed secret.
+The parent secret owner must supply it; the service fails closed when it is absent.
+
+⚠️ External nginx must authenticate the client using the existing gateway credential,
+then **replace** upstream `Authorization` with Basic auth for
+`opencode:<backend credential>`. The old gateway-only anonymous-backend contract
+(stripping Authorization) is incompatible. This integration must be updated
+**outside this repository** before deployment acceptance; preserving or forwarding
+the client's Authorization is not backend authentication. Keep existing gateway
+references; no secret rotation or provider-credential copying is authorized here.
+
+Host publication stays loopback-only; direct bridge access must remain restricted.
+OpenCode uses native `opencode serve`, not `web`, with explicit hostname/port/CORS,
+**no mDNS flag**, and no host HOME/dotfile sourcing. Its native healthcheck invokes
+`backend-health.mjs` for authenticated V2 `/api/info` with version validation,
+not anonymous `/global/health` or an HTML page. Exact CORS origins, independently
+hosted admin UI, gateway TLS/Host/Origin/streaming and API/WS behavior remain
+parent-owned; health alone proves none of their acceptance.
 Paseo separately receives protected `paseo_password_hash` and consumes only
 the existing native bcrypt hash (cost 10..16; Hub's existing stricter derivation
 can stay); no plaintext password env override. `config.json.j2` is an extra
@@ -135,40 +155,41 @@ behavior; a loopback backend or healthcheck does not supply those controls.
 
 ## Finite public build-input catalog
 
+Runtime config delivery is separate from these finite installer/build inputs.
+The parent service flow enumerates tracked `agent/` and `opencode/.opencode/config/`
+files into `service_base_path/agent-config`, removes retired public files, and
+preserves the known discovery symlinks without following them. All three execution
+consumers bind its resources at `/opt/agent` and config at `/opt/opencode-defaults`,
+read-only. It is not a full checkout or private HOME mount. Config-only edits
+request native Compose recreation, not a rebuild. The retained filename
+`scripts/publish-plugins.mjs` now exposes only `config SOURCE_CONFIG RESOURCES
+DESTINATION_CONFIG`: no KDCO package/install mode or dependency installation.
+It links selected config/CLI/plugin assets and shared commands/skills/system into
+a private config directory, not the complete source directory. Known managed
+snapshots/links can be reconciled; unknown config, modified obsolete loaders and
+redirected private paths are preserved and block conflicting publication.
+Quiesce all consumers before delivery/recreation; locks do not coordinate live sessions.
+
 Paths below are product-relative; the daemon's parent-root mapping is specified
 below. Dockerfile-specific ignore files exclude everything else,
 including `.env`, runtime state and private configuration. Do **not** recursively
-copy `.opencode`, a KDCO directory containing node_modules, HOME, or the repository.
+copy `.opencode`, node_modules, HOME, or the repository.
 
 | Product | `docker_service_extra_files` inputs |
 |---|---|
 | Pi | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `scripts/entrypoint.sh` |
-| OpenCode | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `scripts/entrypoint.sh`, `scripts/publish-plugins.mjs`, KDCO files and three entrypoints below |
-| Daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `entry.py`; named public OpenCode context below |
+| OpenCode | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `scripts/entrypoint.sh`, `scripts/publish-plugins.mjs`, `backend-health.mjs` |
+| Daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `entry.py`, `verify-paseo.mjs`; named public OpenCode context below |
 | Hub | `Dockerfile.dockerignore`; conventional `Dockerfile` is copied by the common role |
+| Paperclip daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`; same named public OpenCode inputs |
 
-OpenCode public package files under `.opencode/config/kdco/`:
-
-```text
-package.json  package-lock.json  upstream.json  README.md  LICENSE
-background-agents.ts  notify.ts  worktree.ts
-kdco-primitives/cmux.ts                 kdco-primitives/get-project-id.ts
-kdco-primitives/index.ts                kdco-primitives/log-warn.ts
-kdco-primitives/mutex.ts                kdco-primitives/shell.ts
-kdco-primitives/temp.ts                 kdco-primitives/terminal-detect.ts
-kdco-primitives/types.ts                kdco-primitives/with-timeout.ts
-notify/backend.ts  notify/cmux.ts  notify/status.ts  notify/title.ts
-worktree/launch-context.ts  worktree/state.ts  worktree/terminal.ts
-```
-
-Entrypoints: `.opencode/config/plugins/kdco-background-agents.ts`,
-`kdco-notify.ts`, and `kdco-worktree.ts` in that same plugins directory.
-
-Daemon's native named context contains **only** those OpenCode package/entrypoint
-files plus `scripts/entrypoint.sh`, `scripts/publish-plugins.mjs` and
-`service-entrypoint.sh`. This is a build dependency, not an OpenCode service
-selection: daemon-only hosts still need these public inputs. Installer
-`install_runtime()` and its package lock remain unchanged.
+Daemon and Paperclip daemon named contexts contain **only** OpenCode's
+`scripts/entrypoint.sh`, `scripts/publish-plugins.mjs` and `service-entrypoint.sh`.
+Public config/resources are read-only runtime mounts, not baked KDCO/build inputs.
+These contexts are build dependencies, not OpenCode service selection: daemon-only
+hosts still need the finite public inputs. Each image reuses `install_runtime()`
+to resolve **`@opencode/cli@latest`**; no OpenCode `version`, `opencode_version`, or
+`OPENCODE_VERSION` pin input remains. Resolved metadata is evidence, not a selector.
 
 **Sibling delivery contract:** U is adding `docker_service_extra_files_source_path`,
 defaulting to the selected service source. For daemon delivery, S explicitly selects
@@ -182,12 +203,21 @@ installer, source manifest, extra service selection or bespoke builder is needed
 U/S delivery is pending integration; do not point the context at a private checkout.
 
 Pi reuses the unchanged paired pins `0.85.1` / `0.9.0` from its existing installer
-and the existing component VM npm install shape. OpenCode reuses
-`install_runtime()`, including locked KDCO dependency installation. Pi/OpenCode
+and the existing component VM npm install shape. OpenCode always resolves latest
+at install/build; auto-update is disabled, and cached npm layers may require a
+deliberate no-cache rebuild. Pi/OpenCode
 use a directly pinned official Node base, not T3's prepared image or pins file,
 and Docker CLI `28.4.0-cli`. Ordinary distro package signatures remain enabled;
 APT packages/transitive Pi dependencies are not fully snapshot-locked. No image
-was pulled or built here, including the newly selected Docker CLI tag.
+is pulled or built by this documentation pass. Prior disposable OpenCode
+install/server smoke resolved latest to **2.1.1** and passed; this is not a pin,
+full service-image evidence or deployment acceptance.
+
+Paseo `verify-paseo.mjs` is required: it checks matching CLI/server versions
+>=0.12.0, an exact V2 client dependency >=2.0.10 <3, and native V2 provider modules.
+Published 0.12.0 source/package layout was verified, including authenticated
+per-child V2 server/client ownership. A version label alone is insufficient;
+actual image/provider/session/tool acceptance remains outstanding.
 
 ## Source retirement and retained owners
 
@@ -195,7 +225,7 @@ The maintained `venv/` controller, its Docker overlays/build controls, old Pi VM
 Dockerfile, T3/OMP products/recipes and old Paseo runtime projection are deleted.
 Strict transport now belongs to the parent's `scripts/ssh_transport.py`.
 The opt-in workstation framework and its runtime-only public-resource publisher
-are retired. Product plugin publication and both Pi/OpenCode `scripts/entrypoint.sh`
+are retired. V2 config-only publication and both Pi/OpenCode `scripts/entrypoint.sh`
 helpers remain. No VM registration, ACL plan or policy was relocated.
 The deleted VM machinery was SHA/source publication and
 image/gateway approval, not an established cryptographic signing system.
@@ -212,8 +242,10 @@ retirement performs no deployed-state cleanup.
 Targeted offline fixture tests and shell syntax checks cover the workstation
 cleanup, not VM acceptance. After the whole code/config set is assembled:
 native template/Compose checks, positive/negative
-socket rendering, isolated image builds, NSS/UID collision behavior, KDCO discovery,
-Paseo supervisor compatibility, auth/Origin and host-to-Hub bridge reachability
+socket rendering, isolated image builds, NSS/UID collision behavior, V2 config/plugin
+discovery, Paseo supervisor compatibility, Paperclip V2 adapter behavior,
+gateway-to-backend credential replacement, authenticated API/WS/Origin flows and
+host-to-Hub bridge reachability
 remain necessary. Pi's bounded HTTP health and Paseo's public health endpoint do
 not prove authenticated sessions or providers. Live operations require separate
 scope/data/recovery approval. No deletion from a deployed machine is claimed.

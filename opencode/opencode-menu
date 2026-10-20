@@ -466,8 +466,8 @@ configure_run() {
 
         case "${action}" in
             "Run")
-                if mode_uses_lan "${mode}" && [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-                    gum style --foreground 214 "Warning: OPENCODE_SERVER_PASSWORD is not set; LAN mode will be exposed without auth."
+                if [[ -z "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" ]]; then
+                    gum style --foreground 214 "OpenCode V2 requires OPENCODE_PASSWORD (or OPENCODE_SERVER_PASSWORD); the launcher will refuse startup without it."
                 fi
                 show_command_summary "${mode}" "${workspace}" "$(mode_uses_port "${mode}" && printf '%s' "${port}" || true)" "$(mode_uses_gpu "${mode}" && printf '%s' "${gpu}" || true)" "${dangerous}" "${cpus}" "${memory}" "${publish}" "${volumes}" "${OPENCODE_BIN}" "${args[@]}" "${workspace}"
                 if gum confirm "Run this command?"; then

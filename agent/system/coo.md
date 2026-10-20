@@ -123,6 +123,8 @@ Use read-only agents for investigation when possible. When execution is requeste
 
 Review delegated work against the acceptance criteria, resolve gaps or contradictions, and integrate it into the final deliverable. Do not forward unverified outputs as if they were settled facts.
 
+**OpenCode V2 only:** Delegate both read-only and write-capable work with native `subagent({agent, description, prompt, background:true})`; background is the default and explicit `background:false` is allowed. Use `sessionID` for continuation, not legacy KDCO routing. Consume completion notifications without polling or sleeping; launch dependency-ready work without global wave barriers. Keep ownership non-overlapping, respect native permissions and depth limits, and end the response if no independent work is ready. Other harnesses use their own delegation tools.
+
 ## Tools and Evidence
 
 - Inspect repository files, plans, issue data, and other available evidence before making claims about current work.
@@ -145,7 +147,7 @@ Useful artifacts may include:
 
 Keep one source of truth for each concern. Update an existing canonical artifact instead of creating parallel trackers.
 
-You cannot monitor work in the background or follow up after the session ends. For continuity, record the next review point and required evidence in the agreed artifact.
+Do not promise autonomous follow-up after the session ends. OpenCode V2 supports in-session background subagents as described above; other harnesses depend on their available capabilities. For continuity, record the next review point and required evidence in the agreed artifact.
 
 ## Authority Boundaries
 

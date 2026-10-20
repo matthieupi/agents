@@ -1,686 +1,304 @@
-# OpenCode - Native and Container Workflows
+# OpenCode V2 — server-first workflows
+
+All maintained OpenCode installation paths resolve **`@opencode/cli@latest`**.
+There is no operator-supplied OpenCode version pin. Resolved versions and install
+receipts record what was installed; they do not make `latest` reproducible.
+Application auto-update is disabled: use the owning install/build lifecycle.
+Docker cache can retain an older npm layer; use `--pull --no-cache` when deliberately
+refreshing latest, then repeat disposable acceptance before rollout.
+
+```text
+public config/resources -> private HOME discovery links + persistent state
+                              |
+                              v
+                       one opencode serve
+                              ^
+                              +-- opencode --server http://127.0.0.1:<port>
+                              +-- explicitly published browser/API clients
+```
+
+Docker runs the foreground server, not an idle keepalive or separate `web` process.
+Closing a TUI leaves the server running. Use the client helper, not bare `opencode`
+which could create an independent runtime. V1 `attach` and `/start-web` are retired.
+Readiness is authenticated **`GET /api/info`** with V2 version validation (the
+workstation helper also checks PID), not an HTML `200` or V1 `/global/health`.
 
 ## Standard VM Compose service
 
-`docker-compose.j2`, `env.j2` and `Dockerfile.service` use the ordinary service
-flow; see [the shared VM contract](../VM-SERVICES.md). The image reuses
-`install_runtime()` and locked KDCO inputs; startup only links the baked plugins.
-VM registration/public agent projection and SSH aliases are not part of this
-path. The old managed controller, opt-in workstation runtime, native start/manage
-scripts and static workstation Compose are retired. The installer/init helper,
-VM Compose template and CPU/GPU workstation wrappers remain.
+`docker-compose.j2`, `env.j2` and `Dockerfile.service` use the
+[ordinary VM service flow](../VM-SERVICES.md). Native start/manage scripts, static
+OpenCode Compose, the managed `venv/` controller and opt-in `runtime/` framework
+are retired. CPU/GPU workstation dispatcher/menu/run/mgr and installer/init helpers
+remain. T3, OMP and GSD are retired; no enrollment, registration or SSH alias
+fallback replaces them. Source retirement does not clean deployed HOME or machines.
 
-The independently hosted admin client at `opencode.intellagent.network` is built
-and served by the infrastructure repository's `agent/opencode-ui` role. COO, Team
-DevAI and N3TX Dev add that one exact CORS origin to their pinned backends; direct
-URLs and gateway Basic credentials remain unchanged. CORS preflight is the only
-ordinary unauthenticated API method. PTY WebSockets use the upstream one-time
-ticket exchange, and the gateway rejects legacy `auth_token` query transport.
+### Backend authentication and external ingress
 
-## Native workspaces in the workstation container
+V2 requires a protected **`opencode_backend_password`** fact, rendered by `env.j2`
+as **`OPENCODE_PASSWORD`**. The service fails closed if that password is missing.
+Compose runs `opencode serve` with explicit hostname/port/CORS and **no mDNS flag**;
+its native healthcheck is `node /opt/opencode/backend-health.mjs <port>`.
 
-The `opencode-run` launcher enables
-`OPENCODE_EXPERIMENTAL_WORKSPACES=1` on the shared backend at container startup.
-The launcher automatically recreates legacy keepalive containers on the next
-launch. All attached TUIs and browser clients then use that backend; setting the
-flag only on a client does not enable workspaces on an already-running server.
-`opencode shell <container>` also supplies the flag to the new shell, including
-for older containers; OpenCode launched from that shell inherits it. Already
-running processes are unchanged.
-With the new backend running, enter `/warp` and select **Worktree** to create a
-native workspace and move the current conversation there in the same TUI. Select
-an existing workspace to reuse it. No fork or new terminal is required.
+The external nginx owner must first authenticate the client using the existing
+gateway credential, then **replace** upstream `Authorization` with Basic auth for
+`opencode:<backend credential>`. Forwarding the client's credential or stripping
+Authorization to reach an anonymous backend is incompatible with V2. This required
+gateway/secret integration is **outside this repository**; these templates do not
+establish deployment acceptance. Keep existing gateway/provider credential
+references; no secret rotation or provider-credential copying is authorized here.
+Host publication remains loopback-only; direct bridge reachability must be restricted.
 
-This experimental workflow is separate from KDCO's `worktree_create` tool, which
-retains its terminal-launch behavior. The native creation dialog does not provide
-plan-derived branch names, the KDCO `/var/worktree` setting, or credential symlink
-setup. Do not rely on Warp to transfer uncommitted primary-checkout changes.
+The separately hosted admin client at `opencode.intellagent.network` remains owned
+by the infrastructure repository's `agent/opencode-ui` role. Preserve exact allowed
+origins, TLS, Host/Origin enforcement, CORS preflight, streaming and authenticated
+WebSocket behavior. Do not assume the old V1 ticket/API behavior proves V2 browser
+compatibility. Validate positive and negative API/WS flows through the gateway.
 
-Before using Warp for real implementation, smoke-test it in a
-disposable credential-free repository: verify a relative file operation and a
-native subagent both use the selected worktree, and that the original checkout
-remains unchanged. Source configuration alone is not runtime verification.
+### Shared workstation configuration on VM consumers
 
-## Optional hub-only dispatch
+The parent `tasks/services/opencode-config.yml` delivers tracked regular files
+from `opencode/.opencode/config/` and `agent/`, preserving known discovery links
+without following them. It does not curate a separate agent list or rewrite
+models, permissions, providers or plugins. Ignored/untracked files, Git metadata,
+provider credentials and private HOME are not public delivery inputs. Missing or
+redirected tracked files and unreviewed symlink layouts fail explicitly.
 
-The standalone [dispatch plugin](dispatch/README.md) delegates to existing OpenCode
-v1.18.29 peers using native Basic authentication over verified HTTPS. It is **not
-installed or enabled automatically**. Its five `dispatch_*` tools provide public
-peer discovery, durable session-owned async task handles, follow-up prompts and
-explicit status/result retrieval. Task/reply approval also covers background polling
-and bounded queued-result context on future user turns in the original session and
-directory—never a transcript notification, forced model turn or local fallback.
-The package includes opt-in `/dispatch`, a public-config setup skill and local mock
-tests. Passwords stay in preexisting protected files, not chat or config. No peer
-callbacks, gateway, infrastructure changes or changes to KDCO enablement are involved.
+```text
+maintained config + shared agent resources
+    -> <service_base_path>/agent-config (root-owned public source)
+    -> /opt/opencode-defaults + /opt/agent (read-only container binds)
+    -> selected files/resources linked into private HOME/.config/opencode
+       auth/session/cache/state remain private and persistent
+```
 
-## KDCO plugins: enabled through normal discovery
+Standalone OpenCode, Paseo's embedded OpenCode and Paperclip daemon use the same
+publication helper. Paperclip initializes as `agent` before starting root-owned
+sshd; root's HOME is not initialized. Paseo has ephemeral HOME and separate
+persistent provider state. The static Hub UI gets agents from the selected backend,
+not Hub-local config.
 
-The committed [KDCO source and provenance](.opencode/config/kdco/README.md) provide
-background agents, worktrees and notifications. Three `plugins/kdco-*.ts` static
-re-exports are auto-discovered. Helpers and dependencies live in sibling `kdco/`,
-outside even recursive plugin scans. No custom loader, activation flag, OCX,
-source downloader, or inactive receipt remains.
-
-| Path | Dependency installation and publication |
-|---|---|
-| CPU/GPU workstation | Image installs defaults; `init.sh` checks/reuses the actual mounted `kdco/` graph under a shared lock, otherwise links installed image defaults |
-| Native | `install` checks/reuses checkout `.opencode/config/kdco` under the same package-local lock; `initialize-home` links that package and three entrypoints |
-| Standard VM Compose | Image installs the same package; product startup links baked plugins into private HOME, without enrollment or VM registration |
-
-Private config, root package manifests, provider credentials and unrelated plugins
-are not overwritten. Conflicting managed names or redirected private directories
-fail with their contents preserved. Managed links receive later shared-source
-edits; unlike ordinary copied defaults, they are not first-write-only snapshots.
-Keep the source available wherever its HOME is mounted. Workstation init, native
-install and VM image installation use a `flock` on `kdco/.kdco-install.lock`. Under that
-lock the existing helper compares both manifests and the actual installed tree's
-file contents, directory paths and symlink targets against `.kdco-install.json`.
-Unchanged launches do not invoke npm or use the network. Missing/changed inputs,
-missing/damaged dependencies or an absent/invalid stamp require `npm ci`; a marker
-alone never proves that dependencies are present. The stamp is a reuse check, not
-a signed security attestation. No plugin code is imported by these checks.
-
-**Real installs/updates still require all sessions using that shared graph to be
-idle.** This includes the first check of an older installation without a stamp.
-The lock serializes installers, not running sessions. An in-place npm failure may
-leave dependencies incomplete; the success stamp is invalidated before npm and
-only replaced atomically after success. Retry the normal installation while idle.
-Native failure before executable promotion preserves the executable, not the
-previous dependency graph. No dependency rollback or live-update safety is claimed.
-
-**Factories and hooks now run at OpenCode startup.** Installation itself only
-publishes files/links and installs dependencies; it does not import plugins.
-Worktree opens SQLite, delegation creates local storage, and notify inspects
-terminal state. Native worktree deletion automatically stages/commits changes and
-force-removes the worktree on idle, even if commit fails. Review project shell
-hooks before using it. Headless VM/container terminal launches and desktop
-notifications may be unavailable; no host sockets or extra permissions are added.
-
-OpenCode 1.18.29 loader/build source was reviewed; all three factories were smoke
-tested with Bun 1.3.11 and locked dependencies in disposable HOME without invoking
-tools/events/providers. This is not full OpenCode/provider/platform acceptance.
-`npm audit` reports two moderate findings (`uuid` and `node-notifier`); no breaking
-force-fix was applied. See package provenance for the approved artifact-read patch.
-No deployments or running sessions are updated by these edits. Quit/restart only
-the selected idle OpenCode session after its normal installation/reapply.
-Existing workstation images must be rebuilt before using the updated mounted
-`init.sh`, which expects the image's publication helper. VM products instead bake
-the same public inputs through native Docker builds; there is no enrollment step.
-
-### KDCO verification commands
+Despite its retained filename, `scripts/publish-plugins.mjs` is a **V2 config-only
+publisher**, invoked as:
 
 ```sh
-flock -x opencode/.opencode/config/kdco/.kdco-install.lock node opencode/scripts/publish-plugins.mjs install opencode/.opencode/config/kdco
-node --test opencode/tests/plugins.test.mjs
-bun test opencode/tests/plugins-smoke.test.ts
-python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
-# Optional real npm install/reuse/repair verification, entirely in disposable directories:
-KDCO_REAL_NPM_TEST=1 python3 -B -m unittest discover -s opencode/tests -p 'test_plugin_install_*.py' -v
-# From the infrastructure repository root:
-python3 -B -m unittest discover -s tests -p test_kdco_plugins.py -v
+node scripts/publish-plugins.mjs config SOURCE_CONFIG RESOURCES DESTINATION_CONFIG
 ```
 
-Bun is a test prerequisite, not an additional production installation. The Node
-test's dependency-resolution check requires the preceding npm install. Tests use
-temporary directories; no real provider, worktree deletion or desktop event runs.
+It installs no dependencies and imports no plugin code. It publishes selected
+config/CLI/plugin assets and `commands`, `skills`, `system` links, **not a symlink
+of the full source config directory**. Exact known managed links/snapshots/assets
+can be reconciled and exact retired managed links/wrappers removed. Unknown config
+(including conflicting `opencode.jsonc`), modified loaders, private files and
+redirected private directories are preserved and block conflicting publication.
+Unrelated plugins are not silently deleted. Review project-local discovery too:
+workstation init rejects discovered obsolete `kdco-*` loaders. No KDCO package,
+dependency install or GSD resource publication remains.
 
-## Retained installer and home initialization
+**Updates:** pull reviewed commits, then reapply through the scoped ordinary
+Ansible service flow. `workspace_copy` uses controller-index membership and
+working-tree content; `git` materializes the agents submodule at the
+**parent-recorded commit**, not a floating branch. Publish nested commit and parent
+gitlink together. There is no startup Git pull or new repository credential.
+Quiesce every shared-config consumer on the selected host first: publication is
+not a transactional live update. Config-only delivery requests Compose recreation,
+not image rebuild; installer/entrypoint/build-input changes require the image build
+path. A pull alone or restart before delivery is insufficient. Recreate affected
+idle consumers, inspect effective config/plugin/prompt loading through the authenticated
+backend on one host, then expand. Do not redeploy static Hub UI to change agents.
 
-Native OpenCode executes **locally as the supplied account**, not inside a sandbox
-or remote-only adapter. Docker workflows below remain independent and unchanged.
-Root must never execute editable checkout scripts or Git; infrastructure-owned
-wrappers must reject root before loading these scripts.
+## Workstation quick start and client lifecycle
 
-### Environment and ownership contract
+Requires Docker Engine, Bash, Python 3, `realpath`, Linux `flock` and `timeout`.
+Guided menus additionally use [`gum`](https://github.com/charmbracelet/gum).
+Run from `agents/opencode/`; configure provider access separately.
 
-| Input | Contract |
-|---|---|
-| `OPENCODE_USER` | Existing named non-root account; both UID and EUID must match |
-| `OPENCODE_REPO` | Default `/srv/agents`; full user-owned Git clone, not a worktree/submodule |
-| `OPENCODE_ROOT` | Must equal `$OPENCODE_REPO/opencode` (default) |
-| `OPENCODE_PREFIX` | Must equal `$OPENCODE_ROOT/.runtime` (default) |
-| `OPENCODE_UNIT` | Legacy contract field, default `opencode.service`; no service control |
-| `OPENCODE_VERSION` | **Install only:** required exact stable `X.Y.Z`; no default/latest |
-| `OPENCODE_PREVIOUS_REPO` | Optional initialize-home input: explicit known old checkout for link migration |
-
-HOME/UID/GID come from passwd. The account must own its existing home, checkout
-and component. Home and checkout cannot overlap; canonical paths outside `/opt`
-are required. No service environment file is sourced. Native start/manage commands
-are no longer supplied; VM launch belongs to the ordinary Compose service and
-workstation launch belongs to `opencode-run`.
-
-### Commands and integration order
-
-```text
-Installer caller: account + OS pins/tools + full checkout
-    |
-    +-- OPENCODE_USER: entrypoint.sh install          -> opencode/.runtime ONLY
-    +-- OPENCODE_USER: entrypoint.sh initialize-home  -> missing defaults/known links
-    |                  (supply PREVIOUS_REPO here for first migration)
-```
-
-**Install never initializes the home.** The deployment role must call
-`initialize-home` separately after install, passing any migration input. This
-avoids duplicate setup and first-migration failures. Both operations share a
-nonblocking component lifecycle lock.
-
-Ansible owns OS dependencies and their approved pins: Bash, coreutils, flock,
-getent, `/usr/bin/git`, `/usr/bin/node`, `/usr/bin/npm`, certificates and workload
-tools. NodeSource-bundled npm is acceptable; no standalone npm package or APT
-input is required here. Scripts create no accounts, units or login hooks and
-perform no privilege escalation or service control.
-
-### Installation, compatibility and failure handling
-
-Install stages `opencode-ai@$OPENCODE_VERSION` under ignored `.build.*`, using
-`env -i`, isolated HOME/XDG/config/cache/state and distinct empty user/global
-npmrc files. Public HTTPS npm registry/config/cache variables also reach nested
-npm children. Standard npm lifecycle is explicitly **enabled**, as the exact
-non-root account, with optional platform packages. Install is bounded at 600
-seconds; verification at 30 seconds, with kill grace. No user auth/plugins are
-loaded for verification: only `--version` runs from the isolated HOME, with no
-inherited executable/test-home/Node overrides or provider/web credentials.
-
-The staged npm install is **local**, with `--no-save --package-lock=false`, not
-`--global`. Global npm exports `npm_config_global=true` to postinstall children;
-the vendor's fallback would then install under `temp/lib/node_modules` while
-reading `temp/node_modules`. Local mode preserves that expected fallback layout.
-Runtime metadata lives at `.runtime/node_modules/opencode-ai/package.json`;
-`.runtime/bin/opencode -> ../node_modules/.bin/opencode` keeps the public launch
-path unchanged and remains valid after promotion. An old global-layout runtime
-is rebuilt on reapply, preserving it if the replacement fails.
-
-Published evidence reviewed for this conversion:
-- [`1.18.29` registry metadata](https://registry.npmjs.org/opencode-ai/1.18.29)
-  declares `bin/opencode.exe`, exact optional architecture packages and
-  `node ./postinstall.mjs`.
-- [Its postinstall](https://unpkg.com/opencode-ai@1.18.29/postinstall.mjs) selects
-  architecture/libc/AVX variants, copies the compiled binary, probes `--version`,
-  and may use nested npm to obtain a fallback platform package.
-- [Its CLI entrypoint](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/index.ts)
-  registers `--version` through yargs' version handler rather than launching a
-  session. Verification uses that path, not normal auth/plugin initialization.
-- The old documentation's `1.2.15` was an example, **not a deployment pin**.
-  Do not infer `--ignore-scripts` compatibility from its older launcher fallback.
-
-Neither version is selected by these scripts. The caller must supply an approved
-exact pin; metadata review and mocked tests do not establish real binary/platform
-compatibility. Validate that pin's installation, version, loopback web/auth and
-CLI behavior on the concerned host before wider rollout.
-
-Package name/version and actual binary `--version` must match before reuse or
-promotion. Plugin dependencies are independently checked/reused, or installed from
-the npm lock when their inputs or installed bytes differ.
-Matching runtime reuse and installation allow dirty checkouts. Failed
-build/verification preserves the previous runtime and retains the ignored stage
-and logs. Promotion is verified again; failure attempts to restore the previous
-runtime. The two renames are **not crash-atomic**: inspect `.build.*/previous`
-after interruption. Stop the concerned unit and drain sessions through protected
-administrator tools before replacing an in-use runtime. No private-state rollback
-is implied. Lifecycle scripts have the account's filesystem access: sanitized
-environment is not a sandbox, and a top-level pin is not a transitive lockfile.
-
-### Home resources
-
-`initialize-home` directly links only `commands`, `skills`, `system`, `gsd` to
-`$OPENCODE_REPO/agent/`; it does not use Pi's agents mapping. Only literal current
-or explicitly supplied previous targets are reused/retargeted. Known duplicate
-`~/.agents` resource links are removed; unknown links/real directories are
-preserved and fail clearly. Redirected private roots/plugin directories are
-refused, never followed to modify Docker or external state.
-
-Only missing committed defaults from `opencode/.opencode/config` are copied:
-`opencode.json`/`opencode.jsonc`, `tui.json`, package manifests/lockfile and
-`plugin/`/`plugins/` files except managed `plugins/kdco-*.ts`, excluding caches/node_modules. Either existing config
-format prevents both formats being seeded; if neither exists, tracked JSON wins
-over JSONC. Complete temporary files are published exclusively, so existing or
-concurrently created files win. Existing plugin lists/config are never rewritten.
-Private auth, data, cache and state stay outside Git and unchanged. Copied defaults
-do not receive later repository edits automatically; review/merge deliberately.
-
-### Verification
-
-Run from the agents repository root:
-
-```bash
-bash -n opencode/scripts/entrypoint.sh
-python3 -B -m unittest tests/test_workstation.py opencode/tests/test_backend.py -v
-```
-
-These targeted tests use isolated HOME, recorded Docker calls and mocked HTTP;
-they do not run Docker, install packages or contact providers. Run with a sanitized
-environment and a writable temporary HOME/TMPDIR. This is not live VM acceptance.
-
-## Docker workstation workflow
-
-Each container runs one foreground `opencode web` backend on internal port 4096.
-TUIs attach to it; browser clients use the same backend and session store. Init
-runs once per container start, not on each attach. Closing a TUI does not stop the
-backend; use `opencode stop <name>` when finished.
-
-```text
-TUI (docker exec attach) ---> container backend :4096 <--- browser
-                                                        via explicit host mapping
-```
-
-**No host ports are published by default**, including when `--port` is used
-without a web mode. Only `--web`, `--wlan`, or `--publish`
-requests host publication. The backend binds `0.0.0.0` **inside the container**,
-so Docker-network peers (and hosts with direct container routing) can reach it
-even without published ports. This is not network isolation. Set
-`OPENCODE_SERVER_PASSWORD` before creation on untrusted/shared networks; username
-defaults to `opencode`. HTTP Basic auth is not encryption; use a trusted network
-or a TLS reverse proxy for remote access.
-
-The launcher waits up to 120 seconds for authenticated `/global/health` readiness
-before attaching or reporting a browser endpoint. A failed probe never launches
-another server. Inspect `opencode logs <name>` for startup/dependency errors and
-retry after resolving them. Creation/reuse is serialized with host `flock` per
-container name within this checkout; the lock is released before TUI attachment.
-The launcher requires host `flock` and `timeout` (Linux util-linux/coreutils).
-
-Legacy lifecycle, permission, exposure, resources, GPU, or mount mismatches cause
-automatic recreation **without confirmation**, interrupting attached clients.
-Repeat the same flags to reuse a container. Omitting a previous web/publish option
-removes that publication by recreation. To attach to an existing exposed backend
-without changing its launch configuration, use the direct `docker exec ... attach`
-command below. Persistent config/data/cache mounts survive recreation.
-
-Readiness and TUI attach inherit credentials from the **container environment**;
-changing the invoking shell's password does not rotate a reused backend. Remove
-the container and relaunch with the new credentials to rotate them. Credentials
-are not printed in launcher commands or stored in compatibility labels.
-
-The health helper is both copied into images and mounted by the launcher,
-so older images do not need to contain that new file just to recreate a container.
-Old OpenCode binaries without compatible `web`/`attach` commands need an image
-update. Existing plugin installation prerequisites still require rebuilding old
-images as described above.
-
-## Quick Start
-
-```bash
-# From this directory; configure provider authentication separately.
-mkdir -p workspace
+```sh
+# Supply OPENCODE_PASSWORD through a protected environment loader first.
+# The wrapper does not source .env; .env.example is a reference.
+mkdir -p workspace ssh
+docker network create devai-xmist   # only if the external network is absent
 ./opencode rebuild
 ./opencode ./workspace
+./opencode menu                    # alias: tui
 ```
 
-## Usage with Wrapper Scripts
+Every server requires `OPENCODE_PASSWORD`, including loopback/TUI-only use.
+`OPENCODE_SERVER_PASSWORD` is a fallback when the preferred value is unset/empty.
+Username is fixed to **`opencode`**. The client inherits credentials from the
+container environment, not client argv/URLs; Docker administrators can inspect
+that environment. Provider login may be interactive; an API key is not required
+for every authentication method.
 
-The `opencode` wrapper manages per-workspace containerized instances.
+The launcher waits up to 90 seconds for authenticated readiness and never starts
+a second server on probe failure. Web modes ensure readiness, print the endpoint
+and return; they do not hold a browser session. To attach without changing launch
+settings, use the container name reported by the launcher:
 
-### Guided launcher
-
-```bash
-./opencode menu                # Open an interactive command builder
-./opencode tui                 # Same as menu
+```sh
+docker exec -it <container-name> bash /opt/harness/docker-client.sh
 ```
 
-The guided launcher uses [`gum`](https://github.com/charmbracelet/gum) to present common run, web, GPU, rebuild, and container-management options. It shows the generated `./opencode ...` command before executing it, so the normal CLI remains the source of truth.
+### Retained flags and management
 
-### Interactive TUI (default)
+```sh
+./opencode /path/to/project
+./opencode -w                      # loopback browser/API, host port 4096
+./opencode --web 5000 .             # 127.0.0.1:5000 -> container 4096
+./opencode --web --port 5000 .      # equivalent
+./opencode --wlan 4096 .            # explicit LAN publication
+./opencode -d .                    # --dangerous: client --auto; denies still apply
+./opencode --cpus 4 --memory 8g .   # --mem alias; defaults 8.0 CPUs / 16g
+./opencode --gpu .                 # -gpu alias; all GPUs, lab/opencode:gpu
+./opencode --gpu 0,1 --cpus 8 --memory 32g .
+./opencode --web 4096 --gpu .
+./opencode --publish 3000 .
+./opencode -p 5173:5173 -p 127.0.0.1:8080:80 .
+./opencode -v /srv/docs:/docs:ro --volume ./shared-data:/data:rw .
+./opencode --privileged .          # alias: --priviliged; full host-root access
 
-```bash
-./opencode                      # Run in current directory
-./opencode /path/to/project     # Run in specific directory
+./opencode -r .                    # build CPU AND GPU images only, then exit
+./opencode rebuild                 # CPU build + refresh workspace containers
+./opencode rebuild gpu             # GPU build + refresh workspace containers
+./opencode rebuild all             # both; update is a rebuild alias
+./opencode list                    # alias: ls
+./opencode stop <name|all>
+./opencode start <name>
+./opencode remove <name|all>        # alias: rm
+./opencode clean                   # stopped containers; clean -f / fclean stops first
+./opencode logs <name>
+./opencode shell <name>
 ```
 
-### Browser UI
+No host port is published by default; `--port` alone does not publish. Backend
+port 4096 is reserved: use web options, not `-p`, for it. `--agent-web-port` is
+removed. Extra ports accept `PORT`, `HOST:CONTAINER` or explicit
+`127.0.0.1|0.0.0.0:HOST:CONTAINER`; unqualified mappings normally expose all host
+interfaces. Dev servers must listen on `0.0.0.0` inside the container. Docker
+network peers may reach the backend even without host publication. Basic auth is
+not encryption: LAN use needs deliberate firewall/TLS/access controls.
 
-`--web`/`--wlan` ensure the backend is ready, print its endpoint, and return;
-they do not start a second backend or hold a foreground browser session. Open
-the printed URL in your browser. Custom host ports always map to container 4096
-(for example, `--web 4097` publishes `127.0.0.1:4097:4096`).
+`--volume`, `--volumes`, `-v` accept existing host directories as
+`HOST_DIR:ABSOLUTE_CONTAINER_DIR[:ro|rw]` (default rw). Sources are canonicalized;
+destinations can shadow existing mounts, a deliberate Docker-level override.
+GPU requires NVIDIA Container Toolkit and compatible drivers; the CUDA 12.4.1
+devel image includes compiler/toolkit, Python 3.11 headers and native build tools.
+Verify host GPU support independently before enabling it.
 
-```bash
-./opencode -w                   # Run browser UI locally on http://localhost:4096
-./opencode --web 4096 .         # Run browser UI locally on a specific port
-./opencode --web --port 4096 .  # Equivalent explicit port form
-./opencode --wlan 4096 .        # Expose browser UI on the LAN
+⚠️ `--privileged` adds `--privileged --pid=host -v /:/host:rw` to this container.
+Passwordless sudo permits host-root execution, including `sudo nsenter --target 1
+--mount --uts --ipc --net --pid --root --wd -- uptime`. This grants every agent,
+plugin and client full Docker-host control, not read-only/time-limited access.
+Privileged containers use restart policy `no`; ordinary ones use `unless-stopped`.
+Manual restart retains privileges. Relaunch without the flag to recreate without
+them; stopping/starting is insufficient. This is independent of `--dangerous`.
+
+### Automatic replacement and persistence
+
+Ordinary launches **automatically stop/remove/recreate without confirmation** when
+image ID, lifecycle/config fingerprint, credentials, resources, GPU, ports, volumes
+or privilege mode differ. **Active sessions are interrupted**; this behavior is
+intentional and user-authorized, not a live migration. Repeat all desired flags
+for reuse; omitting a publication/mount removes it by recreation. Matching running
+containers are reused; stopped/stale containers are recreated. `start` does not
+reconcile settings. Manager rebuild/update removes matching workspace containers
+across profiles. Names use workspace basenames (plus `-gpu`); equal basenames collide.
+CPU/GPU containers have separate names but share canonical state.
+
+| Workstation host path | Container use |
+|---|---|
+| `.opencode/config` | `/opt/opencode-defaults`, read-only maintained public source |
+| `.opencode/home-config` | `~/.config/opencode`, private writable directory with selected managed links |
+| `.opencode/data` | `~/.local/share/opencode`, sessions/provider authentication |
+| `.opencode/cache`, `.opencode/state` | private persistent XDG cache/state |
+| `../agent` | `/opt/agent`, writable shared commands/skills/system resources |
+| selected workspace | `/workspace`, writable project |
+| `SSH_DIR_PATH` (default `./ssh`) | `~/.ssh`, read-only dedicated keys/config/known_hosts |
+
+Wrapper containers use **1000:1000**, irrespective of the caller. Check mount
+ownership, not recursive chown of unrelated HOME/checkouts. Retain private paths
+across replacement; do not delete auth/session databases to troubleshoot. V1 database
+conversion and real old-session recovery remain unverified. Retained bytes do not
+prove compatibility or rollback. Workstation images include passwordless sudo and
+writable shared resources: they are trusted development environments, not sandboxes.
+Provision least-privilege remote accounts and verified SSH known_hosts separately.
+
+## V2 configuration and plugins
+
+- Canonical `.opencode/config/opencode.json` uses native V2 `agents`, `providers`,
+  ordered `permissions`, `system` references and `request` settings. Default model
+  is `openai/gpt-6-astra`; native `title` agent uses `openai/gpt-5-mini`.
+  `DevOps` is selectable/callable (`mode: "all"`); `DevOps Junior` is hidden.
+- Automatic compaction is disabled: `{auto: false, buffer: 50000}`. The buffer is
+  not an enabled token trigger or a verified long-session request-size fix.
+- `plugins/background-subagents.js` defaults native subagent calls to background
+  **only when omitted**. Explicit `background: false` works for every agent,
+  including write-capable ones; native permissions/depth checks still apply.
+  Prefer completion notifications and dependency-driven work over polling/barriers.
+- `plugins/first-prompt-title.js` owns initial title generation through the native
+  hook, preserves custom titles and leaves persistence/concurrent renames to the
+  host. Optional bounded OpenAI lookup uses `OPENCODE_TITLE_API_KEY` (fallback
+  `OPENAI_API_KEY`), `OPENCODE_TITLE_BASE_URL` (full chat-completions URL), and
+  `OPENCODE_TITLE_MODEL` (default `gpt-4.1-mini`). Failure/missing credentials
+  falls back to a first-prompt-derived title.
+- `cli.json` selects theme `opencode` and `./tui-plugins/session-title`. Its shim
+  loads a display-only sanitized, colored title (up to 35 graphemes) at
+  `prompt.footer.status`, not a replacement footer/title generator. See
+  [title details](.opencode/config/tui-plugins/README.md). Title-specific environment
+  overrides are not automatically forwarded by the wrapper/template.
+- Global permissions are permissive with per-agent overrides. Read-only role
+  descriptions are not filesystem sandboxes. Provider env variables alone do not
+  register arbitrary providers; use the native provider schema.
+
+`OPENCODE_EXPERIMENTAL_WORKSPACES=1` is set on the workstation backend; all clients
+use that backend. Verify native worktree relative-file/subagent behavior in a
+disposable repository before real use; do not assume credential links or dirty
+checkout changes transfer. Markdown agents shared with Pi/Claude are not OpenCode's
+native agent registry.
+
+## Retained installer/init helper
+
+As an existing named non-root `OPENCODE_USER` (both UID/EUID must match), call
+`scripts/entrypoint.sh install` and separately `initialize-home` while consumers
+are idle. Defaults are `OPENCODE_REPO=/srv/agents`,
+`OPENCODE_ROOT=$OPENCODE_REPO/opencode`, `OPENCODE_PREFIX=$OPENCODE_ROOT/.runtime`.
+The home/checkout/component must be account-owned canonical non-overlapping paths
+outside `/opt` for these direct helper calls. Ordinary VM image builds reuse the
+installer functions under their own build-account/path setup.
+
+Install resolves latest into ignored staging using isolated HOME/XDG/npm settings,
+verifies package metadata and binary version, then promotes `.runtime/bin/opencode`.
+Failed stages/logs remain; attempted runtime restoration is not crash-atomic or a
+private-state rollback. `initialize-home` uses the shared config publisher, not a
+full source-directory symlink. Locks serialize cooperating installers/publishers,
+not active sessions. Infrastructure owns accounts/tools/secrets and service control;
+these scripts create no units, escalate no privileges and source no service env file.
+There are **no native start/manage commands** to restore.
+
+## Integrations and evidence boundary
+
+- **Paseo:** requires actual native V2 adapter packaging, not merely a newer version
+  label. Published **0.12.0** source/package layout was verified; its adapter uses
+  per-child passwords and an authenticated V2 client (minimum CLI 2.0.10).
+  `verify-paseo.mjs` is a required build input checking >=0.12.0, matching CLI/server
+  packages, exact V2 client dependency and V2 provider modules. This is not live
+  image/provider/session/tool acceptance. Keep its state separate from workstation state.
+- **Paperclip:** retained SSH transport/callback evidence does **not** establish
+  OpenCode V2 adapter compatibility. V2 session/tool/provider acceptance is unverified;
+  do not assume a `latest` adapter supports V2 or is safe to activate.
+- [dispatch](dispatch/README.md) and [ssh-remote](ssh-remote/README.md) remain
+  **default-off, V1-targeted**, not ported or established compatible with V2.
+
+Prior disposable install/server smoke resolved latest to **2.1.1** and passed;
+that is evidence, not a pin or production acceptance. This documentation pass runs
+no installs, providers or deployments. Useful source checks from the repository root:
+
+```sh
+git diff --check
+node --test opencode/tests/config.test.mjs opencode/tests/service-entrypoint.test.mjs
+python3 -B -m unittest discover -s opencode/tests -p 'test_backend.py' -v
 ```
 
-For LAN access, set `OPENCODE_SERVER_PASSWORD` so the web server is protected:
-
-```bash
-OPENCODE_SERVER_PASSWORD=secret ./opencode --wlan 4096 /path/to/project
-```
-
-To attach a TUI without changing the exposed backend's launch configuration, use
-the container name reported by the launcher:
-
-```bash
-docker exec -it <container-name> opencode attach http://127.0.0.1:4096 --dir /workspace
-```
-
-This attaches to the existing backend; it does not start another server.
-
-### Rebuild image
-
-```bash
-./opencode -r .                 # Rebuild CPU and GPU images
-./opencode rebuild              # Rebuild image + refresh workspace containers
-./opencode rebuild gpu          # Rebuild CUDA devel GPU image + refresh containers
-./opencode rebuild all          # Rebuild CPU and GPU images + refresh containers
-```
-
-Workstation CPU/GPU images intentionally install **`opencode-ai@latest`**, not a
-pinned version. This is latest-at-build policy: running containers have automatic
-updates disabled. A cached Docker build may reuse the old npm install layer,
-including `./opencode update`, which pulls the base image but still allows cache.
-To force a current npm release, build without cache from this directory:
-
-```bash
-docker build --pull --no-cache -t lab/opencode:latest .
-docker build --pull --no-cache -f Dockerfile.gpu -t lab/opencode:gpu .
-```
-
-Then remove the affected workspace containers with `./opencode remove <name>`
-and relaunch them (image tags alone do not invalidate reused containers).
-Schedule updates when clients are idle. The manager's `update`/`rebuild` commands
-already remove workspace containers after their builds. This policy does not
-change the separate native/VM pinned-version workflow.
-
-### Dangerous mode (auto-approve all permissions)
-
-```bash
-./opencode -d                   # Skip permission prompts
-```
-
-`-d` sets server-wide `OPENCODE_PERMISSION='{"*":"allow"}'`, affecting **every
-TUI and browser client of that backend**, subject to OpenCode's agent-specific
-permission rules. Without `-d`, the wrapper supplies `{}` and leaves configured
-permissions intact; it does not promise that the underlying config asks for
-approval. Toggling `-d` recreates the container. No unsupported permission flag is
-passed to `opencode attach`.
-
-### GPU access
-
-```bash
-./opencode --gpu .              # Run with all host GPUs available
-./opencode -gpu .               # Same as --gpu
-./opencode --gpu 0 .            # Run with GPU device 0 available
-./opencode --gpu 0,1 .          # Run with GPU devices 0 and 1 available
-./opencode --web 4096 --gpu .   # Combine browser UI and GPU access
-```
-
-GPU mode requires the host Docker engine to support GPU containers through the NVIDIA Container Toolkit. Validate the host first:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-```
-
-GPU access is an explicit opt-in because agent-run commands can consume significant VRAM, compute, power, and thermal headroom.
-
-When `--gpu` is used, the wrapper runs `lab/opencode:gpu` instead of the default `lab/opencode:latest` image. The GPU image is based on NVIDIA CUDA devel and includes CUDA compiler/toolkit headers, Python 3.11 development headers, and native build tools for packages that compile extensions.
-
-### Container resources
-
-```bash
-./opencode --cpus 4 --memory 8g .             # Run with 4 CPUs and 8 GB memory
-./opencode --web 4096 --cpus 2 --mem 4g .    # Combine web port and resource limits
-./opencode --gpu 1 --cpus 8 --memory 32g .   # GPU workload with larger limits
-```
-
-Defaults are `--cpus 8.0` and `--memory 16g`. Changing CPU, memory, web port, or GPU settings for an existing workspace container recreates that container because Docker applies those settings when the container is created.
-
-### Extra published ports
-
-Use `--publish`/`-p` to expose arbitrary ports for dev servers that agents start inside the container.
-
-```bash
-./opencode --publish 3000 .                    # host 3000 -> container 3000
-./opencode --publish 5173:5173 .               # host 5173 -> container 5173
-./opencode -p 3000 -p 5173:5173 .              # expose multiple ports
-./opencode -p 127.0.0.1:8080:80 .              # localhost 8080 -> container 80
-./opencode -p 0.0.0.0:8080:80 .                # LAN 8080 -> container 80
-```
-
-Inside the container, the server must listen on `0.0.0.0`, not only `localhost`, for Docker port publishing to work.
-
-### Custom directory mounts
-
-Use `--volume`, `--volumes`, or `-v` to bind additional existing host directories
-into the workspace container. The default access is read-write; use `:ro` for
-reference material that the agent must not modify.
-
-```bash
-./opencode -v /home/me/reference:/reference:ro .
-./opencode --volume ./shared-data:/data:rw .
-./opencode -v /srv/docs:/docs:ro -v /srv/assets:/assets .
-```
-
-The format is `HOST_DIR:CONTAINER_DIR[:ro|rw]`. Host paths are canonicalized and
-must already exist as directories; container destinations must be absolute.
-Destinations are intentionally unrestricted, so a custom mount can shadow an
-existing path if requested. Treat that as a deliberate Docker-level override.
-
-Docker mounts are fixed when a container is created. Changing, adding, or omitting
-custom volumes on a later invocation recreates that workspace container; finish or
-detach active sessions first.
-
-### Container management
-
-```bash
-./opencode list                 # List all containers
-./opencode rebuild              # Rebuild image + refresh containers
-./opencode stop <name|all>      # Stop container(s)
-./opencode start <name>         # Start a stopped container
-./opencode remove <name|all>    # Remove container(s)
-./opencode clean                # Remove stopped containers
-./opencode fclean               # Force clean: stop all, then remove
-./opencode logs <name>          # Show container logs
-./opencode shell <name>         # Open bash shell in container
-```
-
-## Directory Structure
-
-```
-opencode/
-├── Dockerfile              # Container definition
-├── Dockerfile.gpu          # CUDA devel GPU container definition
-├── docker-compose.j2       # Ordinary VM service template (not workstation Compose)
-├── .env.example            # Environment template
-├── .env                    # Your config (git-ignored)
-├── opencode.json           # OpenCode app config (reference)
-├── opencode                # Main CLI wrapper
-├── opencode-menu           # Guided launcher menu
-├── opencode-mgr            # Container management script
-├── opencode-run            # Runtime execution script
-├── .opencode/
-│   ├── config/             # OpenCode config (persisted)
-│   │   └── opencode.json
-│   ├── data/               # Session & auth data (persisted)
-│   └── cache/              # Provider/plugin cache (persisted)
-├── ssh/                    # SSH keys for remote access
-│   ├── id_ed25519          # Agent private key
-│   ├── id_ed25519.pub      # Agent public key
-│   ├── config              # SSH client config
-│   ├── known_hosts         # Known host keys
-│   └── authorized_keys     # Keys allowed to access
-└── workspace/              # Your projects (mounted)
-```
-
-## Configuration
-
-### Shared project agent folder
-
-On startup, this service links its home config directly to the shared `agent/` resource root for cross-harness commands and skills.
-
-- Shared editable resources live in `/opt/agent/commands` and `/opt/agent/skills`
-- `/opt/agent/prompts` carries shared prompt-oriented content alongside commands
-- OpenCode links `~/.config/opencode/{commands,skills,system,gsd}` directly to that shared source; duplicate legacy `~/.agents` links are removed
-- Existing real home directories are preserved by moving them aside to `.local*` backups if they conflict during startup
-
-### Arbitrary config directory
-
-Yes: OpenCode supports an arbitrary config directory through `OPENCODE_CONFIG_DIR`, but this service now keeps the default home path so behavior stays aligned with Claude-style home + project discovery.
-
-This service sets:
-
-```bash
-OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
-```
-
-This service keeps `~/.config/opencode` as the active config directory and links shared resources directly from `/opt/agent` into it during startup via `init.sh`.
-
-Project-shared resources come directly from `/opt/agent`, so you do not need a separate project `.opencode/` for shared commands/skills.
-
-OpenCode does not share markdown `agents/` definitions with Claude/Pi. Its agent schema is different, so this bootstrap only shares `commands/` and `skills/` with OpenCode and leaves `.opencode/agents/` harness-specific.
-
-### Shared home defaults
-
-Shared default agents, commands, and skills live under the shared workspace `agent/` tree, mounted in the container as `/opt/agent`, and OpenCode links them into its home config during startup via `init.sh`.
-
-- `../agent/commands/` -> `~/.config/opencode/commands`
-- `../agent/skills/` -> `~/.config/opencode/skills`
-- `../agent/system/` -> `~/.config/opencode/system`
-- `../agent/gsd/` -> `~/.config/opencode/gsd`
-
-Only the `prompts/commands`, `skills/`, and OpenCode-native `gsd/` prompt defaults are applied to OpenCode. Shared `agents/` stay Claude/Pi-only unless they are converted to OpenCode's native schema.
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | No* | Anthropic Claude API key |
-| `OPENAI_API_KEY` | No* | OpenAI API key |
-| `GEMINI_API_KEY` | No* | Google Gemini API key |
-| `OPENROUTER_API_KEY` | No* | OpenRouter API key |
-| `OLLAMA_HOST` | No | LAN Ollama server URL |
-| `GIT_AUTHOR_NAME` | No | Git commit author name |
-| `GIT_AUTHOR_EMAIL` | No | Git commit author email |
-
-*At least one LLM provider API key is required.
-
-### OpenCode Config (`.opencode/config/opencode.json`)
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-6",
-  "small_model": "openai/gpt-5-mini",
-  "permission": "allow",
-  "provider": {
-    "openai": {
-      "options": { "apiKey": "{env:OPENAI_API_KEY}" }
-    }
-  }
-}
-```
-
-System agents inherit the global `openai/gpt-6` model unless overridden. The
-default TUI theme is `opencode`, set in `.opencode/config/tui.json`.
-Quit and restart OpenCode after changing these settings; running sessions retain
-their loaded configuration.
-
-### Supported Providers
-
-OpenCode supports 75+ providers. Common ones pre-configured:
-- **Anthropic** (Claude) - via `ANTHROPIC_API_KEY`
-- **OpenAI** (GPT) - via `OPENAI_API_KEY`
-- **Ollama** (local models) - via `OLLAMA_HOST`
-- **OpenRouter** - via `OPENROUTER_API_KEY`
-
-## SSH Access to Remote Machines
-
-The agent has a dedicated SSH key for accessing test/remote machines.
-
-### Granting Access to a Remote Machine
-
-1. Copy the agent's public key:
-```bash
-cat ssh/id_ed25519.pub
-```
-
-2. Add it to the target machine's authorized_keys:
-```bash
-echo "ssh-ed25519 AAAA... opencode-agent@xmist.dev" >> ~/.ssh/authorized_keys
-```
-
-3. Configure host aliases in `ssh/config`:
-```
-Host test-server
-    HostName 192.168.1.100
-    User deploy
-    IdentityFile ~/.ssh/id_ed25519
-```
-
-## Security Notes
-
-### Full host access (explicit opt-in)
-
-```bash
-opencode --privileged .
-# Direct launcher also accepts --privileged (alias: --priviliged):
-opencode-run --privileged .
-```
-
-This adds `--privileged --pid=host -v /:/host:rw` to the OpenCode container
-itself. No helper, SSH server, or Docker socket is needed. The existing container
-user and bridge network stay unchanged; the image's passwordless sudo allows
-host-root execution. Host files are accessible under `/host`; to execute in the
-host's namespaces and root filesystem:
-
-```bash
-sudo nsenter --target 1 --mount --uts --ipc --net --pid --root --wd -- uptime
-```
-
-**This grants full root control of the Docker host to every client, agent and
-plugin on this backend. It is not read-only or time-limited.** Privileged containers
-use `--restart no`, so Docker will not automatically restart them. Manually
-restarting one retains its privileges. Ordinary containers retain their
-`unless-stopped` restart policy. On native rootful Linux
-Docker this is the workstation; on Docker Desktop it is the Docker Linux VM.
-Rootless/user-namespace-remapped Docker may not provide equivalent host access.
-
-Relaunch the same workspace/runtime profile **without** the flag to recreate the
-container without these privileges, or remove the container. Switching privilege
-mode disconnects existing sessions. Stopping and starting the existing container
-does not remove privileges. Other flags (GPU, mounts, ports, etc.) must be supplied
-as usual when relaunching. This is independent of `--dangerous`, which controls
-OpenCode tool approvals rather than Docker isolation.
-
-### Default container profile
-
-- Container runs as non-root user (`opencode:1000`)
-- API keys never baked into image
-- SSH keys mounted read-only
-- Workspace and config/data are the only writable mounts
-- Agent SSH key is separate from personal keys for isolation
-- Auto-updates disabled in container (`OPENCODE_DISABLE_AUTOUPDATE=1`)
-
-## Network
-
-The workstation launcher joins the existing `devai-xmist` Docker network.
-Ordinary VM networking is separately owned by the Compose template.
-
-## Troubleshooting
-
-### Permission denied on workspace
-```bash
-sudo chown -R 1000:1000 workspace/
-```
-
-### Container won't start
-```bash
-./opencode logs <container-name>
-```
-
-### Image not found
-```bash
-./opencode rebuild          # CPU
-./opencode rebuild gpu      # GPU
-```
-
-### OAuth login is requested again
-```bash
-# Keep these directories between runs/restarts:
-ls -la data/auth.json
-ls -la cache/
-```
-
-## License
-
-MIT
+For failures inspect `./opencode logs <name>` or the deployed service's Compose
+logs, then check password inputs, path ownership and the preserved conflict named
+by the publisher. Live gateway API/WS, providers, GPU, footer rendering and real
+old-session recovery require separate acceptance. No deployment acceptance is claimed.

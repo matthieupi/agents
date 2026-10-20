@@ -1,14 +1,18 @@
 // Used by image healthchecks and launcher readiness. Credentials stay in env.
-const url = 'http://127.0.0.1:4096/global/health';
+const port = process.argv.slice(2).find(argument => argument !== '--wait') ?? '4096';
+if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) process.exit(1);
+const url = `http://127.0.0.1:${port}/api/info`;
 
 export async function checkHealth() {
-  const password = process.env.OPENCODE_SERVER_PASSWORD;
+  const password = process.env.OPENCODE_PASSWORD ?? process.env.OPENCODE_SERVER_PASSWORD;
   const headers = password ? {
-    Authorization: `Basic ${Buffer.from(`${process.env.OPENCODE_SERVER_USERNAME || 'opencode'}:${password}`).toString('base64')}`,
+    Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`,
   } : {};
   try {
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(2000) });
-    return response.ok && (await response.json()).healthy === true;
+    if (!response.ok) return false;
+    const info = await response.json();
+    return typeof info?.version === 'string' && /^([2-9]|[1-9][0-9]+)\./.test(info.version);
   } catch {
     return false;
   }

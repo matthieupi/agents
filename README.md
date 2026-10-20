@@ -2,8 +2,9 @@
 
 ## Ordinary VM services
 
-Pi, OpenCode, Paseo execution daemon and Paseo Hub use the normal service catalog,
-native Docker builds and Compose. See [VM-SERVICES.md](VM-SERVICES.md) for exact
+Pi, OpenCode, Paseo execution daemon, Paseo Hub and Paperclip services use the normal
+service catalog and ordinary `docker-compose.j2` templates. Execution images use
+native Docker builds. See [VM-SERVICES.md](VM-SERVICES.md) for exact
 inputs, auth, account, state, Docker grants and ingress ownership.
 
 > [!NOTE]
@@ -15,8 +16,10 @@ inputs, auth, account, state, Docker grants and ingress ownership.
 ## Preserved workstation interfaces
 
 - [Pi](pi/README.md): run/mgr wrappers, static Compose, installer/init helper.
-- [OpenCode](opencode/README.md): CPU/GPU dispatcher/menu/run/mgr, installer/init helper,
-  KDCO plugins and explicit optional tools.
+- [OpenCode V2](opencode/README.md): CPU/GPU dispatcher/menu/run/mgr, installer/init
+  helper, native title/background plugins and retained volume/privilege/GPU flags.
+  One `serve` backend, explicit `--server` clients; automatic recreation interrupts
+  sessions. Optional dispatch/ssh-remote remain default-off and V1-targeted.
 - `claudecode/`: existing workstation component.
 - [Paseo daemon](paseo-deamon/README.md): VM templates and separately retained
   standalone component interface; embedded OpenCode belongs to Paseo.
@@ -60,16 +63,36 @@ Use the exact names (`system-build`, `system-coo`, `system-devops`, `system-expl
 to unprefixed names or new delegation framework are supplied. See
 [Pi's consumer matrix](pi/README.md#automatic-system-agent-import-docker-and-native).
 
-OpenCode workstation config uses its own agent schema. The opt-in `runtime/`
-framework and its public-resource projection are retired. Product plugin
-publication, KDCO, custom configuration and shared resources remain intact.
+OpenCode V2 uses its own agent schema and resolves `@opencode/cli@latest` on all
+maintained installation paths, with application auto-update disabled and no operator
+version pin. Its public workstation source `.opencode/config` is mounted read-only;
+selected assets link into private `.opencode/home-config`, not a full-source config
+symlink. VM consumers share read-only `/opt/opencode-defaults` and `/opt/agent`
+public mounts, preserving private HOME/auth/session state. The retained
+`scripts/publish-plugins.mjs` is config-only and reconciles known managed content
+while preserving unknown conflicts; KDCO package/install and GSD are retired.
+The opt-in `runtime/` framework and its public-resource projection are retired.
 Pi/OpenCode native start/manage scripts and OpenCode static Compose are also
 retired; the product installers and ordinary VM Compose templates remain.
 
 ## Evidence boundary
 
+⚠️ VM OpenCode requires a protected `opencode_backend_password` fact rendered as
+`OPENCODE_PASSWORD`. External nginx must authenticate the client, then **replace**
+upstream Authorization with Basic `opencode:<backend credential>`. The former
+gateway-only anonymous-backend contract is incompatible; required infrastructure
+changes are **outside this repository**, with no secret rotation authorized here.
+Native readiness uses authenticated `/api/info`, not anonymous health or HTML.
+
+Paseo requires >=0.12.0 with actual native V2 adapter packaging and required
+`verify-paseo.mjs` build verification; published 0.12.0 source was checked.
+Paperclip OpenCode V2 adapter/session/tool acceptance remains unverified: neither
+old SSH callback evidence nor `latest` establishes compatibility or safe activation.
+Prior disposable OpenCode latest install/server smoke passed at **2.1.1**, not a pin
+or deployed-host acceptance.
+
 > [!IMPORTANT]
-> This cleanup is source-only. Targeted credential-free workstation, backend and
+> This reconciliation is documentation-only. Targeted credential-free workstation, backend and
 > Pi installer/init tests exercise fixtures, not live containers. Retained wrapper
 > coverage lives in `tests/test_workstation.py`. No image build, deployment or
 > deployed-state cleanup is implied; the full test graph is not claimed clean.

@@ -27,3 +27,9 @@ docker-compose.override.yml
 # Vendored source is public; installed dependencies are not source.
 node_modules/
 .kdco-install.*
+
+# Canonical private runtime state (never delete on rebuild/replacement).
+/.opencode/data/
+/.opencode/cache/
+/.opencode/state/
+/.opencode/home-config/

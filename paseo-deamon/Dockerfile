@@ -4,7 +4,6 @@ ARG PASEO_BASE
 FROM ${PASEO_BASE}
 ARG PASEO_BASE
 ARG PASEO_VERSION
-ARG OPENCODE_VERSION
 ARG PASEO_RUNTIME_UID
 ARG PASEO_RUNTIME_GID
 USER root
@@ -14,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 util-li
     && ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/local/bin/npm /usr/bin/npm
 COPY opencode/scripts/entrypoint.sh /opt/opencode/native-contract.sh
-COPY --chown=1000:1000 opencode/scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
-COPY --chown=1000:1000 opencode/.opencode/config/kdco /opt/opencode/component/.opencode/config/kdco/
+COPY paseo-deamon/verify-paseo.mjs /opt/paseo-component/verify-paseo.mjs
+RUN node /opt/paseo-component/verify-paseo.mjs "$PASEO_VERSION"
 RUN install -d -o 1000 -g 1000 /opt/opencode/build-home /opt/opencode/component
 USER 1000:1000
-# Reuse the product-owned native installer and its required scripts path.
-RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER=paseo OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime OPENCODE_VERSION; install_runtime'
+# Same scoped @opencode/cli@latest installer as the native lifecycle; no home publication.
+RUN /bin/bash -c 'set -euo pipefail; source /opt/opencode/native-contract.sh; export OPENCODE_USER=paseo OPENCODE_UID=1000 OPENCODE_HOME=/opt/opencode/build-home OPENCODE_ROOT=/opt/opencode/component OPENCODE_PREFIX=/opt/opencode/component/.runtime; install_runtime; verify_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME"; isolated_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME" --version > /opt/opencode/component/version.txt'
 USER root
 RUN set -eu; \
     case "$PASEO_RUNTIME_UID" in ''|*[!0-9]*|0) exit 1;; esac; \
@@ -54,9 +53,7 @@ ENV HOME=/home/paseo \
     OPENCODE_CONFIG=/home/paseo/.config/opencode/opencode.json \
     OPENCODE_DISABLE_AUTOUPDATE=1 \
     PATH=/opt/opencode/component/.runtime/bin:/usr/local/bin:/usr/bin:/bin
-RUN node -e 'const v=process.argv[1]; if(!/^\d+\.\d+\.\d+$/.test(v)||require("/usr/local/lib/node_modules/@getpaseo/cli/package.json").version!==v||require("/usr/local/lib/node_modules/@getpaseo/server/package.json").version!==v)process.exit(1)' "$PASEO_VERSION" \
-    && opencode --version > /opt/opencode-version.txt \
-    && test "$(cat /opt/opencode-version.txt)" = "$OPENCODE_VERSION" \
+RUN node -e 'const fs=require("node:fs"),root="/opt/opencode/component/",p=require(root+".runtime/node_modules/@opencode/cli/package.json"),r=require(root+".runtime/.native-install.json"); if(p.name!=="@opencode/cli"||!/^\d+\.\d+\.\d+$/.test(p.version)||Number(p.version.split(".")[0])!==2||(Number(p.version.split(".")[1])===0&&Number(p.version.split(".")[2])<10)||r.package!==p.name||r.requested!=="latest"||r.version!==p.version||fs.readFileSync(root+"version.txt","utf8").trim()!=="opencode v"+p.version)process.exit(1); fs.writeFileSync("/opt/opencode-version.txt",p.version+"\n"); fs.copyFileSync(root+".runtime/.native-install.json","/opt/opencode-install.json")' \
     && printf '%s\n' "$PASEO_VERSION" > /opt/paseo-version.txt
 COPY paseo-deamon/entry.py /opt/paseo-component/entry.py
 USER ${PASEO_RUNTIME_UID}:${PASEO_RUNTIME_GID}

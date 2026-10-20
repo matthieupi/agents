@@ -3,13 +3,19 @@
 No real Docker/Compose, credential files, package installs or network calls.
 """
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as error:
+    if error.name != 'yaml':
+        raise
+    yaml = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,39 +125,44 @@ if tool == 'docker':
                 print('fixture-id')
         elif 'name=opencode-' in args and '-aq' in args:
             print('fixture-one\\nfixture-two')
-        elif scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'permission', 'unready-reuse'):
+        elif scenario in ('reuse', 'stale', 'mismatch', 'old-image', 'old-lifecycle', 'old-config', 'legacy', 'unready-reuse'):
             print('Up fixture' if scenario != 'stale' else 'Exited fixture')
     elif args[0] == 'inspect':
         fmt = args[2]
-        print('lab/opencode:latest' if fmt == '{{.Config.Image}}' else
+        print(('sha256:old' if scenario == 'old-image' else 'sha256:new') if fmt == '{{.Image}}' else
+              ('v1' if scenario in ('legacy', 'old-lifecycle') else 'v2-serve-1') if 'lifecycle' in fmt else
+              ('old-config' if scenario == 'old-config' or os.environ.get('EXPOSURE', '') != os.environ.get('OPENCODE_DOCKER_WEB_ENDPOINT', '') else os.environ['OPENCODE_DOCKER_CONFIG_FINGERPRINT']) if 'opencode.config' in fmt else
               os.environ.get('PRIVILEGED', 'false') if fmt == '{{.HostConfig.Privileged}}' else
               'no' if fmt == '{{.HostConfig.RestartPolicy.Name}}' else
-              ('' if scenario == 'legacy' else 'web-v1') if '.lifecycle' in fmt else
-              ('{"*":"allow"}' if scenario == 'permission' else '{}') if '.permission' in fmt else
-              os.environ.get('EXPOSURE', 'none') if '.web"' in fmt else
               hashlib.sha256(bytes([0])).hexdigest() if '.volumes' in fmt else
               ('4' if scenario == 'mismatch' else '8.0') if '.cpus' in fmt else
               '16g' if '.memory' in fmt else '')
+    elif args[:2] == ['image', 'inspect']:
+        if scenario == 'missing-image': sys.exit(1)
+        if '--format' in args:
+            print('sha256:new' if args[args.index('--format') + 1] == '{{.Id}}' else 'v2-serve-1')
     elif args[0] == 'port':
         assert args[-1] == '4096/tcp', args
         print(os.environ.get('MAPPING', ''))
     elif args[0] == 'exec':
         if '--wait' in args and scenario.startswith('unready'):
             sys.exit(1)
-        if 'attach' in args:
+        if '/opt/harness/docker-client.sh' in args:
             # A second launcher must be able to enter while a TUI is attached.
             for lock in Path(os.environ['CALLS']).parent.glob('opencode/.opencode/locks/*'):
                 with lock.open('w') as stream:
                     fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    elif args[:2] == ['image', 'inspect'] and scenario == 'missing-image':
-        sys.exit(1)
+elif tool == 'python3':
+    # Run real host fingerprinting, stub only container readiness.
+    if args[:1] == ['-']:
+        os.execv('/usr/bin/python3', ['/usr/bin/python3', *args])
 '''
-        for name in ('docker', 'sleep'):
+        for name in ('docker', 'sleep', 'python3', 'opencode'):
             path = self.bin / name
             path.write_text(recorder)
             path.chmod(0o755)
         self.env = {'PATH': str(self.bin), 'HOME': str(self.home), 'CALLS': str(self.calls),
-                    'PYTHONDONTWRITEBYTECODE': '1'}
+                    'PYTHONDONTWRITEBYTECODE': '1', 'OPENCODE_PASSWORD': 'fixture-private-password'}
 
     def run_copy(self, script, arguments, scenario='fresh', stdin=''):
         source = ROOT / script
@@ -163,6 +174,7 @@ if tool == 'docker':
                                 env=dict(self.env, SCENARIO=scenario), input=stdin,
                                 capture_output=True, text=True, timeout=10)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        self.assertNotIn('fixture-private-password', result.stdout + result.stderr + json.dumps(calls))
         return result, [argv for tool, argv in calls if tool == 'docker']
 
     def test_direct_run_fresh_cli_mounts_identity_and_defaults(self):
@@ -177,17 +189,20 @@ if tool == 'docker':
                       str(self.root / 'opencode/.opencode/data') + ':/home/opencode/.local/share/opencode:rw'):
             self.assertIn(value, run)
         self.assertNotIn('--cap-drop', run)  # Legacy privilege profile is not new-path policy.
+        self.assertIn('OPENCODE_PASSWORD', run)
+        self.assertIn('dev.xmist.opencode.lifecycle=v2-serve-1', run)
+        self.assertIn(str(self.root / 'opencode/.opencode/state') + ':/home/opencode/.local/state/opencode:rw', run)
+        self.assertEqual(run[-1], 'lab/opencode:latest')
+        self.assertEqual(calls[-2][-3:], ['python3', '/opt/harness/docker-health.py', '--wait'])
+        self.assertEqual(calls[-1][-2:], ['bash', '/opt/harness/docker-client.sh'])
+
         self.assertNotIn('--privileged', run)
         self.assertNotIn('--pid=host', run)
         self.assertNotIn('/:/host:rw', run)
         self.assertNotIn('-p', run)
-        self.assertEqual(run[-1], '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port 4096 --mdns false')
-        self.assertEqual(calls[-1][-5:], ['opencode', 'attach', 'http://127.0.0.1:4096', '--dir', '/workspace'])
         self.assertIn('OPENCODE_EXPERIMENTAL_WORKSPACES=1', run)
-        self.assertIn('OPENCODE_PERMISSION={}', run)
-        self.assertIn('dev.xmist.opencode.lifecycle=web-v1', run)
-        self.assertIn('node /opt/harness/backend-health.mjs', run)
-        self.assertEqual(calls[-2][-3:], ['node', '/opt/harness/backend-health.mjs', '--wait'])
+        self.assertIn(str(self.root / 'opencode/.opencode/config') + ':/opt/opencode-defaults:ro', run)
+        self.assertIn(str(self.root / 'opencode/.opencode/home-config') + ':/home/opencode/.config/opencode:rw', run)
         self.assertFalse(any('init.sh' in str(call) for call in calls if call[0] == 'exec'))
 
     def test_direct_run_privileged_flags(self):
@@ -198,7 +213,7 @@ if tool == 'docker':
                 run = next(call for call in calls if call[0] == 'run')
                 self.assertEqual(run[run.index('--restart') + 1], 'no')
                 for value in ('--privileged', '--pid=host', '/:/host:rw',
-                              '1000:1000', 'devai-xmist', 'OPENCODE_PERMISSION={}'):
+                              '1000:1000', 'devai-xmist', 'OPENCODE_PASSWORD'):
                     self.assertIn(value, run)
                 self.assertIn('full host-root access', result.stdout)
                 self.assertIn('persists across container restarts', result.stdout)
@@ -230,6 +245,8 @@ if tool == 'docker':
                 result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(published, next(argv for argv in calls if argv[0] == 'run'))
+                self.assertEqual(calls[-1][-3:], ['python3', '/opt/harness/docker-health.py', '--wait'])
+                self.assertFalse(any('/opt/harness/docker-client.sh' in call for call in calls))
                 self.assertIn('http://localhost:' + port, result.stdout)
                 self.assertEqual(calls[-1][-1], '--wait')
                 self.assertFalse(any('attach' in call for call in calls))
@@ -258,33 +275,43 @@ if tool == 'docker':
                 self.assertFalse((self.root / 'opencode/.opencode').exists())
 
     def test_direct_run_reuse_and_recreation(self):
-        for scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'permission'):
+        sentinels = []
+        for name in ('config', 'home-config', 'data', 'cache', 'state'):
+            sentinel = self.root / 'opencode/.opencode' / name / 'existing-private-state'
+            sentinel.parent.mkdir(parents=True)
+            sentinel.write_bytes(b'preserve existing state\x00')
+            sentinels.append(sentinel)
+        for scenario in ('reuse', 'stale', 'mismatch', 'legacy', 'old-image', 'old-config'):
             with self.subTest(scenario=scenario):
                 result, calls = self.run_copy('opencode/opencode-run', ['.'], scenario)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 operations = [argv[0] for argv in calls]
                 self.assertEqual('run' in operations, scenario != 'reuse')
                 self.assertEqual('rm' in operations, scenario != 'reuse')
+                self.assertEqual('stop' in operations, scenario not in ('reuse', 'stale'))
+                if scenario not in ('reuse', 'stale'):
+                    self.assertLess(operations.index('stop'), operations.index('rm'))
+                    self.assertLess(operations.index('rm'), operations.index('run'))
+                    self.assertIn('active sessions will be interrupted', result.stdout)
                 self.assertEqual(operations[-1], 'exec')
+                for sentinel in sentinels:
+                    self.assertEqual(sentinel.read_bytes(), b'preserve existing state\x00')
+                self.assertFalse((self.root / 'opencode/.opencode/v2').exists())
 
-    def test_backend_permission_change_and_auth_are_server_wide(self):
-        self.env.update(OPENCODE_SERVER_PASSWORD='fixture-secret', OPENCODE_SERVER_USERNAME='alice')
+    def test_auto_is_client_flag_and_credentials_never_enter_argv(self):
         result, calls = self.run_copy('opencode/opencode-run', ['-d', '.'], 'reuse')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(any(call[0] == 'rm' for call in calls))
-        run = next(call for call in calls if call[0] == 'run')
-        self.assertIn('OPENCODE_PERMISSION={"*":"allow"}', run)
-        self.assertIn('dev.xmist.opencode.permission={"*":"allow"}', run)
-        self.assertIn('OPENCODE_SERVER_PASSWORD=fixture-secret', run)
-        self.assertNotIn('fixture-secret', result.stdout + result.stderr)
+        self.assertFalse(any(call[0] in ('run', 'rm') for call in calls))
+        self.assertEqual(calls[-1][-2:], ['/opt/harness/docker-client.sh', '--auto'])
         for call in calls:
             if call[0] == 'exec':
                 self.assertNotIn('-e', call)
                 self.assertNotIn('--permission', call)
-                self.assertNotIn('fixture-secret', str(call))
-        result, calls = self.run_copy('opencode/opencode-run', ['-d', '.'], 'permission')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(call[0] in ('run', 'rm') for call in calls))
+        self.env['OPENCODE_SERVER_USERNAME'] = 'alice'
+        result, calls = self.run_copy('opencode/opencode-run', ['.'], 'reuse')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('username opencode', result.stderr)
+        self.assertFalse(any(call[0] in ('run', 'rm', 'exec') for call in calls))
 
     def test_backend_readiness_failure_never_attaches_or_reports_ready(self):
         for scenario in ('unready', 'unready-reuse'):
@@ -295,7 +322,7 @@ if tool == 'docker':
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('no client was attached', result.stderr)
                     self.assertNotIn('Browser backend ready', result.stdout)
-                    self.assertFalse(any('attach' in call for call in calls))
+                    self.assertFalse(any('/opt/harness/docker-client.sh' in call for call in calls))
 
     def test_backend_reuse_checks_internal_port_and_requested_host_binding(self):
         for flags, exposure, mapping in [
@@ -331,17 +358,62 @@ if tool == 'docker':
         run = next(call for call in calls if call[0] == 'run')
         self.assertIn(f'{self.workspace}:/reference:ro', run)
         self.assertNotIn('-p', run)
-        self.assertIn('attach', calls[-1])
+        self.assertIn('/opt/harness/docker-client.sh', calls[-1])
 
     def test_direct_run_invalid_input_and_missing_image_do_not_launch(self):
         for argv, scenario in [(['--port', 'bad'], 'fresh'), (['--cpus', '0'], 'fresh'),
-                               (['.'], 'missing-image')]:
+                               (['--web', '--agent-web-port', '4098'], 'fresh'),
+                                (['--agent-web-port', '4099'], 'fresh'),
+                                (['--publish', '4096'], 'fresh'), (['.'], 'missing-image')]:
             result, calls = self.run_copy('opencode/opencode-run', argv, scenario)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(any(call[0] in ('run', 'exec', 'rm') for call in calls))
             if scenario == 'missing-image':
                 self.assertIn('opencode rebuild', result.stderr)
                 self.assertNotIn('docker compose', result.stderr)
+
+    def test_direct_run_requires_password_before_mutating_container(self):
+        self.env.pop('OPENCODE_PASSWORD')
+        result, calls = self.run_copy('opencode/opencode-run', ['.'], 'old-image')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires OPENCODE_PASSWORD', result.stderr)
+        self.assertFalse(any(call[0] in ('run', 'exec', 'stop', 'rm') for call in calls))
+
+    def test_v2_server_serves_and_client_attaches_without_secret_argv(self):
+        # Execute maintained helper bodies with only init and executable boundaries
+        # stubbed. No real engine, socket, provider, HOME or /opt files are touched.
+        (self.bin / 'bash').symlink_to('/bin/bash')
+        initialize = self.root / 'init.sh'
+        initialize.write_text('exit 0\n')
+        server = self.root / 'docker-server.sh'
+        text = (ROOT / 'opencode/scripts/docker-server.sh').read_text()
+        self.assertEqual(text.count('bash /opt/harness/init.sh'), 1)
+        server.write_text(text.replace('bash /opt/harness/init.sh', 'bash "$FIXTURE_INIT"'))
+        result = subprocess.run(['/bin/bash', str(server)], env=dict(self.env, FIXTURE_INIT=str(initialize)),
+                                capture_output=True, text=True, timeout=10)
+        if os.geteuid() == 0:
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('non-root', result.stderr)
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+            self.assertEqual(calls, [['opencode', ['serve', '--hostname', '0.0.0.0', '--port', '4096']]])
+        self.calls.unlink(missing_ok=True)
+        result = subprocess.run(['/bin/bash', str(ROOT / 'opencode/scripts/docker-client.sh'), '--auto'],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(calls, [
+            ['python3', ['/opt/harness/docker-health.py', '--wait']],
+            ['opencode', ['--server', 'http://127.0.0.1:4096', '--auto']]])
+        self.assertNotIn('fixture-private-password', json.dumps(calls) + result.stdout + result.stderr)
+        for arguments in (['--server', 'http://foreign'], ['--server=http://foreign'], ['serve']):
+            self.calls.unlink(missing_ok=True)
+            result = subprocess.run(['/bin/bash', str(ROOT / 'opencode/scripts/docker-client.sh'), *arguments],
+                                    env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('server overrides', result.stderr)
+            self.assertFalse(self.calls.exists())
 
     def test_leading_rebuild_differs_from_manager_update(self):
         result, calls = self.run_copy('opencode/opencode-run', ['-r', '.'])
@@ -383,12 +455,17 @@ if tool == 'docker':
         (component / 'scripts').mkdir()
         shutil.copyfile(ROOT / 'opencode/scripts/publish-plugins.mjs', component / 'scripts/publish-plugins.mjs')
         defaults = component / '.opencode/config'
-        (defaults / 'kdco').mkdir(parents=True)
-        (defaults / 'plugins').mkdir()
-        for name in ('background-agents', 'worktree', 'notify'):
-            (defaults / f'plugins/kdco-{name}.ts').write_text('export default async () => ({})')
+        for relative in ('opencode.json', 'cli.json', 'plugins/first-prompt-title.js',
+                         'plugins/background-subagents.js', 'tui-plugins/session-title.mjs',
+                         'tui-plugins/session-title/tui.js'):
+            destination = defaults / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / 'opencode/.opencode/config' / relative, destination)
+        (defaults / 'opencode.json').write_text(json.dumps({
+            'agents': {'build': {'system': 'fixture'}}, 'providers': {}, 'permissions': []}))
+        (defaults / 'auth.json').write_text('{"private":"never seed"}')
         resources = self.root / 'agent'
-        for name in ('commands', 'skills', 'system', 'gsd'):
+        for name in ('commands', 'skills', 'system'):
             (resources / name).mkdir(parents=True)
         config = self.home / '.config/opencode'
         env = dict(self.env, OPENCODE_HOME=str(self.home), OPENCODE_CONFIG_DIR=str(config),
@@ -400,7 +477,6 @@ require_opencode_user() { :; }
 opencode_git() {
     case "$1" in
       ls-files) printf '%s\\0' opencode/.opencode/config/opencode.json opencode/.opencode/config/auth.json ;;
-      show) printf '{"fixture":true}\\n' ;;
       *) return 97 ;;
     esac
 }
@@ -413,16 +489,48 @@ initialize_home
         result = initialize()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((config / 'system').readlink(), resources / 'system')
-        self.assertEqual(json.loads((config / 'opencode.json').read_text()), {'fixture': True})
+        canonical = json.loads((defaults / 'opencode.json').read_text())
+        self.assertEqual(json.loads((config / 'opencode.json').read_text()), canonical)
+        self.assertIn('agents', canonical)
+        self.assertIn('providers', canonical)
+        self.assertIn('permissions', canonical)
+        for relative in ('cli.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+                         'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js'):
+            self.assertEqual((config / relative).readlink(), defaults / relative)
+        self.assertFalse((config / 'v2').exists())
         self.assertFalse((config / 'auth.json').exists())
-        (config / 'opencode.json').write_text('private fixture config')
+        legacy_shared = self.home / '.agents'
+        legacy_shared.mkdir()
+        previous = self.root / 'previous-checkout'
+        env['OPENCODE_PREVIOUS_REPO'] = str(previous)
+        (config / 'gsd').symlink_to(resources / 'gsd')
         self.assertEqual(initialize().returncode, 0)
-        self.assertEqual((config / 'opencode.json').read_text(), 'private fixture config')
+        self.assertFalse((config / 'gsd').is_symlink())
+        # Previous checkout paths and .agents are not owned by this publisher;
+        # unknown legacy content must survive instead of being guessed away.
+        (config / 'gsd').symlink_to(previous / 'agent/gsd')
+        (legacy_shared / 'gsd').symlink_to('/custom/legacy-gsd')
+        self.assertEqual(initialize().returncode, 0)
+        self.assertEqual((config / 'gsd').readlink(), previous / 'agent/gsd')
+        self.assertEqual((legacy_shared / 'gsd').readlink(), Path('/custom/legacy-gsd'))
+        (config / 'gsd').unlink()
+        (legacy_shared / 'gsd').unlink()
+        (config / 'gsd').symlink_to('/custom/gsd')
+        (legacy_shared / 'gsd').mkdir()
+        (legacy_shared / 'gsd/private.md').write_text('preserved')
+        self.assertEqual(initialize().returncode, 0)
+        self.assertEqual((config / 'gsd').readlink(), Path('/custom/gsd'))
+        self.assertEqual((legacy_shared / 'gsd/private.md').read_text(), 'preserved')
+        private = json.dumps({'agents': {'build': {'system': 'private fixture prompt'}}})
+        (config / 'opencode.json').unlink()
+        (config / 'opencode.json').write_text(private)
+        self.assertNotEqual(initialize().returncode, 0)
+        self.assertEqual((config / 'opencode.json').read_text(), private)
         (config / 'skills').unlink()
         (config / 'skills').mkdir()
         result = initialize()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('preserved conflicting resource', result.stderr)
+        self.assertIn('conflict', result.stderr.lower())
         self.assertTrue((config / 'skills').is_dir())
         self.assertFalse(self.calls.exists())
 
@@ -456,7 +564,9 @@ initialize_home
         self.assertNotEqual(initialize().returncode, 0)
         self.assertFalse(imported.exists())
 
+    @unittest.skipIf(yaml is None, 'Compose characterization requires PyYAML in the test environment')
     def test_compose_contracts_without_interpolation_or_docker(self):
+        assert yaml is not None
         for component, service, image, home in [('pi', 'pi', 'lab/pi:latest', '/home/pi'),
                 ('claudecode', 'claude-code', 'lab/claude-code:latest', '/home/claude')]:
             with self.subTest(component=component):

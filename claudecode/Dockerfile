@@ -79,7 +79,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # Switch to claude user
 USER claude
 WORKDIR /workspace
-RUN npx get-shit-done-cc --global
 
 # Install Playwright browser binary as claude user (goes to ~/.cache/ms-playwright/)
 RUN npx playwright install chromium
