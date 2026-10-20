@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-HOME_ROOT="/home/opencode"
-DEFAULTS_ROOT="/opt/agent"
+HOME_ROOT="${HOME:-/home/opencode}"
+DEFAULTS_ROOT="${OPENCODE_RESOURCES:-/opt/agent}"
 
 dir_empty() {
     local path="$1"
@@ -79,33 +79,45 @@ remove_legacy_link() {
 
 init_home() {
     local shared_root="$HOME_ROOT/.agents"
-    local opencode_root="$HOME_ROOT/.config/opencode"
+    local opencode_root="${OPENCODE_CONFIG_DIR:-$HOME_ROOT/.config/opencode}"
 
     [[ -d "$HOME_ROOT" ]] || return 0
+
+    if [[ -L "$HOME_ROOT/.config" || -L "$opencode_root" ]]; then
+        echo 'Refusing redirected config root; preserved for operator review' >&2
+        return 1
+    fi
 
     ensure_real_dir "$HOME_ROOT/.config"
     ensure_real_dir "$opencode_root"
 
-    # A workstation bind hides image-layer node_modules. Install into the actual
-    # mounted nested package, not the user's config-root package.json.
-    if [[ -d "$opencode_root/kdco" && ! -L "$opencode_root/kdco" ]]; then
-        flock -x "$opencode_root/kdco/.kdco-install.lock" \
-            node /opt/opencode-publish-plugins.mjs install "$opencode_root/kdco"
-        node /opt/opencode-publish-plugins.mjs "$opencode_root" "$opencode_root"
-    else
-        node /opt/opencode-publish-plugins.mjs /opt/opencode-defaults "$opencode_root"
-    fi
+    # Never delete unknown/private plugins. Old auto-discovered loaders must be
+    # reviewed before starting the new engine (including project ancestors).
+    python3 - "$opencode_root" <<'PY'
+from pathlib import Path
+import sys
 
-    [[ -d "$DEFAULTS_ROOT/commands" ]] || return 0
-    [[ -d "$DEFAULTS_ROOT/skills" ]] || return 0
-    [[ -d "$DEFAULTS_ROOT/system" ]] || return 0
+roots = [Path(sys.argv[1]), Path.home() / '.config/opencode']
+roots += [root / '.opencode' for root in (Path.cwd(), *Path.cwd().parents)]
+stale = sorted({str(path) for root in roots for folder in ('plugin', 'plugins')
+                for path in (root / folder).glob('**/kdco-*')
+                if path.suffix in ('.js', '.ts', '.mjs', '.cjs')})
+if stale:
+    sys.exit('Obsolete KDCO auto-discovered entrypoints found; no files changed. '
+             'Review and remove/port these loaders explicitly before restarting:\n' + '\n'.join(stale))
+PY
+
+    for folder in commands skills system gsd; do
+        if [[ ! -d "$DEFAULTS_ROOT/$folder" ]]; then
+            echo "Missing shared resource directory: $DEFAULTS_ROOT/$folder; mount the complete agent tree" >&2
+            return 1
+        fi
+    done
 
     link_path "$opencode_root/commands" "$DEFAULTS_ROOT/commands"
     link_path "$opencode_root/skills" "$DEFAULTS_ROOT/skills"
     link_path "$opencode_root/system" "$DEFAULTS_ROOT/system"
-    if [[ -d "$DEFAULTS_ROOT/gsd" ]]; then
-        link_path "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
-    fi
+    link_path "$opencode_root/gsd" "$DEFAULTS_ROOT/gsd"
 
     # opencode already discovers project commands and skills from
     # ~/.config/opencode. Exposing the same mounted trees through ~/.agents as

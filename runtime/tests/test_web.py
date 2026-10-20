@@ -80,12 +80,14 @@ class WebReadiness(unittest.TestCase):
             runtime.wait_web(self.c, self.process)
 
     def test_health_semantics_and_t3_unauthenticated_gates(self):
-        for harness, responses in [('opencode', [(200, b''), (200, b'{"healthy":true}')]),
+        for harness, responses in [('opencode', [(200, b'{"version":"2.0.32","pid":123}')]),
                                    ('pi', [(200, b''), (200, b'[]')]),
                                    ('t3', [(200, b''), (401, b''), (401, b'')])]:
             self.c['harness'] = harness
-            with patch.object(runtime, 'web_request', side_effect=responses, create=True):
+            with patch.object(runtime, 'web_request', side_effect=responses, create=True) as request:
                 runtime.web_ready(self.c)
+                if harness == 'opencode':
+                    request.assert_called_once_with(self.c, '/api/info')
         for responses in ([(302, b'')], [(200, b''), (200, b'')],
                           [(200, b''), (401, b''), (101, b'')]):
             with patch.object(runtime, 'web_request', side_effect=responses, create=True), self.assertRaises(ValueError):
@@ -95,6 +97,7 @@ class WebReadiness(unittest.TestCase):
             runtime.web_ready(self.c)
 
     def test_http_is_bounded_direct_loopback_without_proxy_or_redirect(self):
+        self.c['harness'] = 'pi'
         connection = Mock()
         response = connection.getresponse.return_value
         response.status = 302
@@ -106,6 +109,7 @@ class WebReadiness(unittest.TestCase):
         connection.close.assert_called_once()
 
     def test_oversized_http_response_refused_and_connection_closed(self):
+        self.c['harness'] = 'pi'
         connection = Mock()
         connection.getresponse.return_value.read.return_value = b'x' * (1024 * 1024 + 1)
         with patch.object(runtime.http.client, 'HTTPConnection', return_value=connection), self.assertRaises(ValueError):

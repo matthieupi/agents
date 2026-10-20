@@ -70,13 +70,15 @@ class ImageRecipeTests(unittest.TestCase):
                         self.assertEqual(user, 'node')
                         self.assertIn('--ignore-scripts', line)
                         self.assertIn('--no-audit --no-fund', line)
-                        if '/opt/opencode-defaults/kdco' not in line:
-                            self.assertIn('--include=optional', line)
+                        self.assertIn('--include=optional', line)
                     if 'npm rebuild ' in line:
                         hooks.append(line)
                         self.assertEqual(user, 'node')
                         self.assertTrue(line.startswith('RUN --network=none '))
-                        self.assertIn('npm_config_nodedir=/usr/local npm rebuild --offline', line)
+                        self.assertIn('npm_config_nodedir=/usr/local npm rebuild ', line)
+                        self.assertIn('--offline', line)
+                        if name == 'opencode':
+                            self.assertIn('npm rebuild @opencode/cli --offline', line)
                 self.assertEqual(len(hooks), 1)
                 self.assertLess(recipe.index('npm ci '), recipe.index('npm rebuild '))
 

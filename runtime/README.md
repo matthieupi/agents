@@ -1,300 +1,190 @@
-# Opt-in harness runtime — offline implementation
+# Opt-in shared harness runtime
 
-The OpenCode recipe includes the same [enabled KDCO plugins](../opencode/.opencode/config/kdco/README.md)
-as CPU/GPU/native/VM paths. Sources and locked dependencies are baked under
-`/opt/opencode-defaults`; startup publishes only managed links into private HOME.
-The source, entrypoints, publication helper and dependency lock are bound into the
-existing source hash/build context/image receipt. Normal OpenCode startup invokes
-the factories and hooks; installation does not. No extra sockets or permissions.
+Explicit builds and foreground launches; no deployment, activation, state adoption,
+automatic updates or pruning. Run the installer/adapter as an ordinary account,
+never with sudo. Protected VM activation remains an explicit delegated operation.
 
-✅ Workstation installation, explicit protected VM activation delegation, five image
-recipes and foreground startup readiness have offline implementations/tests.
-Protected VM enrollment/control upgrades and gateway replacement/staging/recovery
-also exist; see [the protected VM contract](../venv/README.shared.md).
-**This is not a deployment-ready or runtime-accepted MVP:** no image has been built
-or accepted in this workstream, no target was enabled, and the remaining gaps below
-still apply. The historical installer-delegation warning in the VM handoff is now
-superseded by the interface documented here.
+## OpenCode V2 — hard clean migration
 
-This opt-in interface does not replace existing workstation wrappers, direct
-run/mgr commands, native lifecycle, Compose files, state, links or defaults.
-The separately approved KDCO plugin work extends the legacy OpenCode image/native
-installers too; `opencode .` and `opencode --web` still use the production path.
-
-## Explicit component interface
-
-The following are the implemented interfaces, **not a record of executed builds**.
-Use an ordinary account; installer and launcher reject root/sudo invocation.
+✅ OpenCode resolves **`@opencode/cli@latest`**, not `opencode-ai`, a V1 range, or
+a user-configured version pin. `update` resolves the npm `latest` tag at that time.
+The generated build manifest/lock and receipt record the **exact** resolved version,
+registry URL and SHA512 integrity. This is immutable build evidence, not a public
+configuration pin. `build` replays that resolution; run `update` to select latest
+again. Other harnesses retain their existing reviewed ranges and recipes.
 
 ```sh
 make -C runtime update HARNESS=opencode
-# Resolve compatible stable inputs, refresh exact base, generate lock, build.
-# Prints local sha256 image ID; does NOT activate it.
-
 make -C runtime build HARNESS=opencode
-# Requires an existing exact resolution with matching catalog/public sources.
-
 make -C runtime activate HARNESS=opencode IMAGE=sha256:<64-lowercase-hex>
-# Default scope: publish a workstation new-path selection for future launches.
 
-make -C runtime activate HARNESS=opencode IMAGE=sha256:<64-lowercase-hex> \
-  SCOPE=vm VM_CONFIG=/etc/venv-agents/build.json TARGET=<environment>:<host>
-# Explicit VM selection: delegates only to the deployed protected launcher.
-# VM_CONFIG is the existing configured paths.build_settings, not a new file to create.
-
-python3 -B runtime/runtime.py run opencode --workspace . -- --help
-python3 -B runtime/runtime.py run opencode --workspace . --web --port 4096
+python3 -B runtime/runtime.py run opencode --workspace /absolute/project -- --help
+python3 -B runtime/runtime.py run opencode --workspace /absolute/project --web --port 4096
 ```
 
-No schedule, login hook, watcher, automatic activation, image pruning or legacy
-dispatcher redirection is installed. Explicit VM activation may replace a selected
-image only through the reviewed protected transaction. Workstation activation only
-selects future launches. Make exports selectors as data, never shell source.
+Workstation activation selects only future new-path launches. Existing images and
+receipts are not rewritten. **OpenCode keeps its existing HOME and databases** when
+switching selected images: the adapter first acquires the exclusive HOME writer
+lock, rejects any remaining HOME-labelled container (including stopped/orphaned
+containers), and verifies the selected image/receipt. Only then does it atomically
+advance a valid existing image binding. It never stops, adopts or deletes an old
+container to make the switch succeed. No new state slot or archived isolation root
+is required for OpenCode. Other harnesses retain their original image binding and
+require a new empty `--state-slot` when changing images. Unbound unknown state and
+malformed bindings remain refused. Native OpenCode owns V1 config/database
+normalization; the adapter does not rewrite private config or copy databases.
+Before seeding defaults, a sole historical shared-runtime `config.json` is validated
+as JSON/JSONC and moved to native `opencode.json` with exactly the same bytes and
+mode, without converting settings or injecting canonical global defaults. Publication
+is atomic and exclusive; the old name is retired only after the native name is
+durable. Interrupted publication is recoverable only when both names identify that
+same file. Other legacy/native filename conflicts require explicit reconciliation;
+malformed or redirected legacy files fail closed without replacement. Existing native
+`opencode.json` or `opencode.jsonc` remains private and suppresses global config seeding.
+Rolling an image back does not reverse database writes or provide backup/restore.
 
-| Harness | Catalog modes | Platforms | Current evidence |
-|---|---|---|---|
-| Pi | CLI, web | amd64, arm64 | Recipe/argv tests; no new-path runtime acceptance |
-| OMP | CLI only | amd64, every CPU must have SSE4.2 | Recipe/argv tests; Bun npm packaging not built |
-| OpenCode | CLI, web | amd64, arm64 | Recipe/argv tests; no new-path runtime acceptance |
-| T3 | Web only | amd64, arm64 | Startup lock/private logs; actual pairing/auth not accepted |
-| Claude | Workstation CLI only | amd64, arm64 | Recipe only; release range needs independent review |
+### Public build closure
 
-Native host/platform matching is mandatory; no implicit emulation. GPU and
-`--privileged` requests are rejected. There is no Claude VM enrollment.
+`install.build_sources()` is the single finite source-to-context map for hashing
+and copying. OpenCode packages canonical public files from
+`opencode/.opencode/config/`:
 
-## Resolution and receipts
+- `opencode.json`: native V2 `agents`, `providers`, `permissions` and public settings.
+- `cli.json`.
+- `plugins/first-prompt-title.js` and `plugins/background-subagents.js`.
+- `tui-plugins/session-title.mjs` and the `session-title/tui.js` discovery shim.
+- Exact `agent/system/*.md` and `agent/gsd/*.md` prompt files referenced by the
+  canonical config, preserving their relative paths inside the public defaults.
 
-`harnesses.json` owns package sources, compatible half-open release ranges and image
-recipes. Pi, OMP, OpenCode and T3 lower bounds reference existing repository
-versions, **not fresh upstream compatibility verification**. Claude's major range
-is provisional. Do not infer compatibility from version ordering alone.
+No KDCO sources, deleted wrapper entrypoints, nested KDCO npm installs, config-root
+dependency manifests, private credential trees or broad checkout copies are used.
+Missing/symlinked inputs, stale resolutions and copy-time byte drift fail closed.
+Source hashes, Git revision, lock and recipe remain bound into the image receipt.
 
-At explicit `update`:
+Startup exclusively seeds public `opencode.json` and `cli.json` into
+`~/.config/opencode/` and publishes individual required plugin files into physical
+`plugins`/`tui-plugins` directories. Unrelated private plugin files are preserved;
+required-name conflicts fail explicitly instead of silently hiding canonical plugins.
+Known image-managed directory links are replaced with physical directories and
+per-file links; unknown directory links are never followed or replaced. The exact
+retired `kdco-background-agents.ts`, `kdco-worktree.ts` and `kdco-notify.ts` links
+are removed only when their raw targets match the former public image/resource
+paths. Unrecognized retired wrappers block startup without deletion. Existing V1
+private config is preserved for native normalization, not copied into an archive.
+Prompt directories remain managed links.
+Physical config files ensure relative prompt references resolve from private config
+HOME, not a symlink-resolved image path. With `--resources`,
+reviewed shared `system`, `gsd`, `skills` and `commands` are linked instead of the
+baked prompt fallback. Existing physical private files/directories are preserved;
+redirected private config files are refused. Unknown conflicting symlinks fail
+rather than being replaced. No V1 config isolation root
+or V1 compatibility config is generated. Public provider settings reference
+environment variables; private authentication remains in the isolated runtime HOME,
+never copied from another account or baked into an image. The adapter does not
+forward ambient host provider credentials.
 
-1. Select the newest non-prerelease package releases inside each catalog range.
-2. Independently resolve Node and its per-platform external image digest; retain
-   the multi-platform index digest separately. Resolve Bun as OMP's own package.
-3. Record the current UTC-day Debian snapshot and InRelease SHA256 evidence.
-   Unavailable metadata fails; no fallback to floating package sources.
-4. Generate npm v3 lock in a numeric-user container with lifecycle scripts off.
-   All direct and transitive packages require registry URLs and SHA512 integrity.
-5. Build only the chosen harness in a freshly created allowlisted context using
-   `--no-cache`, a digest base and `--pull=false`. Downloads and scripts are split:
-   `npm ci --ignore-scripts`, then non-root `npm rebuild --offline` with BuildKit
-   `--network=none`. A hook that needs an unrecorded download must fail.
-6. Inspect the resulting exact local image ID/platform/labels and publish a
-    private receipt. No activation follows the build.
-
-### OpenCode plugin provenance
-
-`install.py` uses one explicit source-to-context map for hashing and copying.
-OpenCode adds `../opencode/.opencode/config/kdco/` public files, three static
-`plugins/kdco-*.ts` entrypoints and `scripts/publish-plugins.mjs` to
-`resolution.source.public_files`. The public file list in `upstream.json` supplies
-the finite vendored source closure; every actual byte (including the documented
-security patch) is hashed. Other harnesses retain their four-input source closure.
-Builds reject missing/symlinked inputs, stale resolutions and copied bytes that
-changed after validation. The copied plugin lock must satisfy the existing npm v3,
-registry-only, SHA512 integrity rules and match its exact package manifest.
-
-Ordinary `npm ci --ignore-scripts` installs as `node` into the separate nested
-package, not the selected harness graph or private config-root manifest. No source
-downloads or inactive receipts remain. The harness's own non-root offline rebuild
-is unchanged. Sources and dependencies remain visible outside the HOME bind;
-startup links them into discovery even without optional shared resources. When VM
-resources contain the approved plugin projection, startup uses that shared source.
-Private provider/global policy fields and unrelated plugins remain untouched.
-
-Old OpenCode resolutions lack these inputs and cannot build with the new source;
-when a build is separately authorized, run the existing explicit
-`make -C runtime update HARNESS=opencode`. Do not edit receipts or reuse old image
-approvals. Receipt schema and protected VM projection remain unchanged; their
-source/resolution digests change normally. Existing selected images are not
-rewritten or automatically replaced. No builds or activation were run for this
-integration; image/platform acceptance remains separate from offline tests.
-
-Each image retains its lock and `os-packages.tsv`. Debian snapshot apt sources
-keep archive signature checking; `Check-Valid-Until: no` permits later replay of
-the recorded historical snapshot rather than treating it as current freshness.
-APT metadata and base availability, BuildKit support, and offline package-hook
-behavior remain untested with real images. InRelease hashes are receipt evidence;
-APT verifies signatures, not the receipt's recorded InRelease hash itself.
-
-State is under `~/.local/state/agents-runtime`, private mode 0700, receipts 0600:
-
-- `<harness>-resolution.json`: exact package lock, catalog/source digests, base
-  platform/index digests, Debian snapshot and resolution timestamp.
-- `<harness>-<image-hex>.json`: immutable-ID build receipt, build timestamp and
-  startup contract version. Earlier receipts are retained.
-- `<harness>-selected.json`: explicit workstation selection, never a legacy default.
-- `agents-runtime-<...>.json`: launch contract, granted authority and source evidence.
-
-Receipts are ordinary-account records, **not root trust evidence**. Do not pass
-them to a privileged service as authorization. Build/host Docker access remains
-host-root-equivalent with the current rootful local endpoint.
-
-### Protected VM delegation
-
-The equivalent direct installer command is:
-
-```sh
-python3 -B runtime/install.py activate opencode sha256:<64-lowercase-hex> \
-  --scope vm --vm-config /etc/venv-agents/build.json --target <environment>:<host>
-```
-
-Use the actual canonical build-settings path and target. No machine detection or
-ambient variable changes the default workstation scope. Direct installer VM options
-on build/update or workstation activation are refused; Make passes its activation
-selectors only to `activate`. The installer requires:
-
-- Physical, single-link, root-owned config/launcher/policy files; every ancestor
-  must be root-owned and non-group/world-writable. Symlinks and set-ID modes are refused.
-- The existing config's `command`, native `platform` and local socket matching the
-  maintained builder. Policy is the protected launcher's fixed
-  `/etc/venv-agents/policy.json`, not a caller-selectable alternate policy.
-- Explicit target equality with both policy and shared-runtime opt-in; the actual
-  ordinary UID/GID and passwd identity must match an enrolled account. Ambient
-  `USER`, `SUDO_USER`, Docker contexts and provider variables confer no authority.
-- A private matching local build receipt whose harness/platform/contract/resolution
-  digest/source digest/revision exactly match the reviewed protected image projection.
-  Old source revisions remain eligible: activation does not require today's checkout
-  to match an earlier build. Claude VM activation remains unsupported.
+### Server-first execution and credentials
 
 ```text
-private build receipt + root-owned config/policy -> ordinary-user preflight
-    -> /usr/bin/sudo -n -- <configured-command> activate <harness> <local-ID>
-    -> protected caller/target/seal/image/transition checks -> transaction
+private image-bound HOME + canonical public config/prompt links
+    -> protected per-HOME credential -> serve -> authenticated /api/info
+                                                    |
+                                      CLI client --server loopback URL
 ```
 
-Only the finite harness/ID operation crosses sudo, with a minimal environment. No
-receipt, config path, source path, policy, target override or extra grants are passed
-to root. The launcher independently validates authorization and image identity;
-these local preflight checks do not replace it. Launcher exit status is propagated,
-and no workstation selection is written, even after a successful VM activation.
-There is no installer timeout that kills an in-flight protected recovery transaction.
-On interrupted activation use the protected recovery flow; do not delete journals.
+CLI startup runs a loopback server inside the container, waits for a V2 info
+response with that server's PID, then attaches the CLI using `--server`. The
+foreground supervisor forwards signals, returns the client's status and reaps its
+children. Server output goes to a protected `.opencode-server.log` in that HOME.
+The server endpoint is runtime-owned; caller `--server` overrides and unmanaged
+`web`, `serve`, `upgrade` commands are refused.
 
-## Privileges, HOME and source
+`--web` runs `serve --hostname 0.0.0.0 --port <port>` with host publication restricted
+to `127.0.0.1`. Readiness uses authenticated `/api/info` and requires V2 version/PID
+fields, not V1 `/global/health` or an unauthenticated HTML page. It validates the
+full Docker contract and exact running container ID before and after readiness.
+This gate is not browser/provider acceptance or continuous health monitoring.
 
-Default run: numeric caller UID/GID, dropped capabilities, no-new-privileges,
-read-only root filesystem, bounded temporary filesystem, memory/swap/CPU/PID limits,
-bridge network, loopback-only web port and **no container Docker socket/group/env**.
-The client endpoint is explicitly local; ambient Docker contexts are not forwarded.
-The image provides NSS-wrapper support for arbitrary numeric non-root owners.
+The runtime generates a random `.opencode-runtime-password` exclusively in the
+private HOME, mode **0600**, and passes it only through `OPENCODE_PASSWORD` to
+server/client processes. Basic-auth username is `opencode`. The host readiness
+probe reads the same protected file, without importing executable startup code.
+Symlinks, hardlinks, other ownership, broad permissions and malformed credentials
+are refused. Credentials are not placed in Docker argv, URLs, contracts, receipts
+or printed diagnostics. Environment credentials remain visible to the container's
+account and Docker administrators; Docker access is host-root-equivalent.
+OpenCode V2 refuses `--root-user`; other harnesses retain their disposable root mode.
 
-Independent options:
+### Dependency execution
 
-| Option | Effect |
-|---|---|
-| `--docker-socket` | Bind the validated selected local socket; add its exact group and `DOCKER_HOST`. This grants host-root-equivalent authority with rootful Docker. Docker CLI is not included by this implementation. |
-| `--cap-add NET_BIND_SERVICE` | Add only the currently allowlisted capability; no SYS_ADMIN or catch-all grant. |
-| `--root-user` | Container root with baked startup only; no mutable resource/startup binds. Workspace is read-only; HOME is disposable tmpfs, not existing private state. |
-| `--resources <public-dir>` | Explicit public skills/commands/system subtree, mounted read-only at `/opt/agent`. Operator owns exposure review; never pass a checkout containing private state. |
-| `--live-source <public-bundle>` | Physical ordinary-owned directory containing exactly `entry.py` and `harnesses.json`, bound at its identical host/container path. No broad checkout bind. |
-| `--checkout-write` | Independently permit writes to that live public startup bundle; invalid in baked mode. |
-| `--state-slot <name>` | Separate private HOME, useful for a deliberately fresh image/state test. No credential copying or state migration. |
+Lock generation and `npm ci` disable lifecycle scripts. OpenCode's generated
+package manifest approves only `allowScripts: {"@opencode/cli": true}`. Its image
+rebuilds **only `@opencode/cli`**, as `node`, offline with BuildKit `--network=none`.
+The optional platform package must already exist in the integrity-checked graph;
+an unrecorded postinstall download fails. Other harness lifecycle behavior is
+unchanged. Base image platform digest, Debian snapshot/signature verification and
+`os-packages.tsv` evidence are retained.
 
-The default source is the image's baked startup. Live bundles require explicit
-preparation/review; exporting and maintaining that bundle from a checkout is not
-automated yet. Host edits are visible through the bind, but do not reload already
-running Python/processes or installed dependencies. Launch records retain the Git
-revision and public-content digest. Rollback to an old image uses that image's baked
-startup unless the operator explicitly chooses a live bundle again.
+## Isolation and caller contracts
 
-### Config-only public agent publication
+The runtime contract remains schema/contract **1**; OpenCode V2 is the application
+version, not a protected runtime receipt-schema migration. Pure contract builder
+signatures and protected activation arguments are unchanged. Changes to startup,
+catalog and public sources invalidate earlier build resolutions normally.
 
-Before using a reviewed resource tree with `--resources`, publish its registration
-manifest as the tree's ordinary owner:
+- Numeric caller UID/GID; dropped capabilities; no-new-privileges; read-only root;
+  bounded tmpfs, memory/swap/CPU/PIDs; bridge network; no implicit Docker authority.
+- Same absolute workspace path on host/container; separate private HOME per account,
+  harness and state slot. Exclusive HOME writer lock; orphan containers block reuse.
+- `--docker-socket`, `--cap-add NET_BIND_SERVICE`, `--root-user` (non-OpenCode),
+  `--resources`, `--live-source`, `--checkout-write`, `--state-slot` are independent.
+- Live startup is a reviewed two-file `entry.py`/`harnesses.json` bundle, not a broad
+  checkout bind. Root never executes mutable startup/resources.
+- No automatic adoption, killing, deletion, state repair or image pruning.
+
+State is private under `~/.local/state/agents-runtime` (0700, receipts 0600).
+Build receipts retain exact image ID, resolution, source digests and timestamps.
+Ordinary-account receipts are **not** root authorization evidence.
+
+Protected VM activation remains:
 
 ```sh
-make -C runtime resources RESOURCES=/absolute/reviewed/public/agent
+make -C runtime activate HARNESS=opencode IMAGE=sha256:<64-lowercase-hex> \
+  SCOPE=vm VM_CONFIG=/etc/venv-agents/build.json TARGET=<environment>:<host>
 ```
 
-This target reuses the maintained `venv/entry.py` projector/publisher and
-`opencode/.opencode/config/opencode.json` as the sole metadata source. It emits
-only the `agent` map with relative prompt references into `opencode-agents.json`;
-it does not copy providers, plugins, models or global policy. No second metadata
-template or generator is maintained. The destination must already exist, contain
-the canonical physical `system/` and `gsd/` prompt files, and belong to the caller.
-The target verifies those exact paths, not the whole checkout; exposure review
-of all other bound content remains the operator's responsibility. It does not
-copy resource trees or follow their unrelated links.
+It verifies protected config/launcher/policy custody, caller enrollment, exact target
+and protected image projection, then delegates only finite harness/image arguments
+via sudo. No mutable receipt/source/policy overrides cross that boundary. No Claude
+VM enrollment. VM control promotion, gateway acceptance and lifecycle are owned by
+the maintained VM launcher, not this workstation supervisor.
 
-Publication is exclusive and idempotent for identical bytes; a stale/conflicting
-manifest fails without overwrite. Missing or redirected prompts also fail the
-target (an already published manifest is retained). This explicit preparation
-does not build/activate images, seed a HOME, grant ACLs or alter running sessions.
-Existing manifest conflicts require review, not automatic replacement.
+`make -C runtime resources RESOURCES=/absolute/reviewed/public/agent` reuses the VM
+publisher to emit public V2 agent metadata; the tree must already contain physical
+canonical prompts. No private providers/credentials are published. OpenCode runtime
+startup uses its canonical baked config plus prompt links, not a V1 seed. The
+`public_agents`/`seed_opencode` helper interfaces now consume **V2** metadata
+(`agents`, `system`, `permissions`); callers must not send V1 manifests.
 
-Shared-runtime enrollment reuses the same role publication, exact-path ACL and
-per-account readability checks against the configured policy resource root before
-control promotion, independently of the legacy registration toggle. That include
-is resource-only: it does not seed legacy private HOMEs. Common startup seeds the
-selected runtime HOME from the manifest using container-visible prompt paths;
-existing private configuration/policy and agent overrides retain precedence.
-
-Every state slot is image-bound before first execution. An image change over that
-HOME fails closed: image rollback does not reverse databases or provider-state
-writes. Select a **new empty** slot, or keep using the original image. A reviewed
-same-HOME migration/backup/restore path is not implemented. Existing unbound HOME
-contents are never adopted or recursively repaired.
-
-Runs stay foreground, forward signals/status and hold an exclusive per-slot writer
-lock. A remaining new-path container for that HOME also blocks launch after a killed
-adapter. No container is automatically adopted, killed or deleted to clear a conflict.
-T3 additionally keeps an image-level server lock and private log; starting it does
-not pair a browser or validate a provider.
-
-### Workstation web startup readiness
-
-Foreground `--web` holds the same writer lock while waiting up to 60 seconds for
-startup (individual Docker/HTTP probes are bounded and can finish after the deadline;
-a late result is never reported ready). Before printing the loopback URL it verifies
-the full container contract and running state, HTTP `/`, and the harness API:
-Pi `/api/sessions` JSON, OpenCode `/global/health` with `healthy: true`, or T3's
-unauthenticated API and WebSocket rejection. It rechecks the same exact container ID
-after the probes. Requests use direct loopback HTTP, bounded response sizes, no
-ambient proxy/credentials and no redirect following.
-
-On startup failure only a freshly validated exact container ID may be stopped.
-Unknown ownership/authority drift is retained; the local attached Docker client is
-killed/reaped without forwarding a cleanup signal into an unverified container.
-Retained containers continue blocking a second HOME writer and require explicit
-inspection/recovery. Successful startup remains foreground and returns the worker's
-exit status. This is a startup gate, not a restart daemon or continuous health monitor.
-T3 denial checks do not prove successful pairing, authenticated WebSocket use, or
-provider operation. Protected VM staging and authenticated gateway checks are owned
-by the existing VM launcher/gateway, not by this workstation supervisor.
-
-## Verification and remaining implementation
+## Verification and acceptance boundaries
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -v
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s venv/tests -v
-git diff --check
+git diff --check -- runtime
 ```
 
-New tests stub external Docker/npm/network operations. Legacy characterization
-executes copied dispatchers with harmless sibling recorders and verifies tracked
-production harness trees match Git HEAD. It does **not** yet provide the complete
-stubbed run/mgr environment/mount matrix requested by plan12.
+Offline tests stub Docker/network operations and exercise source closure, stale
+evidence, exact receipts, credential protection, server/client sequencing, readiness,
+activation and the other harness contracts. Legacy characterization additionally
+needs PyYAML and a clean baseline; byte-identical-to-HEAD checks intentionally fail
+against independently modified production trees.
 
-Remaining implementation/acceptance boundaries:
-
-- Full legacy run/mgr/native/Compose characterization, not just dispatcher tests.
-- Independent upstream release review and actual five-image builds/startup checks;
-  package-hook behavior and platform availability cannot be proven by fixtures.
-- Config-only OpenCode registration and canonical resource publication are offline
-  tested end to end. Actual OpenCode discovery in a built image and T3 paired
-  browser/provider parity remain unverified; no private credentials are copied.
-- Per-target checkout custody/exposure review, reviewed image projections and exact
-  backward-compatible state transitions before VM activation. Compiler, sealed
-  promotion, protected adapter and coupled replacement/recovery already exist;
-  their presence does not authorize target enablement or establish migration safety.
-- Workstation same-HOME image migration remains intentionally blocked; use a fresh
-  state slot. Docker CLI is not packaged for the optional socket grant.
-- Plan13 integration and full online acceptance, explicitly outside this pass.
-
-Legacy VM replacement refusal remains when shared opt-in is absent. Target guards,
-seals and the independent resource-rollout hold remain binding. Never execute this
-mutable checkout as root or promote its controls outside the reviewed Ansible flow.
+⚠️ No image/runtime/provider acceptance is implied by offline tests. At migration
+time the registry reported `@opencode/cli@latest = 2.0.32`; this is an observation,
+not a pin. Docker is reachable through the environment's `docker` shim, but the
+maintained adapter's fixed `/usr/bin/docker` executable is absent here, and local
+npm execution is denied even for `npm --version`. No disposable install, image build
+or online server/client acceptance was completed. Full legacy characterization
+also requires PyYAML, absent from `/usr/bin/python3` here; no global dependency was
+installed. No activation/deployment or actual user state was touched. Re-run latest
+resolution and acceptance in an authorized builder with `/usr/bin/docker` available.

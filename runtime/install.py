@@ -94,14 +94,19 @@ def atomic(path, value):
             os.unlink(temporary)
 
 
-def bind_home(home, image):
-    """No image change over unknown real state; explicit new slots stay independent."""
+def bind_home(home, image, *, advance=False):
+    """Advance only after the caller holds the HOME writer lock and excludes orphans."""
     private(home, directory=True)
     require(isinstance(image, str) and IMAGE.fullmatch(image), 'Exact HOME image binding required')
     binding = home / '.agents-runtime-image.json'
     if binding.exists() or binding.is_symlink():
-        require(json.loads(private(binding).read_text()) == {'image': image},
-                'Unknown real-state upgrade refused; select a new empty --state-slot, or retain the previous image')
+        previous = json.loads(private(binding).read_text())
+        require(isinstance(previous, dict) and set(previous) == {'image'}
+                and isinstance(previous['image'], str) and IMAGE.fullmatch(previous['image']),
+                'Invalid existing HOME image binding')
+        if previous['image'] != image:
+            require(advance, 'Unknown real-state upgrade refused; select a new empty --state-slot, or retain the previous image')
+            atomic(binding, {'image': image})
     else:
         require(not list(home.iterdir()), 'Unbound existing HOME refused; no private-state adoption')
         atomic(binding, {'image': image})
@@ -191,7 +196,10 @@ def resolve(harness: str, catalog: dict, platform: str) -> dict:
     packages = {}
     for name, bounds in spec['packages'].items():
         metadata = json.loads(fetch('https://registry.npmjs.org/' + quote(name, safe='')))
-        selected = select(metadata['versions'], bounds)
+        selected = metadata['dist-tags']['latest'] if bounds == 'latest' else select(metadata['versions'], bounds)
+        version(selected)
+        if harness == 'opencode':
+            require(version(selected)[0] >= 2, 'OpenCode V2 release required')
         release = metadata['versions'][selected]
         integrity = release['dist'].get('integrity', '')
         require(re.fullmatch(r'sha512-[A-Za-z0-9+/]+={0,2}', integrity), 'Package SHA512 integrity required')
@@ -219,17 +227,41 @@ def build_sources(harness, current, root=None):
              recipe: 'Dockerfile', recipe + '.dockerignore': 'Dockerfile.dockerignore'}
     if harness == 'opencode':
         base = '../opencode/.opencode/config/'
-        provenance = (root or Path(__file__).resolve().parent) / base / 'kdco/upstream.json'
-        upstream = json.loads(provenance.read_text())['files']
-        for name in (*upstream, 'upstream.json', 'package.json', 'package-lock.json', 'README.md'):
-            require(re.fullmatch(r'(?:kdco-primitives/|worktree/|notify/)?[A-Za-z0-9_.-]+', name)
-                    and name not in ('.', '..'), 'Invalid public KDCO source path')
-            files[base + 'kdco/' + name] = 'opencode-plugins/kdco/' + name
-        for name in ('background-agents', 'worktree', 'notify'):
-            relative = 'plugins/kdco-' + name + '.ts'
-            files[base + relative] = 'opencode-plugins/' + relative
-        files['../opencode/scripts/publish-plugins.mjs'] = 'publish-plugins.mjs'
+        for relative in ('opencode.json', 'cli.json', 'plugins/first-prompt-title.js',
+                         'plugins/background-subagents.js', 'tui-plugins/session-title.mjs',
+                         'tui-plugins/session-title/tui.js'):
+            files[base + relative] = 'opencode-defaults/' + relative
+        config = Path(os.path.abspath((root or ROOT) / base / 'opencode.json'))
+        require(config.resolve(strict=True) == config and config.is_file(), 'Physical canonical config required')
+        document = json.loads(config.read_text())
+        validate_public_config(document)
+        require(not set(document) & {'agent', 'provider', 'permission'}, 'Canonical V2 config required')
+        require(isinstance(document.get('agents'), dict), 'Canonical V2 agents required')
+        for agent in document['agents'].values():
+            require(isinstance(agent, dict), 'Canonical V2 agent object required')
+            reference = agent.get('system')
+            if reference is None:
+                continue
+            match = re.fullmatch(r'\{file:\./((?:system|gsd)/[A-Za-z0-9_-]+\.md)\}', reference)
+            require(match, 'Canonical public prompt reference required')
+            relative = match[1]
+            files['../agent/' + relative] = 'opencode-defaults/' + relative
     return files
+
+
+def validate_public_config(document: dict) -> None:
+    """Public defaults may reference credentials, never embed their values."""
+    require(isinstance(document, dict), 'Public config object required')
+    for key, value in document.items():
+        if re.fullmatch(r'(?i)api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|password|secret|authorization', key):
+            require(isinstance(value, str) and re.fullmatch(r'\{env:[A-Z][A-Z0-9_]*\}', value),
+                    'Public config credentials must be environment references')
+        if isinstance(value, dict):
+            validate_public_config(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    validate_public_config(item)
 
 
 def source_record(root, harness):
@@ -250,6 +282,8 @@ def lock_resolution(resolution):
         root = Path(temporary)
         package = {'name': 'agents-runtime-selected', 'version': '1.0.0', 'private': True,
                    'dependencies': {name: item['version'] for name, item in resolution['packages'].items()}}
+        if resolution['harness'] == 'opencode':
+            package['allowScripts'] = {'@opencode/cli': True}
         (root / 'package.json').write_bytes(encoded(package))
         docker(['pull', '--platform', resolution['platform'], resolution['base']['image']])
         docker(['run', '--rm', '--pull=never', '--platform', resolution['platform'],
@@ -277,19 +311,6 @@ def validate_lock(resolution, lock):
                 'All transitive packages require registry URL and SHA512 integrity')
 
 
-def validate_plugin_lock(root):
-    """The vendored plugin package obeys the same registry/SRI policy."""
-    package = json.loads((root / 'package.json').read_text())
-    lock = json.loads((root / 'package-lock.json').read_text())
-    dependencies = package['dependencies']
-    require(dependencies and lock['packages']['']['dependencies'] == dependencies, 'Plugin package graph mismatch')
-    packages = {}
-    for name, pin in dependencies.items():
-        version(pin)
-        packages[name] = {'version': pin, 'integrity': lock['packages']['node_modules/' + name]['integrity']}
-    validate_lock({'packages': packages}, lock)
-
-
 def validate_resolution(harness, root, resolution):
     current = json.loads((root / 'harnesses.json').read_text())
     require(resolution['schema'] == 1 and resolution['harness'] == harness
@@ -307,8 +328,15 @@ def validate_resolution(harness, root, resolution):
             and resolution['package']['dependencies'] == dependencies
             and resolution['lock']['packages']['']['dependencies'] == dependencies, 'Selected package graph mismatch')
     for name, selected in dependencies.items():
-        lower, upper = map(version, current['harnesses'][harness]['packages'][name])
-        require(lower <= version(selected) < upper, 'Resolved package outside reviewed range')
+        bounds = current['harnesses'][harness]['packages'][name]
+        if bounds == 'latest':
+            require(version(selected)[0] >= 2, 'OpenCode V2 release required')
+        else:
+            lower, upper = map(version, bounds)
+            require(lower <= version(selected) < upper, 'Resolved package outside reviewed range')
+    if harness == 'opencode':
+        require(resolution['package'].get('allowScripts') == {'@opencode/cli': True},
+                'Only the OpenCode CLI lifecycle is approved')
     return current
 
 
@@ -328,8 +356,6 @@ def build(harness: str, root: Path, resolution: dict, *, refresh: bool) -> dict:
             target = context / destination
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        if harness == 'opencode':
-            validate_plugin_lock(context / 'opencode-plugins/kdco')
         (context / 'package.json').write_bytes(encoded(resolution['package']))
         (context / 'package-lock.json').write_bytes(encoded(resolution['lock']))
         (context / 'apt.sources').write_text(apt_sources(resolution['debian']))

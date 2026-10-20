@@ -49,20 +49,12 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(mount["source"], "${AGENT_RESOURCES_PATH:?set managed agent tree}/" + name)
             self.assertTrue(mount["read_only"])
             self.assertTrue((AGENTS / "agent" / name).is_dir())
-        for agent in config["agent"].values():
-            reference = re.fullmatch(r"\{file:\./(.+)\}", agent.get("prompt", ""))
+        for agent in config["agents"].values():
+            reference = re.fullmatch(r"\{file:\./(.+)\}", agent.get("system", ""))
             if reference:
                 resource = reference[1]
                 self.assertIn(prefix + resource.split("/")[0], mounts)
                 self.assertTrue((AGENTS / "agent" / resource).is_file(), resource)
-        plugins = AGENTS / "opencode/.opencode/config/plugins"
-        self.assertEqual(len(list(plugins.glob("kdco-*.ts"))), 3)
-        self.assertTrue((plugins / "first-prompt-title.js").is_file())
-        self.assertTrue(mounts[prefix + "plugins"]["read_only"])
-        for plugin in plugins.glob("kdco-*.ts"):
-            for relative in re.findall(r'from ["\'](\.\./kdco/[^"\']+)["\']', plugin.read_text()):
-                source = plugins / relative
-                self.assertTrue(source.is_file() or source.with_suffix(".ts").is_file(), relative)
 
     def test_confinement(self):
         compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
@@ -90,8 +82,25 @@ class ComponentTests(unittest.TestCase):
         self.assertIn("source /opt/opencode/native-contract.sh", dockerfile)
         self.assertIn("install_runtime", dockerfile)
         self.assertNotIn("npm install", dockerfile)
-        self.assertNotIn("latest", dockerfile)
-        self.assertIn("component/scripts/publish-plugins.mjs", dockerfile)
+        self.assertIn("@opencode/cli@latest", dockerfile)
+        self.assertIn(".runtime/node_modules/@opencode/cli/package.json", dockerfile)
+        self.assertIn(".runtime/.native-install.json", dockerfile)
+        self.assertIn('r.requested!=="latest"', dockerfile)
+        self.assertIn('"opencode v"+p.version', dockerfile)
+        self.assertIn("/opt/opencode-install.json", dockerfile)
+        self.assertIn('verify_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME"', dockerfile)
+        self.assertIn('isolated_runtime "$OPENCODE_PREFIX" "$OPENCODE_HOME" --version', dockerfile)
+        for forbidden in ("OPENCODE_VERSION", "publish-plugins.mjs", "kdco", "opencode-ai"):
+            self.assertNotIn(forbidden, dockerfile)
+            self.assertNotIn(forbidden, (ROOT / "Dockerfile.dockerignore").read_text())
+        # Assert the reused callable still installs the intended scoped package locally.
+        installer = (AGENTS / "opencode/scripts/entrypoint.sh").read_text().split("install_runtime() (", 1)[1]
+        self.assertIn('"@opencode/cli@latest"', installer)
+        self.assertIn('--prefix "$stage/runtime"', installer)
+        self.assertNotIn("publish-plugins.mjs", installer)
+        for line in dockerfile.splitlines():
+            if line.startswith("COPY "):
+                self.assertTrue((AGENTS / line.split()[-2]).is_file(), line)
         self.assertIn('getent passwd 1000', dockerfile)
         self.assertIn('usermod --login paseo "$runtime_user"', dockerfile)
         self.assertIn('usermod --home /home/paseo paseo', dockerfile)
@@ -100,33 +109,29 @@ class ComponentTests(unittest.TestCase):
         for forbidden in ("npm", "npx", "docker", "install_runtime", "opencode serve"):
             self.assertNotIn(forbidden, startup)
         self.assertIn("os.execvp", startup)
-        self.assertIn("ensure_kdco_link", startup)
+        self.assertNotIn("kdco", startup.lower())
         self.assertNotIn("copytree", startup)
 
-    def test_kdco_link_is_safe_and_never_copies(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
-            root = Path(directory)
-            source = root / "source"
-            source.mkdir()
-            (source / "immutable.ts").write_text("export {}\n")
-            config_home = root / "config"
-            (config_home / "opencode").mkdir(parents=True)
-            target = config_home / "opencode" / "kdco"
-
-            entry.ensure_kdco_link(config_home, source)
-            self.assertTrue(target.is_symlink())
-            self.assertEqual(target.readlink(), source)
-            self.assertEqual((target / "immutable.ts").read_text(), "export {}\n")
-            entry.ensure_kdco_link(config_home, source)
-
-            target.unlink()
-            target.symlink_to(root / "foreign", target_is_directory=True)
-            with self.assertRaises(ValueError):
-                entry.ensure_kdco_link(config_home, source)
-            target.unlink()
-            target.mkdir()
-            with self.assertRaises(ValueError):
-                entry.ensure_kdco_link(config_home, source)
+    def test_v2_assets_are_explicit_and_read_only(self):
+        service = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["paseo"]
+        prefix = "/home/paseo/.config/opencode/"
+        mounts = {m["target"]: m for m in service["volumes"]}
+        assets = {
+            "cli.json": "${OPENCODE_CLI_CONFIG_PATH:?set managed cli.json}",
+            "plugins/first-prompt-title.js": "${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}/first-prompt-title.js",
+            "plugins/background-subagents.js": "${OPENCODE_PLUGINS_PATH:?set canonical V2 plugins directory}/background-subagents.js",
+            "tui-plugins/session-title.mjs": "${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}/session-title.mjs",
+            "tui-plugins/session-title/tui.js": "${OPENCODE_TUI_PLUGINS_PATH:?set canonical V2 tui-plugins directory}/session-title/tui.js",
+        }
+        for relative, source in assets.items():
+            self.assertEqual(mounts[prefix + relative]["source"], source)
+            self.assertTrue(mounts[prefix + relative]["read_only"])
+            self.assertTrue((AGENTS / "opencode/.opencode/config" / relative).is_file())
+        self.assertNotIn(prefix + "plugins", mounts)  # No stale wrapper directory exposure.
+        self.assertNotIn(prefix + "tui.json", mounts)
+        self.assertNotIn("OPENCODE_VERSION", service["build"]["args"])
+        cli = json.loads((AGENTS / "opencode/.opencode/config/cli.json").read_text())
+        self.assertIn("./tui-plugins/session-title", cli["plugins"])
 
     def test_paseo_home_mapping_and_volume_suppression(self):
         compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
@@ -140,13 +145,18 @@ class ComponentTests(unittest.TestCase):
         self.assertIn("/home/paseo/.gitconfig", targets)
         self.assertFalse(any("/home/runner" in target for target in targets))
 
-    @unittest.skipUnless(shutil.which("docker"), "Docker Compose unavailable: no real rendering evidence")
+    @unittest.skipUnless(
+        shutil.which("docker") and subprocess.run(
+            ["docker", "compose", "version"], capture_output=True, timeout=30
+        ).returncode == 0,
+        "Docker Compose unavailable: no real rendering evidence",
+    )
     def test_real_compose_render(self):
         env = dict(os.environ)
         for name in re.findall(r"\$\{([A-Z_]+):\?", (ROOT / "compose.yaml").read_text()):
             env[name] = "/tmp/opencode/fixture-" + name.lower()
-        env.update(PASEO_IMAGE="paseo:test", PASEO_BASE="ghcr.io/getpaseo/paseo:0.8.0",
-                   PASEO_VERSION="0.8.0", OPENCODE_VERSION="1.18.30",
+        env.update(PASEO_IMAGE="paseo:test", PASEO_BASE="ghcr.io/getpaseo/paseo:0.12.0@sha256:" + "a" * 64,
+                   PASEO_VERSION="0.12.0",
                    PASEO_UID="1000", PASEO_GID="1000", PASEO_BIND_ADDRESS="127.0.0.1",
                    PASEO_PORT="6767")
         result = subprocess.run(["docker", "compose", "-f", str(ROOT / "compose.yaml"),

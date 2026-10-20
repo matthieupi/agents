@@ -29,6 +29,8 @@ This command performs bulk codebase scanning to bootstrap the Codebase Intellige
 After initial scan, the PostToolUse hook (hooks/intel-index.js) maintains incremental updates.
 
 **Execution model (Step 9 - Entity Generation):**
+**OpenCode V2 only:** Replace the Task example with native `subagent({agent:"gsd-entity-generator", description:"Generate codebase entities", prompt, background:true})`, including the same self-contained prompt. Background is the default; explicit `background:false` is allowed. This writer uses the same native tool as read-only agents, not legacy KDCO routing. Consume its completion notification before parsing statistics or verifying entities; do not poll, sleep, or duplicate its writes. Continue independent work or end the response while it runs. Respect native permissions and depth limits. Other harnesses retain their Task behavior.
+
 - Orchestrator selects files for entity generation (up to 50 based on priority)
 - Spawns `gsd-entity-generator` subagent with file list (paths only, not contents)
 - Subagent reads files in fresh 200k context, generates entities, writes to disk
@@ -365,7 +367,7 @@ Do NOT include entity contents in your response.
 )
 ```
 
-**Wait for completion:** Task() blocks until subagent finishes.
+**Completion:** Task-based harnesses block until the subagent finishes. OpenCode V2 consumes the automatic completion notification as described above.
 
 **Parse result:** Extract entities_created count from response for final report.
 

@@ -12,12 +12,10 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* && \
     apt-get install -y --no-install-recommends python3 libnss-wrapper git openssh-client ripgrep && rm -rf /var/lib/apt/lists/*
 RUN install -d -o node -g node /opt/agents-runtime/packages
 COPY --chown=node:node package.json package-lock.json /opt/agents-runtime/packages/
-COPY --chown=node:node opencode-plugins /opt/opencode-defaults/
-COPY publish-plugins.mjs /opt/opencode-publish-plugins.mjs
+COPY opencode-defaults /opt/opencode-defaults/
 USER node
 RUN cd /opt/agents-runtime/packages && npm ci --ignore-scripts --include=optional --no-audit --no-fund
-RUN npm ci --prefix /opt/opencode-defaults/kdco --ignore-scripts --no-audit --no-fund
-RUN --network=none cd /opt/agents-runtime/packages && npm_config_nodedir=/usr/local npm rebuild --offline
+RUN --network=none cd /opt/agents-runtime/packages && npm_config_nodedir=/usr/local npm rebuild @opencode/cli --offline
 USER root
 COPY entry.py harnesses.json /opt/agents-runtime/
 RUN dpkg-query -W > /opt/agents-runtime/os-packages.tsv && chmod -R a+rX,a-w /opt/agents-runtime /opt/opencode-defaults

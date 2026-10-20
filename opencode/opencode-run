@@ -97,8 +97,8 @@ publish_label() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         -d|--dangerous)
-            DANGEROUS_MODE="--permission allow"
-            log_warn "Running in DANGEROUS MODE - all permissions auto-approved!"
+            DANGEROUS_MODE="--auto"
+            log_warn "Running with --auto: permissions auto-approved unless explicitly denied."
             shift
             ;;
         -r|--rebuild)
@@ -182,9 +182,22 @@ done
 
 if [[ -n "${WEB_MODE}" && -n "${AGENT_WEB_MODE}" ]]; then
     log_error "--agent-web-port cannot be combined with --web or --wlan"
-    log_error "Use --web/--wlan to start the server immediately, or --agent-web-port to let the agent start it later."
+    log_error "Choose one publishing mode; V2 always starts its single API/web server immediately."
     exit 1
 fi
+
+# V2 has exactly one listener. Agent-started web now exposes that listener,
+# rather than asking a tool to launch a competing service later.
+if [[ -n "${AGENT_WEB_MODE}" && "${AGENT_WEB_PORT}" != 4096 ]]; then
+    log_error "Docker V2 --agent-web-port must be 4096 (the existing server). Use --web PORT for host-port remapping."
+    exit 1
+fi
+for spec in "${PUBLISH_SPECS[@]}"; do
+    if [[ "${spec##*:}" == 4096 ]]; then
+        log_error "Port 4096 belongs to the V2 server; use --web/--wlan/--agent-web-port, not --publish."
+        exit 1
+    fi
+done
 
 AGENT_WEB_URL=""
 if [[ -n "${AGENT_WEB_MODE}" ]]; then
@@ -231,9 +244,76 @@ if [[ -n "${GPU_MODE}" ]]; then
     CONTAINER_NAME="${CONTAINER_NAME}-gpu"
 fi
 
+# Validate the selected image before removing/reusing any container. A mutable
+# tag match alone must never reuse an idle V1 tail container or an older build.
+IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${IMAGE_NAME}" 2>/dev/null || true)"
+IMAGE_LIFECYCLE="$(docker image inspect --format '{{ index .Config.Labels "dev.xmist.opencode.lifecycle" }}' "${IMAGE_NAME}" 2>/dev/null || true)"
+if [[ -z "${IMAGE_ID}" || "${IMAGE_LIFECYCLE}" != v2-serve-1 ]]; then
+    log_error "Build the Docker V2 image first (opencode -r .); selected image lacks lifecycle v2-serve-1."
+    exit 1
+fi
+export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"
+if [[ -z "${OPENCODE_PASSWORD}" || "${OPENCODE_SERVER_USERNAME:-opencode}" != opencode ]]; then
+    log_error "Docker V2 requires OPENCODE_PASSWORD (or OPENCODE_SERVER_PASSWORD), and username opencode."
+    exit 1
+fi
+
+export OPENCODE_DOCKER_WEB_ENDPOINT=""
+if [[ -n "$WEB_MODE" ]]; then
+    OPENCODE_DOCKER_WEB_ENDPOINT="${WEB_BIND_HOST}:${WEB_PORT}"
+elif [[ -n "$AGENT_WEB_MODE" ]]; then
+    OPENCODE_DOCKER_WEB_ENDPOINT="${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT}"
+fi
+
+# Recreate on canonical config, workspace, resource-root or credential changes.
+# Only a digest is labelled; no credentials are placed in Docker argv/logs.
+export OPENCODE_DOCKER_CONFIG_FINGERPRINT
+OPENCODE_DOCKER_CONFIG_FINGERPRINT="$(python3 - "$SCRIPT_DIR" "$WORKSPACE_PATH" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+digest.update(str(root).encode() + b'\0' + sys.argv[2].encode() + b'\0')
+for name in ('OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
+             'OPENROUTER_API_KEY', 'OLLAMA_HOST', 'OPENAI_COMPAT_API_KEY',
+             'OPENAI_COMPAT_BASE_URL', 'SSH_DIR_PATH', 'OPENCODE_DOCKER_WEB_ENDPOINT'):
+    digest.update(name.encode() + b'\0' + os.environ.get(name, '').encode() + b'\0')
+config = root / '.opencode/config'
+files = [root / 'init.sh', config / 'opencode.json', config / 'opencode.jsonc', config / 'cli.json']
+for folder in ('plugins', 'tui-plugins'):
+    files += sorted(path for path in (config / folder).rglob('*')
+                    if path.is_file() and 'node_modules' not in path.parts)
+for path in files:
+    digest.update(str(path.relative_to(root)).encode() + b'\0')
+    digest.update(path.read_bytes() if path.is_file() else b'<missing>')
+    digest.update(b'\0')
+print(digest.hexdigest())
+PY
+)"
+
+attach_client() {
+    docker exec "${CONTAINER_NAME}" python3 /opt/harness/docker-health.py --wait
+    if [[ -n "${WEB_MODE}" ]]; then
+        log_info "V2 browser/API ready: http://localhost:${WEB_PORT} (username opencode; configured password)"
+        return
+    fi
+    exec docker exec -it "${CONTAINER_NAME}" bash /opt/harness/docker-client.sh ${DANGEROUS_MODE}
+}
+
+has_requested_lifecycle_config() {
+    local lifecycle
+    lifecycle="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.lifecycle" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+    local fingerprint
+    fingerprint="$(docker inspect --format '{{ index .Config.Labels "dev.xmist.opencode.config" }}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+    [[ "${lifecycle}" == v2-serve-1 && "${fingerprint}" == "$OPENCODE_DOCKER_CONFIG_FINGERPRINT" ]]
+}
+
 has_requested_web_port() {
     local published
-    published="$(docker port "${CONTAINER_NAME}" "${WEB_PORT}/tcp" 2>/dev/null || true)"
+    published="$(docker port "${CONTAINER_NAME}" "4096/tcp" 2>/dev/null || true)"
 
     if [[ -z "${published}" ]]; then
         return 1
@@ -280,6 +360,12 @@ has_requested_publish_config() {
     [[ "${configured_publish}" == "$(publish_label)" ]]
 }
 
+replace_active_container() {
+    log_warn "Recreating ${CONTAINER_NAME}: requested $1 changed; active sessions will be interrupted."
+    docker stop "${CONTAINER_NAME}" > /dev/null
+    docker rm "${CONTAINER_NAME}" > /dev/null
+}
+
 # Check if container exists and is running
 CONTAINER_STATUS=$(docker ps -a --filter "name=^${CONTAINER_NAME}$" --format "{{.Status}}" 2>/dev/null || echo "")
 
@@ -288,49 +374,30 @@ if [[ -n "${CONTAINER_STATUS}" ]]; then
     RUNNING=$(docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" 2>/dev/null || echo "")
     if [[ -n "${RUNNING}" ]]; then
         # Verify it's using the current image
-        CONTAINER_IMAGE=$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "")
-        if [[ "${CONTAINER_IMAGE}" == "${IMAGE_NAME}" ]]; then
+        CONTAINER_IMAGE=$(docker inspect --format '{{.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "")
+        if [[ "${CONTAINER_IMAGE}" == "${IMAGE_ID}" ]] && has_requested_lifecycle_config; then
             if [[ -n "${WEB_MODE}" ]] && ! has_requested_web_port; then
-                log_warn "Container lacks requested web port mapping (${WEB_BIND_HOST}:${WEB_PORT}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "web port mapping (${WEB_BIND_HOST}:${WEB_PORT})"
             elif [[ -n "${AGENT_WEB_MODE}" ]] && ! has_requested_agent_web_port; then
-                log_warn "Container lacks requested agent web port mapping (${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "agent web port mapping (${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT})"
             elif [[ -n "${GPU_MODE}" ]] && ! has_requested_gpu_config; then
-                log_warn "Container lacks requested GPU configuration (${GPU_DEVICES}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "GPU configuration (${GPU_DEVICES})"
             elif ! has_requested_resource_config; then
-                log_warn "Container lacks requested resource configuration (cpus=${CPU_LIMIT}, memory=${MEMORY_LIMIT}), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "resources (cpus=${CPU_LIMIT}, memory=${MEMORY_LIMIT})"
             elif ! has_requested_publish_config; then
-                log_warn "Container lacks requested published ports ($(publish_label)), recreating..."
-                docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+                replace_active_container "published ports ($(publish_label))"
             else
-                if [[ -n "${WEB_MODE}" ]]; then
-                    if [[ "${WEB_BIND_HOST}" == "0.0.0.0" && -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-                        log_warn "LAN web mode is exposed without OPENCODE_SERVER_PASSWORD"
-                    fi
-                    log_info "Starting browser session: ${CONTAINER_NAME}"
-                    log_info "Workspace: ${WORKSPACE_PATH}"
-                    log_info "Port: ${WEB_BIND_HOST}:${WEB_PORT}"
-                    exec docker exec -it \
-                        -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 \
-                        -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
-                        -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
-                        "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
-                fi
-            log_info "Attaching to existing session: ${CONTAINER_NAME}"
-            log_info "Workspace: ${WORKSPACE_PATH}"
-            exec docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
+                log_info "Attaching to existing V2 server: ${CONTAINER_NAME}"
+                attach_client
+                exit 0
             fi
         else
-            log_warn "Container uses old image (${CONTAINER_IMAGE}), recreating..."
-            docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+            replace_active_container "image/lifecycle/config (current image ${CONTAINER_IMAGE})"
         fi
     else
-        # Container exists but is stopped/restarting/dead - remove and recreate
-        log_warn "Removing stale container: ${CONTAINER_NAME} (${CONTAINER_STATUS})"
-        docker rm -f "${CONTAINER_NAME}" > /dev/null 2>&1
+        # Non-forced removal also protects a restarting/racing active server.
+        log_warn "Removing stopped stale container: ${CONTAINER_NAME} (${CONTAINER_STATUS})"
+        docker rm "${CONTAINER_NAME}" > /dev/null
     fi
 fi
 
@@ -363,6 +430,8 @@ mkdir -p "${DATA_DIR}"
 # Prepare cache directory for provider/plugin state persistence
 CACHE_DIR="${SCRIPT_DIR}/.opencode/cache"
 mkdir -p "${CACHE_DIR}"
+STATE_DIR="${SCRIPT_DIR}/.opencode/state"
+mkdir -p "${STATE_DIR}"
 AGENT_DIR="${SCRIPT_DIR}/../agent"
 INIT_SCRIPT="${SCRIPT_DIR}/init.sh"
 
@@ -373,10 +442,7 @@ log_info "Running OpenCode with UID $(id -u):$(id -g)"
 
 PORT_ARGS=()
 if [[ -n "${WEB_MODE}" ]]; then
-    PORT_ARGS=(-p "${WEB_BIND_HOST}:${WEB_PORT}:${WEB_PORT}")
-    if [[ "${WEB_BIND_HOST}" == "0.0.0.0" && -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-        log_warn "LAN web mode is exposed without OPENCODE_SERVER_PASSWORD"
-    fi
+    PORT_ARGS=(-p "${WEB_BIND_HOST}:${WEB_PORT}:4096")
 fi
 
 if [[ -n "${AGENT_WEB_MODE}" ]]; then
@@ -387,9 +453,6 @@ if [[ -n "${AGENT_WEB_MODE}" ]]; then
     fi
 
     PORT_ARGS+=(-p "${AGENT_WEB_BIND_HOST}:${AGENT_WEB_PORT}:${AGENT_WEB_PORT}")
-    if [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-        log_warn "Agent web port is exposed on the LAN without OPENCODE_SERVER_PASSWORD"
-    fi
 fi
 
 for publish_spec in "${PUBLISH_SPECS[@]}"; do
@@ -410,6 +473,8 @@ fi
 docker run -d \
     --name "${CONTAINER_NAME}" \
     --hostname "${CONTAINER_NAME}" \
+    --label "dev.xmist.opencode.lifecycle=v2-serve-1" \
+    --label "dev.xmist.opencode.config=${OPENCODE_DOCKER_CONFIG_FINGERPRINT}" \
     --label "dev.xmist.opencode.gpu.devices=${GPU_LABEL_DEVICES}" \
     --label "dev.xmist.opencode.cpus=${CPU_LIMIT}" \
     --label "dev.xmist.opencode.memory=${MEMORY_LIMIT}" \
@@ -428,14 +493,12 @@ docker run -d \
     -e "OLLAMA_HOST=${OLLAMA_HOST:-http://ollama.xmist.dev:11434}" \
     -e "OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}" \
     -e "OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}" \
-    -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
-    -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
+    -e OPENCODE_PASSWORD \
     -e "OPENCODE_AGENT_WEB_PORT=${AGENT_WEB_PORT}" \
     -e "OPENCODE_AGENT_WEB_BIND_HOST=${AGENT_WEB_BIND_HOST}" \
     -e "OPENCODE_AGENT_WEB_URL=${AGENT_WEB_URL}" \
     -e "NVIDIA_VISIBLE_DEVICES=${GPU_DEVICES}" \
     -e "NVIDIA_DRIVER_CAPABILITIES=compute,utility" \
-    -e "OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json" \
     -e "OPENCODE_DISABLE_AUTOUPDATE=1" \
     -e "OPENCODE_EXPERIMENTAL_WORKSPACES=1" \
     -e "TERM=xterm-256color" \
@@ -449,19 +512,16 @@ docker run -d \
     -v "${CONFIG_DIR}:/home/opencode/.config/opencode:rw" \
     -v "${DATA_DIR}:/home/opencode/.local/share/opencode:rw" \
     -v "${CACHE_DIR}:/home/opencode/.cache/opencode:rw" \
+    -v "${STATE_DIR}:/home/opencode/.local/state/opencode:rw" \
     -v "${SSH_DIR}:/home/opencode/.ssh:ro" \
     "${PORT_ARGS[@]}" \
     "${GPU_ARGS[@]}" \
     --network devai-xmist \
     --memory "${MEMORY_LIMIT}" \
     --cpus "${CPU_LIMIT}" \
-    "${IMAGE_NAME}" \
-    bash -lc '/opt/harness/init.sh && tail -f /dev/null' > /dev/null
+    "${IMAGE_NAME}" > /dev/null
 
 log_info "Container created successfully"
-
-# Wait for container to be fully running
-sleep 2
 
 # Verify container is running before attaching
 if ! docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" | grep -q .; then
@@ -470,16 +530,4 @@ if ! docker ps -q --filter "name=^${CONTAINER_NAME}$" --filter "status=running" 
     exit 1
 fi
 
-if [[ -n "${WEB_MODE}" ]]; then
-    log_info "Starting browser session..."
-    log_info "Port: ${WEB_BIND_HOST}:${WEB_PORT}"
-    exec docker exec -it \
-        -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 \
-        -e "OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}" \
-        -e "OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}" \
-        "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode web --hostname 0.0.0.0 --port "$0"' "${WEB_PORT}"
-fi
-
-# Attach to the new container
-log_info "Attaching to TUI..."
-exec docker exec -it -e OPENCODE_EXPERIMENTAL_WORKSPACES=1 "${CONTAINER_NAME}" bash -lc '/opt/harness/init.sh && exec opencode "$@"' _ ${DANGEROUS_MODE}
+attach_client

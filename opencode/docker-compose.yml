@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     image: lab/opencode:latest
     container_name: opencode
+    labels:
+      dev.xmist.opencode.lifecycle: v2-serve-1
     restart: unless-stopped
 
     user: "${UID:-1000}:${GID:-1000}"
@@ -22,6 +24,9 @@ services:
       - HOME=/home/opencode
       - PATH=/home/opencode/.local/bin:/usr/local/bin:/usr/bin:/bin
       - OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
+      - OPENCODE_DOCKER_PORT=4096
+      - OPENCODE_PASSWORD=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:?Set a Docker V2 server password}}
+      - OPENCODE_SERVER_USERNAME=${OPENCODE_SERVER_USERNAME:-opencode}
 
       # LLM Provider API keys (set the ones you need)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -37,7 +42,6 @@ services:
       - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
 
       # OpenCode specific
-      - OPENCODE_CONFIG=/home/opencode/.config/opencode/opencode.json
       - OPENCODE_DISABLE_AUTOUPDATE=1
       # Native same-TUI workspace switching via /warp (no terminal launcher).
       - OPENCODE_EXPERIMENTAL_WORKSPACES=1
@@ -67,6 +71,7 @@ services:
 
       # Cache persistence (provider/plugin state)
       - ./.opencode/cache:/home/opencode/.cache/opencode:rw
+      - ./.opencode/state:/home/opencode/.local/state/opencode:rw
 
       # SSH directory for remote access
       - ${SSH_DIR_PATH:-./ssh}:/home/opencode/.ssh:ro
@@ -93,13 +98,10 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # Keep-alive for docker exec attach pattern
-    # Access: docker exec -it opencode opencode
-    entrypoint: ["bash", "-lc", "/opt/harness/init.sh && tail -f /dev/null"]
-
-    # Alternative entrypoints:
-    # entrypoint: ["opencode"]                 # Direct TUI
-    # entrypoint: ["opencode", "serve"]        # Headless API server
+    # One API/web listener; TUI attaches via scripts/docker-client.sh.
+    command: ["bash", "/opt/harness/docker-server.sh"]
+    ports:
+      - "${OPENCODE_WEB_BIND_HOST:-127.0.0.1}:${OPENCODE_WEB_PORT:-4096}:4096"
 
 networks:
   devai-xmist:

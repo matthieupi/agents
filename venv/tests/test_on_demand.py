@@ -1,5 +1,7 @@
 """Real policy files/flock/build subprocess boundaries; no live Docker or gateway."""
 import copy
+from contextlib import contextmanager
+import hashlib
 import io
 import json
 import os
@@ -121,7 +123,7 @@ class BuildTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('**\n')
         self.settings = dict(platform='linux/amd64', docker_cli_image='docker@sha256:' + 'b' * 64,
-                             opencode_version='1.18.29', socket='/run/docker.sock', command='/usr/local/bin/venv-agents')
+                             socket='/run/docker.sock', command='/usr/local/bin/venv-agents')
         self.calls, self.tags = [], {}
 
     def docker(self, argv, **kwargs):
@@ -138,6 +140,37 @@ class BuildTests(unittest.TestCase):
         with patch.object(builder, 'prerequisites'), patch.object(builder.platform, 'machine', return_value='x86_64'), \
                 patch.object(builder.subprocess, 'run', side_effect=self.docker):
             return builder.build(harness, self.root, self.settings)
+
+    @contextmanager
+    def maintained_source(self):
+        """Real manifest, hashes, settings and flock; simulate root custody only."""
+        script = self.root / 'venv/build.py'
+        script.write_text('maintained source fixture\n')
+        script.chmod(0o644)
+        settings = self.root / 'build.json'
+        settings.write_text(json.dumps(self.settings))
+        settings.chmod(0o644)
+        lock = self.root.with_name(self.root.name + '.build.lock')
+        lock.write_text('')
+        lock.chmod(0o644)
+        self.addCleanup(lock.unlink)
+        record = self.root / 'build-record.json'
+        record.write_text(json.dumps(dict(schema=1, canonical_root=str(self.root), lock=str(lock),
+            source_sha256='a' * 64, files=[dict(path='venv/build.py', mode='0644',
+            sha256=hashlib.sha256(script.read_bytes()).hexdigest())])))
+        record.chmod(0o644)
+        lstat, fstat = Path.lstat, os.fstat
+
+        def root_custody(info):
+            fields = list(info)
+            fields[4:6] = [0, 0]
+            return os.stat_result(fields)
+
+        with patch.object(builder, '__file__', str(script)), patch.object(builder, 'SETTINGS', settings), \
+                patch.object(builder, '_protected_directory'), \
+                patch.object(Path, 'lstat', lambda path: root_custody(lstat(path))), \
+                patch.object(builder.os, 'fstat', side_effect=lambda fd: root_custody(fstat(fd))):
+            yield
 
     def test_selected_graphs_no_all_build_and_cache_retained(self):
         for harness, expected in {
@@ -166,6 +199,15 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'amd64 only'):
             builder.prerequisites('omp', 'aarch64', '')
 
+    def test_opencode_latest_without_version_setting_and_cache_refresh(self):
+        self.run_build('opencode')
+        self.run_build('opencode')
+        commands = [argv for argv, _ in self.calls if argv[3] == 'build'
+                    and 'venv/Dockerfile.opencode' in argv]
+        refresh = [next(a for a in argv if a.startswith('OPENCODE_INSTALL_REFRESH=')) for argv in commands]
+        self.assertNotEqual(refresh[0], refresh[1])
+        self.assertNotIn('OPENCODE_VERSION=', ' '.join(' '.join(a) for a in commands))
+
     def test_root_and_cpu_failure_precede_docker(self):
         with patch.object(builder.os, 'getuid', return_value=0), patch.object(builder.subprocess, 'run') as run:
             with self.assertRaisesRegex(ValueError, 'never root'):
@@ -189,11 +231,10 @@ class BuildTests(unittest.TestCase):
                 patch.object(builder.subprocess, 'run', side_effect=drift):
             with self.assertRaisesRegex(ValueError, 'drift'):
                 builder.build('omp', self.root, self.settings)
-        path = self.root / 'build.json'
-        path.write_text(json.dumps(self.settings))
-        with patch.object(builder, 'SETTINGS', path), patch.object(builder, 'build', side_effect=ValueError('failed')), \
+        with self.maintained_source(), patch.object(builder, 'build', side_effect=ValueError('failed')) as build, \
                 patch.object(builder.subprocess, 'run') as run, patch('sys.stderr', new_callable=io.StringIO):
             self.assertEqual(builder.main(['omp']), 1)
+            build.assert_called_once()
             run.assert_not_called()
 
     def test_omp_never_reads_other_component_pins(self):
@@ -207,14 +248,21 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_success_hands_only_finite_id_to_protected_sudo_launcher(self):
-        path = self.root / 'build.json'
-        path.write_text(json.dumps(self.settings))
         image = 'sha256:' + 'a' * 64
-        with patch.object(builder, 'SETTINGS', path), patch.object(builder, 'build', return_value=image), \
+        with self.maintained_source(), patch.object(builder, 'build', return_value=image), \
                 patch.object(builder.subprocess, 'run') as run, patch('sys.stdout', new_callable=io.StringIO):
             self.assertEqual(builder.main(['omp']), 0)
             run.assert_called_once_with(['/usr/bin/sudo', '--', '/usr/local/bin/venv-agents', 'activate', 'omp', image],
-                                        check=True, timeout=1200)
+                                         check=True, timeout=1200)
+
+    def test_invalid_source_record_never_builds_or_activates(self):
+        with self.maintained_source(), patch.object(builder, 'build') as build, \
+                patch.object(builder.subprocess, 'run') as run, patch('sys.stderr', new_callable=io.StringIO) as error:
+            (self.root / 'venv/build.py').write_text('unreviewed drift\n')
+            self.assertEqual(builder.main(['omp']), 1)
+            self.assertIn('Maintained source drift', error.getvalue())
+            build.assert_not_called()
+            run.assert_not_called()
 
 
 class ActivationTests(unittest.TestCase):

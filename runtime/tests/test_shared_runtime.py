@@ -77,6 +77,8 @@ class Contracts(unittest.TestCase):
                              ('docker_socket', {'path': '/var/run/docker.sock', 'gid': 999})]:
             with self.subTest(grant=grant):
                 c = contract()
+                if grant == 'root_user':
+                    c['harness'] = 'pi'
                 c['grants'][grant] = value
                 runtime.inspect_contract(c, instance(c))
                 argv = runtime.command(c, [], tty=True)
@@ -118,6 +120,9 @@ class Contracts(unittest.TestCase):
     def test_root_refuses_live_and_mutable_resources(self):
         c = contract()
         c['grants']['root_user'] = True
+        with self.assertRaises(ValueError):
+            runtime.validate_contract(c)
+        c['harness'] = 'pi'
         for mutation in (lambda c: c.update(resources='/public/resources'),
                          lambda c: c['source'].update(mode='live', path='/public/startup')):
             d = copy.deepcopy(c)
@@ -224,14 +229,15 @@ class Installation(unittest.TestCase):
 
     def resolution(self, harness='opencode'):
         current = installer.catalog()
-        packages = {name: {'version': bounds[0], 'integrity': SRI} for name, bounds in current['harnesses'][harness]['packages'].items()}
+        packages = {name: {'version': '2.0.32' if bounds == 'latest' else bounds[0], 'integrity': SRI} for name, bounds in current['harnesses'][harness]['packages'].items()}
         dependencies = {name: spec['version'] for name, spec in packages.items()}
         lock = {'lockfileVersion': 3, 'packages': {'': {'dependencies': dependencies},
                 **{'node_modules/' + name: dict(value, resolved='https://registry.npmjs.org/package.tgz') for name, value in packages.items()}}}
         return dict(schema=1, contract=1, harness=harness, platform='linux/amd64',
                     catalog_sha256=installer.digest(installer.encoded(current)),
                     source=installer.source_record(ROOT, harness), packages=packages,
-                    package={'name': 'selected', 'version': '1.0.0', 'dependencies': dependencies},
+                    package={'name': 'selected', 'version': '1.0.0', 'dependencies': dependencies,
+                             **({'allowScripts': {'@opencode/cli': True}} if harness == 'opencode' else {})},
                     lock=lock, lock_sha256=installer.digest(installer.encoded(lock)),
                     base=dict(image='node@' + ID, platform_digest=ID, manifest=ID, version='24.20.0'),
                     debian=dict(timestamp='20260910T000000Z', releases={}))
@@ -244,7 +250,7 @@ class Installation(unittest.TestCase):
                 calls.append(argv)
                 if argv[0] == 'build':
                     context = Path(argv[-1])
-                    self.assertEqual({p.name for p in context.iterdir()}, {'Dockerfile', 'Dockerfile.dockerignore', 'entry.py', 'harnesses.json', 'package.json', 'package-lock.json', 'apt.sources', 'opencode-plugins', 'publish-plugins.mjs'})
+                    self.assertEqual({p.name for p in context.iterdir()}, {'Dockerfile', 'Dockerfile.dockerignore', 'entry.py', 'harnesses.json', 'package.json', 'package-lock.json', 'apt.sources', 'opencode-defaults'})
                     self.assertIn('snapshot.debian.org/archive/debian/20260910T000000Z', (context / 'apt.sources').read_text())
                     Path(argv[argv.index('--iidfile') + 1]).write_text(ID)
                     return subprocess.CompletedProcess(argv, 0)
@@ -298,6 +304,23 @@ class Installation(unittest.TestCase):
                 installer.bind_home(home, ID)
             self.assertFalse((home / '.agents-runtime-image.json').exists())
 
+    def test_explicit_binding_advance_is_atomic_and_validates_previous_binding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            installer.bind_home(home, ID)
+            binding = home / '.agents-runtime-image.json'
+            next_image = 'sha256:' + 'b' * 64
+            with patch.object(installer.os, 'replace', side_effect=OSError('injected')):
+                with self.assertRaises(OSError):
+                    installer.bind_home(home, next_image, advance=True)
+            self.assertEqual(json.loads(binding.read_text()), {'image': ID})
+            installer.bind_home(home, next_image, advance=True)
+            self.assertEqual(json.loads(binding.read_text()), {'image': next_image})
+            self.assertEqual(binding.stat().st_mode & 0o777, 0o600)
+            installer.atomic(binding, {'image': 'not-an-image'})
+            with self.assertRaisesRegex(ValueError, 'Invalid existing HOME image binding'):
+                installer.bind_home(home, ID, advance=True)
+
     def test_image_receipt_authority_validation(self):
         resolution = self.resolution()
         receipt = dict(schema=1, contract=1, image=ID, harness='opencode', platform='linux/amd64', resolution=resolution)
@@ -320,11 +343,12 @@ class Installation(unittest.TestCase):
             installer.select(['2.0.0', '1.2.1-rc.1'], ['1.2.0', '2.0.0'])
 
     def test_resolution_exact_integrities(self):
-        metadata = {'versions': {'1.18.29': {'dist': {'integrity': SRI, 'tarball': 'https://registry.npmjs.org/pkg.tgz'}},
-                                 '2.0.0': {'dist': {}}}}
-        with patch.object(installer, 'ordinary'), patch.object(installer, 'fetch', return_value=json.dumps(metadata).encode()), patch.object(installer, 'node_base', return_value={'image': 'node@' + ID}):
+        metadata = {'dist-tags': {'latest': '2.0.32'}, 'versions': {
+            '2.0.32': {'dist': {'integrity': SRI, 'tarball': 'https://registry.npmjs.org/pkg.tgz'}},
+            '2.1.0': {'dist': {}}}}
+        with patch.object(installer, 'ordinary'), patch.object(installer, 'debian_snapshot', return_value={}), patch.object(installer, 'fetch', return_value=json.dumps(metadata).encode()), patch.object(installer, 'node_base', return_value={'image': 'node@' + ID}):
             result = installer.resolve('opencode', installer.catalog(), 'linux/amd64')
-        self.assertEqual(result['packages']['opencode-ai'], {'version': '1.18.29', 'integrity': SRI})
+        self.assertEqual(result['packages']['@opencode/cli'], {'version': '2.0.32', 'integrity': SRI})
         self.assertNotIn('image', result)
 
     def test_resolution_root_or_platform_before_network(self):
@@ -393,7 +417,7 @@ class Installation(unittest.TestCase):
             self.assertEqual(ignore[0], '**')
             expected = {'!Dockerfile', '!Dockerfile.dockerignore', '!entry.py', '!harnesses.json', '!package.json', '!package-lock.json', '!apt.sources'}
             if harness == 'opencode':
-                expected |= {'!opencode-plugins', '!opencode-plugins/**', '!publish-plugins.mjs'}
+                expected |= {'!opencode-defaults', '!opencode-defaults/**'}
             self.assertEqual(set(ignore[1:]), expected)
             self.assertIn('FROM ${NODE_IMAGE}', recipe)
             self.assertIn('npm ci ', recipe)
@@ -503,18 +527,51 @@ class ForegroundCLI(unittest.TestCase):
         self.assertIs(process, self.process)
         self.assertIn('127.0.0.1:4096:4096', spawn.call_args.args[0])
 
-    def test_unknown_private_image_blocks_and_new_slot_is_independent(self):
+    def test_opencode_image_switch_preserves_same_home_and_database(self):
         home = self.state / 'opencode-default-home'
         home.mkdir(mode=0o700)
         installer.bind_home(home, 'sha256:' + 'b' * 64)
         (home / 'session.db').write_text('preserve')
         result, spawn = self.invoke()
-        self.assertEqual(result, 1)
-        spawn.assert_not_called()
-        result, spawn = self.invoke(['--state-slot', 'fresh'])
         self.assertEqual(result, 23)
         self.assertEqual((home / 'session.db').read_text(), 'preserve')
-        self.assertNotIn(str(home), ' '.join(spawn.call_args.args[0]))
+        self.assertIn(str(home), ' '.join(spawn.call_args.args[0]))
+        self.assertEqual(json.loads((home / '.agents-runtime-image.json').read_text()), {'image': ID})
+        self.assertFalse((self.state / 'opencode-fresh-home').exists())
+
+    def test_orphan_blocks_image_advance_without_changing_binding(self):
+        home = self.state / 'opencode-default-home'
+        home.mkdir(mode=0o700)
+        old = 'sha256:' + 'b' * 64
+        installer.bind_home(home, old)
+        self.orphan = True
+        result, spawn = self.invoke()
+        self.assertEqual(result, 1)
+        spawn.assert_not_called()
+        self.assertEqual(json.loads((home / '.agents-runtime-image.json').read_text()), {'image': old})
+
+    def test_writer_lock_blocks_image_advance_before_docker(self):
+        home = self.state / 'opencode-default-home'
+        home.mkdir(mode=0o700)
+        old = 'sha256:' + 'b' * 64
+        installer.bind_home(home, old)
+        with patch.object(runtime.fcntl, 'flock', side_effect=BlockingIOError('busy')):
+            result, spawn = self.invoke()
+        self.assertEqual(result, 1)
+        spawn.assert_not_called()
+        self.assertFalse(self.calls)
+        self.assertEqual(json.loads((home / '.agents-runtime-image.json').read_text()), {'image': old})
+
+    def test_unverified_image_never_advances_binding(self):
+        home = self.state / 'opencode-default-home'
+        home.mkdir(mode=0o700)
+        old = 'sha256:' + 'b' * 64
+        installer.bind_home(home, old)
+        with patch.object(installer, 'verify_image', side_effect=ValueError('unverified image')):
+            result, spawn = self.invoke()
+        self.assertEqual(result, 1)
+        spawn.assert_not_called()
+        self.assertEqual(json.loads((home / '.agents-runtime-image.json').read_text()), {'image': old})
 
 
 if __name__ == '__main__':

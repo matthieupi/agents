@@ -3,31 +3,33 @@
 No real Docker/Compose, credential files, package installs or network calls.
 """
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as error:
+    if error.name != 'yaml':
+        raise
+    yaml = None
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class LegacyDispatch(unittest.TestCase):
-    def test_unaffected_legacy_trees_byte_identical_to_head(self):
-        # KDCO installation is now explicitly shared with the production path.
-        # Keep the unchanged launch/control surfaces protected, without rejecting
-        # newly staged vendored files or depending on them staying untracked.
-        result = subprocess.run(['git', '-C', str(ROOT), 'diff', '--exit-code', 'HEAD', '--',
-                                 'pi', 'omp', 'claudecode', 't3code',
-                                 'opencode/opencode', 'opencode/opencode-run', 'opencode/opencode-mgr',
-                                 'opencode/opencode-menu', 'opencode/docker-compose.yml',
-                                 'opencode/scripts/start.sh', 'opencode/scripts/manage.sh',
-                                 'opencode/.opencode/config/opencode.json', 'opencode/.opencode/config/tui.json'],
-                                text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, 'Tracked production harness files changed: ' + result.stdout)
+    def test_unaffected_dispatchers_byte_identical_to_head(self):
+        # OpenCode intentionally migrated. Protect only unchanged dispatcher bytes;
+        # do not turn unrelated dirty production trees or mode changes into failures.
+        for relative in ('pi/pi', 'omp/omp', 'claudecode/claude', 't3code/t3code'):
+            with self.subTest(relative=relative):
+                result = subprocess.run(['git', '-C', str(ROOT), 'show', 'HEAD:' + relative],
+                                        capture_output=True, check=True)
+                self.assertEqual((ROOT / relative).read_bytes(), result.stdout)
 
     def dispatch(self, component, wrapper, arguments, *, directory=None):
         with tempfile.TemporaryDirectory() as temporary:
@@ -115,8 +117,12 @@ class LegacyExecution(unittest.TestCase):
         # No fallback PATH: only ordinary filesystem/text utilities used by these
         # copied scripts. Docker, Python socket probes and sleep are always stubs.
         for name in ('dirname', 'basename', 'realpath', 'mkdir', 'id', 'grep', 'awk',
-                     'xargs', 'readlink', 'ln', 'rm', 'mktemp', 'cat', 'stat', 'node'):
-            (self.bin / name).symlink_to(shutil.which(name))
+                      'xargs', 'readlink', 'ln', 'rm', 'mktemp', 'cat', 'stat', 'cmp',
+                      'cp', 'mv', 'sha256sum'):
+            executable = shutil.which(name)
+            if executable is None:
+                self.fail('Required characterization utility missing: ' + name)
+            (self.bin / name).symlink_to(executable)
         recorder = '''#!/usr/bin/python3
 import json, os, sys
 from pathlib import Path
@@ -134,25 +140,31 @@ if tool == 'docker':
                 print('fixture-id')
         elif 'name=opencode-' in args and '-aq' in args:
             print('fixture-one\\nfixture-two')
-        elif scenario in ('reuse', 'stale', 'mismatch'):
+        elif scenario in ('reuse', 'stale', 'mismatch', 'old-image', 'old-lifecycle', 'old-config'):
             print('Up fixture' if scenario != 'stale' else 'Exited fixture')
     elif args[0] == 'inspect':
         fmt = args[2]
-        print('lab/opencode:latest' if fmt == '{{.Config.Image}}' else
+        print(('sha256:old' if scenario == 'old-image' else 'sha256:new') if fmt == '{{.Image}}' else
+              ('v1' if scenario == 'old-lifecycle' else 'v2-serve-1') if 'lifecycle' in fmt else
+              ('old-config' if scenario == 'old-config' else 'fixture-config') if 'opencode.config' in fmt else
               ('4' if scenario == 'mismatch' else '8.0') if '.cpus' in fmt else
               '16g' if '.memory' in fmt else '')
-    elif args[:2] == ['image', 'inspect'] and scenario == 'missing-image':
-        sys.exit(1)
+    elif args[:2] == ['image', 'inspect']:
+        if scenario == 'missing-image': sys.exit(1)
+        if '--format' in args:
+            print('sha256:new' if args[args.index('--format') + 1] == '{{.Id}}' else 'v2-serve-1')
 elif tool == 'python3':
-    # Never execute opencode-run's inline socket probe.
+    # Stub only host fingerprint/socket boundaries, not the Docker server/client.
+    if args[:1] == ['-'] and len(args) > 1 and args[1].startswith('/'):
+        print('fixture-config')
     sys.exit(0)
 '''
-        for name in ('docker', 'sleep', 'python3'):
+        for name in ('docker', 'sleep', 'python3', 'opencode'):
             path = self.bin / name
             path.write_text(recorder)
             path.chmod(0o755)
         self.env = {'PATH': str(self.bin), 'HOME': str(self.home), 'CALLS': str(self.calls),
-                    'PYTHONDONTWRITEBYTECODE': '1'}
+                    'PYTHONDONTWRITEBYTECODE': '1', 'OPENCODE_PASSWORD': 'fixture-private-password'}
 
     def run_copy(self, script, arguments, scenario='fresh', stdin=''):
         source = ROOT / script
@@ -164,6 +176,7 @@ elif tool == 'python3':
                                 env=dict(self.env, SCENARIO=scenario), input=stdin,
                                 capture_output=True, text=True, timeout=10)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        self.assertNotIn('fixture-private-password', result.stdout + result.stderr + json.dumps(calls))
         return result, [argv for tool, argv in calls if tool == 'docker']
 
     def test_direct_run_fresh_cli_mounts_identity_and_defaults(self):
@@ -178,18 +191,23 @@ elif tool == 'python3':
                       str(self.root / 'opencode/.opencode/data') + ':/home/opencode/.local/share/opencode:rw'):
             self.assertIn(value, run)
         self.assertNotIn('--cap-drop', run)  # Legacy privilege profile is not new-path policy.
-        self.assertEqual(calls[-1][-4:], ['bash', '-lc', '/opt/harness/init.sh && exec opencode "$@"', '_'])
+        self.assertIn('OPENCODE_PASSWORD', run)
+        self.assertIn('dev.xmist.opencode.lifecycle=v2-serve-1', run)
+        self.assertIn(str(self.root / 'opencode/.opencode/state') + ':/home/opencode/.local/state/opencode:rw', run)
+        self.assertEqual(run[-1], 'lab/opencode:latest')
+        self.assertEqual(calls[-2][-3:], ['python3', '/opt/harness/docker-health.py', '--wait'])
+        self.assertEqual(calls[-1][-2:], ['bash', '/opt/harness/docker-client.sh'])
 
     def test_direct_run_web_and_wlan_ports(self):
-        for flags, published, port in [(['--web'], '127.0.0.1:4096:4096', '4096'),
-                                       (['-w', '4097'], '127.0.0.1:4097:4097', '4097'),
-                                       (['--wlan', '4098'], '0.0.0.0:4098:4098', '4098')]:
+        for flags, published in [(['--web'], '127.0.0.1:4096:4096'),
+                                  (['-w', '4097'], '127.0.0.1:4097:4096'),
+                                  (['--wlan', '4098'], '0.0.0.0:4098:4096')]:
             with self.subTest(flags=flags):
                 result, calls = self.run_copy('opencode/opencode-run', [*flags, '.'])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(published, next(argv for argv in calls if argv[0] == 'run'))
-                self.assertEqual(calls[-1][-1], port)
-                self.assertIn('exec opencode web --hostname 0.0.0.0', calls[-1][-2])
+                self.assertEqual(calls[-1][-3:], ['python3', '/opt/harness/docker-health.py', '--wait'])
+                self.assertFalse(any('/opt/harness/docker-client.sh' in call for call in calls))
 
     def test_direct_run_gpu_resources_and_publish(self):
         result, calls = self.run_copy('opencode/opencode-run',
@@ -201,31 +219,82 @@ elif tool == 'python3':
             self.assertIn(value, run)
 
     def test_direct_run_agent_web_uses_stubbed_probe(self):
-        result, calls = self.run_copy('opencode/opencode-run', ['--agent-web-port', '4099', '.'])
+        result, calls = self.run_copy('opencode/opencode-run', ['--agent-web-port', '4096', '.'])
         self.assertEqual(result.returncode, 0, result.stderr)
         run = next(argv for argv in calls if argv[0] == 'run')
-        self.assertIn('0.0.0.0:4099:4099', run)
-        self.assertIn('OPENCODE_AGENT_WEB_URL=http://localhost:4099', run)
-        self.assertIn('exec opencode "$@"', calls[-1][-2])
+        self.assertIn('0.0.0.0:4096:4096', run)
+        self.assertIn('OPENCODE_AGENT_WEB_URL=http://localhost:4096', run)
+        self.assertEqual(calls[-1][-1], '/opt/harness/docker-client.sh')
         self.assertIn('python3', [json.loads(line)[0] for line in self.calls.read_text().splitlines()])
 
     def test_direct_run_reuse_and_recreation(self):
-        for scenario in ('reuse', 'stale', 'mismatch'):
+        sentinels = []
+        for name in ('config', 'data', 'cache', 'state'):
+            sentinel = self.root / 'opencode/.opencode' / name / 'existing-private-state'
+            sentinel.parent.mkdir(parents=True)
+            sentinel.write_bytes(b'preserve existing state\x00')
+            sentinels.append(sentinel)
+        for scenario in ('reuse', 'stale', 'mismatch', 'old-image', 'old-lifecycle', 'old-config'):
             with self.subTest(scenario=scenario):
                 result, calls = self.run_copy('opencode/opencode-run', ['.'], scenario)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 operations = [argv[0] for argv in calls]
                 self.assertEqual('run' in operations, scenario != 'reuse')
                 self.assertEqual('rm' in operations, scenario != 'reuse')
+                self.assertEqual('stop' in operations, scenario not in ('reuse', 'stale'))
+                if scenario not in ('reuse', 'stale'):
+                    self.assertLess(operations.index('stop'), operations.index('rm'))
+                    self.assertLess(operations.index('rm'), operations.index('run'))
+                    self.assertIn('active sessions will be interrupted', result.stdout)
                 self.assertEqual(operations[-1], 'exec')
+                for sentinel in sentinels:
+                    self.assertEqual(sentinel.read_bytes(), b'preserve existing state\x00')
+                self.assertFalse((self.root / 'opencode/.opencode/v2').exists())
 
     def test_direct_run_invalid_input_and_missing_image_do_not_launch(self):
         for argv, scenario in [(['--port', 'bad'], 'fresh'), (['--cpus', '0'], 'fresh'),
                                (['--web', '--agent-web-port', '4098'], 'fresh'),
-                               (['.'], 'missing-image')]:
+                                (['--agent-web-port', '4099'], 'fresh'),
+                                (['--publish', '4096'], 'fresh'), (['.'], 'missing-image')]:
             result, calls = self.run_copy('opencode/opencode-run', argv, scenario)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(any(call[0] in ('run', 'exec', 'rm') for call in calls))
+
+    def test_direct_run_requires_password_before_mutating_container(self):
+        self.env.pop('OPENCODE_PASSWORD')
+        result, calls = self.run_copy('opencode/opencode-run', ['.'], 'old-image')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires OPENCODE_PASSWORD', result.stderr)
+        self.assertFalse(any(call[0] in ('run', 'exec', 'stop', 'rm') for call in calls))
+
+    def test_v2_server_serves_and_client_attaches_without_secret_argv(self):
+        # Execute maintained helper bodies with only init and executable boundaries
+        # stubbed. No real engine, socket, provider, HOME or /opt files are touched.
+        (self.bin / 'bash').symlink_to('/bin/bash')
+        initialize = self.root / 'init.sh'
+        initialize.write_text('exit 0\n')
+        server = self.root / 'docker-server.sh'
+        text = (ROOT / 'opencode/scripts/docker-server.sh').read_text()
+        self.assertEqual(text.count('bash /opt/harness/init.sh'), 1)
+        server.write_text(text.replace('bash /opt/harness/init.sh', 'bash "$FIXTURE_INIT"'))
+        result = subprocess.run(['/bin/bash', str(server)], env=dict(self.env, FIXTURE_INIT=str(initialize)),
+                                capture_output=True, text=True, timeout=10)
+        if os.geteuid() == 0:
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('non-root', result.stderr)
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+            self.assertEqual(calls, [['opencode', ['serve', '--hostname', '0.0.0.0', '--port', '4096']]])
+        self.calls.unlink(missing_ok=True)
+        result = subprocess.run(['/bin/bash', str(ROOT / 'opencode/scripts/docker-client.sh'), '--auto'],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(calls, [
+            ['python3', ['/opt/harness/docker-health.py', '--wait']],
+            ['opencode', ['--server', 'http://127.0.0.1:4096', '--auto']]])
+        self.assertNotIn('fixture-private-password', json.dumps(calls) + result.stdout + result.stderr)
 
     def test_leading_rebuild_differs_from_manager_update(self):
         result, calls = self.run_copy('opencode/opencode-run', ['-r', '.'])
@@ -245,7 +314,7 @@ elif tool == 'python3':
                                (['start', 'fixture name'], ['start', 'fixture name']),
                                (['remove', 'fixture name'], ['rm', '-f', 'fixture name']),
                                (['logs', 'fixture name'], ['logs', '-f', 'fixture name']),
-                               (['shell', 'fixture name'], ['exec', '-it', 'fixture name', '/bin/bash'])]:
+                               (['shell', 'fixture name'], ['exec', '-it', '-e', 'OPENCODE_EXPERIMENTAL_WORKSPACES=1', 'fixture name', '/bin/bash'])]:
             result, calls = self.run_copy('opencode/opencode-mgr', argv)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(calls, [expected])
@@ -264,13 +333,14 @@ elif tool == 'python3':
         component.mkdir()
         script = component / 'entrypoint.sh'
         shutil.copyfile(ROOT / 'opencode/scripts/entrypoint.sh', script)
-        (component / 'scripts').mkdir()
-        shutil.copyfile(ROOT / 'opencode/scripts/publish-plugins.mjs', component / 'scripts/publish-plugins.mjs')
         defaults = component / '.opencode/config'
-        (defaults / 'kdco').mkdir(parents=True)
-        (defaults / 'plugins').mkdir()
-        for name in ('background-agents', 'worktree', 'notify'):
-            (defaults / f'plugins/kdco-{name}.ts').write_text('export default async () => ({})')
+        for relative in ('opencode.json', 'cli.json', 'plugins/first-prompt-title.js',
+                         'plugins/background-subagents.js', 'tui-plugins/session-title.mjs',
+                         'tui-plugins/session-title/tui.js'):
+            destination = defaults / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / 'opencode/.opencode/config' / relative, destination)
+        (defaults / 'auth.json').write_text('{"private":"never seed"}')
         resources = self.root / 'agent'
         for name in ('commands', 'skills', 'system', 'gsd'):
             (resources / name).mkdir(parents=True)
@@ -284,7 +354,6 @@ require_opencode_user() { :; }
 opencode_git() {
     case "$1" in
       ls-files) printf '%s\\0' opencode/.opencode/config/opencode.json opencode/.opencode/config/auth.json ;;
-      show) printf '{"fixture":true}\\n' ;;
       *) return 97 ;;
     esac
 }
@@ -297,11 +366,20 @@ initialize_home
         result = initialize()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((config / 'system').readlink(), resources / 'system')
-        self.assertEqual(json.loads((config / 'opencode.json').read_text()), {'fixture': True})
+        canonical = json.loads((defaults / 'opencode.json').read_text())
+        self.assertEqual(json.loads((config / 'opencode.json').read_text()), canonical)
+        self.assertIn('agents', canonical)
+        self.assertIn('providers', canonical)
+        self.assertIn('permissions', canonical)
+        for relative in ('cli.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+                         'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js'):
+            self.assertEqual((config / relative).readlink(), defaults / relative)
+        self.assertFalse((config / 'v2').exists())
         self.assertFalse((config / 'auth.json').exists())
-        (config / 'opencode.json').write_text('private fixture config')
+        private = json.dumps({'agents': {'build': {'system': 'private fixture prompt'}}})
+        (config / 'opencode.json').write_text(private)
         self.assertEqual(initialize().returncode, 0)
-        self.assertEqual((config / 'opencode.json').read_text(), 'private fixture config')
+        self.assertEqual((config / 'opencode.json').read_text(), private)
         (config / 'skills').unlink()
         (config / 'skills').mkdir()
         result = initialize()
@@ -354,7 +432,9 @@ initialize_home
         self.assertEqual(result.returncode, 64)
         self.assertEqual(calls, [])
 
+    @unittest.skipIf(yaml is None, 'Compose characterization requires PyYAML in the test environment')
     def test_compose_contracts_without_interpolation_or_docker(self):
+        assert yaml is not None
         for component, service, image, home in [('opencode', 'opencode', 'lab/opencode:latest', '/home/opencode'),
                 ('pi', 'pi', 'lab/pi:latest', '/home/pi'),
                 ('claudecode', 'claude-code', 'lab/claude-code:latest', '/home/claude')]:
@@ -371,7 +451,15 @@ initialize_home
                 self.assertIn('HOME=' + home, spec['environment'])
                 self.assertIn('../agent:/opt/agent:rw', spec['volumes'])
                 self.assertIn('./init.sh:/opt/harness/init.sh:ro', spec['volumes'])
-                self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
+                if component == 'opencode':
+                    self.assertEqual(spec['command'], ['bash', '/opt/harness/docker-server.sh'])
+                    self.assertNotIn('entrypoint', spec)
+                    self.assertEqual(spec['labels']['dev.xmist.opencode.lifecycle'], 'v2-serve-1')
+                    self.assertIn('OPENCODE_PASSWORD=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:?Set a Docker V2 server password}}', spec['environment'])
+                    self.assertIn('./.opencode/state:/home/opencode/.local/state/opencode:rw', spec['volumes'])
+                    self.assertFalse(any('/.opencode/v2/' in value for value in spec['volumes']))
+                else:
+                    self.assertEqual(spec['entrypoint'], ['bash', '-lc', '/opt/harness/init.sh && tail -f /dev/null'])
                 self.assertTrue(document['networks']['devai-xmist']['external'])
         copied = self.root / 'omp.yml'
         shutil.copyfile(ROOT / 'omp/docker-compose.yml', copied)

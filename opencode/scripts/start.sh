@@ -17,14 +17,20 @@ umask 077
 cd -- "$OPENCODE_WORKSPACE"
 mode=${1:-}
 [[ $# -gt 0 ]] && shift
+: "${OPENCODE_PORT:?supply the shared loopback V2 server port for service and session}"
+[[ "$OPENCODE_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && (( OPENCODE_PORT >= 1024 && OPENCODE_PORT <= 65535 )) || die 'port must be 1024..65535'
+[[ "${OPENCODE_SERVER_USERNAME:-opencode}" == opencode ]] || die 'V2 requires username opencode'
+export OPENCODE_PASSWORD="${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"
+: "${OPENCODE_PASSWORD:?V2 service and session require OPENCODE_PASSWORD (or OPENCODE_SERVER_PASSWORD)}"
 case "$mode" in
     service)
         [[ $# == 0 ]] || die 'service accepts no extra CLI flags'
-        : "${OPENCODE_PORT:?supply loopback web port}"
-        [[ "$OPENCODE_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && (( OPENCODE_PORT >= 1024 && OPENCODE_PORT <= 65535 )) || die 'port must be 1024..65535'
-        : "${OPENCODE_SERVER_PASSWORD:?web service requires a secret supplied by the service manager}"
-        exec "$OPENCODE_PREFIX/bin/opencode" web --hostname 127.0.0.1 --port "$OPENCODE_PORT" --mdns false
+        exec "$OPENCODE_PREFIX/bin/opencode" serve --hostname 127.0.0.1 --port "$OPENCODE_PORT"
         ;;
-    session) exec "$OPENCODE_PREFIX/bin/opencode" "$@" ;;
+    session)
+        for arg in "$@"; do
+            case "$arg" in --server|--server=*) die 'session server is owned by OPENCODE_PORT; do not override --server' ;; esac
+        done
+        exec "$OPENCODE_PREFIX/bin/opencode" --server "http://127.0.0.1:$OPENCODE_PORT" "$@" ;;
     *) die 'usage: start.sh service | session [OpenCode CLI arguments...]' ;;
 esac

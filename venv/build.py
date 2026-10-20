@@ -135,8 +135,6 @@ def build(harness: str, root: Path, settings: dict) -> str:
         raise ValueError('Native platform required; emulation is not CPU acceptance')
     if not re.fullmatch(r'[a-z0-9./:-]+@sha256:[a-f0-9]{64}', settings['docker_cli_image']):
         raise ValueError('Pinned Docker CLI manifest required')
-    if harness == 'opencode' and not re.fullmatch(r'\d+\.\d+\.\d+', settings['opencode_version']):
-        raise ValueError('Exact OpenCode version required')
     socket = settings['socket']
     if not isinstance(socket, str) or not socket.startswith('/') or '..' in Path(socket).parts:
         raise ValueError('Absolute local Docker socket required')
@@ -189,8 +187,7 @@ def build(harness: str, root: Path, settings: dict) -> str:
                                        {'PI_VM_BASE': prepared}, {prepared: prepared_id})
     elif harness == 'opencode':
         component, component_id = image('opencode-component', 'venv/Dockerfile.opencode', '.',
-                                       {'OPENCODE_VM_BASE': prepared,
-                                        'OPENCODE_VERSION': settings['opencode_version']},
+                                       {'OPENCODE_VM_BASE': prepared, 'OPENCODE_INSTALL_REFRESH': uuid.uuid4().hex},
                                        {prepared: prepared_id})
     else:
         context = 'omp' if harness == 'omp' else 't3code'

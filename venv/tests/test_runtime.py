@@ -406,6 +406,17 @@ class AdapterTests(unittest.TestCase):
         for name in ('prompts', 'skills', 'commands', 'system', 'gsd'):
             (self.resources / name).mkdir(parents=True)
         (self.resources / 'system/build.md').write_text('build persona fixture')
+        config = self.resources / 'opencode-config'
+        (config / 'plugins').mkdir(parents=True)
+        (config / 'tui-plugins/session-title').mkdir(parents=True)
+        (config / 'plugins/first-prompt-title.js').write_text('export default () => ({})')
+        (config / 'plugins/background-subagents.js').write_text('export default { id: "background-subagents" }')
+        (config / 'tui-plugins/session-title.mjs').write_text('export default () => ({})')
+        (config / 'cli.json').write_text('{"plugins":["./tui-plugins/session-title"]}')
+        self.document = {'agents': {'build': {'system': '{file:./system/build.md}', 'mode': 'all'}},
+                         'providers': {'openai': {'settings': {'apiKey': '{env:OPENAI_API_KEY}'}}},
+                         'permissions': [{'action': '*', 'resource': '*', 'effect': 'allow'}]}
+        (self.resources / 'opencode-agents.json').write_text(json.dumps(self.document))
 
     def test_pi_native_state_and_legacy_agents_preserved(self):
         root = self.home / '.pi/agent'
@@ -436,11 +447,111 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((root / 'skills/testing').resolve(), skill)
         self.assertEqual((root / 'agents/system-build.md').resolve(), self.resources / 'system/build.md')
 
-    def test_opencode_no_provider_or_default_config_copy(self):
+    def test_opencode_canonical_v2_public_config_and_title_registration(self):
+        entry.initialize('opencode', self.home, self.resources)
         entry.initialize('opencode', self.home, self.resources)
         root = self.home / '.config/opencode'
         self.assertEqual((root / 'commands').resolve(), self.resources / 'commands')
-        self.assertFalse((root / 'opencode.json').exists())
+        document = json.loads((root / 'opencode.json').read_text())
+        self.assertEqual(document['providers'], self.document['providers'])
+        self.assertEqual(document['permissions'], self.document['permissions'])
+        self.assertEqual(document['agents']['build']['system'], '{file:' + str(self.resources / 'system/build.md') + '}')
+        self.assertEqual(document['plugins'], [str(root / 'plugins' / name)
+                                              for name in ('first-prompt-title.js', 'background-subagents.js')])
+        self.assertEqual((root / 'plugins/background-subagents.js').resolve(),
+                         self.resources / 'opencode-config/plugins/background-subagents.js')
+        self.assertTrue((root / 'cli.json').is_file())
+        self.assertFalse((root / 'config.json').exists())
+        self.assertFalse((root / 'kdco').exists())
+        self.assertFalse((root / 'server-password').exists())
+
+    def test_opencode_public_v1_and_literal_credentials_refused(self):
+        with self.assertRaisesRegex(ValueError, 'V1'):
+            entry.public_agents({'agent': {}}, self.resources)
+        self.document['providers']['openai']['settings']['apiKey'] = 'not-a-public-secret'
+        with self.assertRaisesRegex(ValueError, 'public credentials'):
+            entry.public_agents(self.document, self.resources)
+
+    def test_opencode_requires_enrolled_prompt_resource_without_image_copy(self):
+        (self.resources / 'system/build.md').unlink()
+        with self.assertRaisesRegex(ValueError, 'Public agent prompt unavailable'):
+            entry.initialize('opencode', self.home, self.resources)
+        self.assertFalse((self.home / '.config/opencode/opencode.json').exists())
+
+    def test_opencode_publication_check_and_acl_use_full_v2_document(self):
+        (self.resources / 'opencode-agents.json').unlink()
+        self.assertTrue(entry.publish_opencode(self.resources, self.document)['changed'])
+        self.assertFalse(entry.publish_opencode(self.resources, self.document)['changed'])
+        published = json.loads((self.resources / 'opencode-agents.json').read_text())
+        self.assertEqual(published['providers'], self.document['providers'])
+        self.assertTrue(entry.check_opencode(self.resources)['readable'])
+        plan = entry.opencode_acl_plan(self.resources, self.document)
+        self.assertIn({'path': str(self.resources / 'system/build.md'), 'permission': 'r'}, plan)
+
+    def test_opencode_missing_password_blocks_server_and_explicit_clients(self):
+        for args in (['--web'], ['--server', 'http://127.0.0.1:5102'], ['--server=http://127.0.0.1:5102']):
+            with self.subTest(args=args), \
+                    patch.dict(os.environ, HOME=str(self.home), VENV_AGENT_RESOURCES=str(self.resources), VENV_AGENT_PORT='5102'), \
+                    patch.object(entry, 'identity'), patch.object(entry.os, 'execvpe') as execute, \
+                    patch('sys.stderr', new_callable=io.StringIO):
+                self.assertEqual(entry.main(['opencode', *args]), 1)
+                execute.assert_not_called()
+        self.assertFalse((self.home / '.config/opencode/server-password').exists())
+
+    def test_opencode_retired_plugin_and_title_conflicts_are_not_replaced(self):
+        root = self.home / '.config/opencode'
+        (root / 'plugins').mkdir(mode=0o700, parents=True)
+        wrapper = root / 'plugins/kdco-worktree.ts'
+        wrapper.write_text('retired private fixture')
+        with self.assertRaisesRegex(ValueError, 'KDCO'):
+            entry.publish_opencode_assets(self.home, self.resources)
+        self.assertEqual(wrapper.read_text(), 'retired private fixture')
+        wrapper.unlink()
+        title = root / 'plugins/first-prompt-title.js'
+        title.write_text('custom fixture')
+        with self.assertRaisesRegex(ValueError, 'Conflicting'):
+            entry.publish_opencode_assets(self.home, self.resources)
+        self.assertEqual(title.read_text(), 'custom fixture')
+        title.unlink()
+        background = root / 'plugins/background-subagents.js'
+        background.write_text('custom background fixture')
+        with self.assertRaisesRegex(ValueError, 'Conflicting'):
+            entry.publish_opencode_assets(self.home, self.resources)
+        self.assertEqual(background.read_text(), 'custom background fixture')
+
+    def test_opencode_private_policy_and_auth_preserved(self):
+        root = self.home / '.config/opencode'
+        root.mkdir(mode=0o700, parents=True)
+        private = '{"agents":{"build":{"disabled":true}},"permissions":[]}'
+        (root / 'opencode.json').write_text(private)
+        (root / 'auth.json').write_text('private-fixture')
+        entry.initialize('opencode', self.home, self.resources)
+        reconciled = json.loads((root / 'opencode.json').read_text())
+        self.assertEqual(reconciled['agents'], json.loads(private)['agents'])
+        self.assertEqual(reconciled['permissions'], [])
+        self.assertIn(str(root / 'plugins/background-subagents.js'), reconciled['plugins'])
+        self.assertEqual((root / 'auth.json').read_text(), 'private-fixture')
+        (root / 'config.json').write_text('{"agent":{}}')
+        with self.assertRaisesRegex(ValueError, 'precedence explicitly'):
+            entry.initialize('opencode', self.home, self.resources)
+        self.assertEqual((root / 'config.json').read_text(), '{"agent":{}}')
+
+    def test_opencode_password_required_private_and_never_generated(self):
+        root = self.home / '.config/opencode'
+        root.mkdir(mode=0o700, parents=True)
+        password = root / 'server-password'
+        with self.assertRaises(OSError):
+            entry.opencode_password(self.home)
+        password.write_text('disposable-fixture\n')
+        password.chmod(0o600)
+        self.assertEqual(entry.opencode_password(self.home), 'disposable-fixture')
+        password.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, '0600'):
+            entry.opencode_password(self.home)
+        password.unlink()
+        password.symlink_to(self.resources / 'system/build.md')
+        with self.assertRaisesRegex(ValueError, 'Physical'):
+            entry.opencode_password(self.home)
 
     def test_image_identity_uses_nss_without_passwd_mutation(self):
         if os.getuid() == 0:
@@ -458,9 +569,10 @@ class AdapterTests(unittest.TestCase):
 
     def test_adapter_web_argv_is_actual_native_surface(self):
         for harness, expected in [('pi', ['--hostname', '0.0.0.0', '--port', '5102', '--no-open']),
-                                  ('opencode', ['web', '--hostname', '0.0.0.0', '--port', '5102'])]:
+                                  ('opencode', ['serve', '--hostname', '0.0.0.0', '--port', '5102'])]:
             with patch.dict(os.environ, HOME=str(self.home), VENV_AGENT_RESOURCES=str(self.resources), VENV_AGENT_PORT='5102'), \
-                    patch.object(entry, 'identity'), patch.object(entry.os, 'execvpe') as execute:
+                    patch.object(entry, 'identity'), patch.object(entry, 'opencode_password', return_value='fixture'), \
+                    patch.object(entry.os, 'execvpe') as execute:
                 entry.main([harness, '--web'])
                 self.assertEqual(execute.call_args.args[1][1:], expected)
 

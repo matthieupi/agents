@@ -38,6 +38,8 @@ Phase: $ARGUMENTS
 </context>
 
 <process>
+**OpenCode V2 only:** This branch overrides the Task/model-profile and blocking-wave examples below. Use native `subagent({agent:"gsd-executor", description, prompt, background:true})` for executors and the corresponding available agent for verification; background is the default, with explicit `background:false` allowed. Do not translate profile aliases into guessed model IDs. Use `sessionID` for continuation, not legacy KDCO routing. Consume completion notifications, verify outputs, and launch each plan when its actual dependencies and file ownership are ready, without a global wave barrier. Never poll or sleep; continue non-overlapping work or end the response if none is ready. Respect native permissions and depth limits. Other harnesses retain the workflow below.
+
 0. **Resolve Model Profile**
 
    Read model profile for agent spawning:
@@ -271,9 +273,9 @@ Task(prompt="Execute plan at {plan_02_path}\n\nPlan:\n{plan_02_content}\n\nProje
 Task(prompt="Execute plan at {plan_03_path}\n\nPlan:\n{plan_03_content}\n\nProject state:\n{state_content}", subagent_type="gsd-executor", model="{executor_model}")
 ```
 
-All three run in parallel. Task tool blocks until all complete.
+On Task-based harnesses, all three run in parallel and Task blocks until all complete. On OpenCode V2, use the native notification-driven branch above instead.
 
-**No polling.** No background agents. No TaskOutput loops.
+**No polling.** No TaskOutput loops. Task-based harnesses use their blocking model; OpenCode V2 uses background subagents by default.
 </wave_execution>
 
 <checkpoint_handling>

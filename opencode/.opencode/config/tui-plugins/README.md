@@ -1,50 +1,63 @@
-# Session title in the prompt metadata row
+# Canonical session title display
 
-✅ `session-title.mjs` adds the current session title to `session_prompt_right`.
-It is explicitly loaded by the global `../tui.json` as `local.session-title`.
-It does not replace the prompt or change stored titles. The separate server
-plugin `../plugins/first-prompt-title.js` remains responsible for title generation.
+The native CLI config `../cli.json` preserves the tracked `opencode` theme and
+registers `./tui-plugins/session-title`. Publish this directory together with
+`cli.json`, preserving the relative layout. All installation paths use these
+same assets; there is no parallel compatibility tree.
 
-- Display: whitespace collapsed, terminal escapes/control characters and bidi
-  overrides removed; at most 35 graphemes including `…` when shortened.
-- Layout: at most 35 terminal columns, one line, no wrapping, renderer truncation
-  enabled. Wide glyphs can therefore truncate earlier than 35 graphemes. Very
-  narrow terminals or other prompt-right plugins may further constrain space.
-- Color: NFC-normalized first Unicode letter, lowercased, code point modulo six:
-  `primary`, `secondary`, `accent`, `success`, `warning`, `info`. No letters means
-  `primary`. Collisions are intentional; themes may also reuse accent colors.
-- Session/title and theme changes are read through reactive getters. No polling,
-  network requests, stored state, custom subscriptions, or installed dependencies.
-
-## Verification and activation
-
-Verified against OpenCode **1.18.29**, its local plugin declarations (1.15.7),
-and the version-matched OpenTUI **0.4.5** runtime. References:
-
-- [TUI plugin specification](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/specs/tui-plugins.md)
-- [TUI loader and runtime imports](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/plugin/tui/runtime.ts)
-- [Session/theme adapters](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/tui/src/plugin/adapters.tsx)
-- [Prompt metadata layout](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/tui/src/component/prompt/index.tsx)
-- [JSX runtime](https://unpkg.com/@opentui/solid@0.4.5/jsx-runtime.js)
-
-Run with Node 22.15+ (tested with 22.23.2):
-
-```sh
-node --check ~/.config/opencode/tui-plugins/session-title.mjs
-node --test ~/.config/opencode/tui-plugins/session-title.test.mjs
+```text
+cli.json: plugins ["./tui-plugins/session-title"]
+  -> session-title/tui.js -> ../session-title.mjs
+     -> setup(context) -> ui.slot -> prompt.footer.status
 ```
 
-The eight tests validate formatting, color mapping, module/slot registration,
-fresh getter reads, and layout properties with a mocked JSX renderer. They do
-**not** verify live TUI loading, Solid scheduling, terminal layout, or contrast.
+The directory entrypoint is required by the native TUI loader. Do not register
+the `.mjs` file directly. This is a display-only plugin: the separate canonical
+`../plugins/first-prompt-title.js` owns initial title generation through the
+native session title hook. The server host owns title persistence.
 
-When convenient, quit and restart OpenCode normally, then resume a session.
-Existing running sessions are not restarted or hot-patched. Do not use `--pure`
-when checking this plugin. In the command palette's **Plugins** view, check that
-`local.session-title` is active. Inspect short/long titles, a renamed session,
-theme changes, and a narrow terminal. Runtime imports are supplied by OpenCode;
-standalone Node cannot render this plugin without the host or the test mock.
+## Behavior
 
-To disable, toggle `local.session-title` off in **Plugins**, or remove only its
-entry from `../tui.json` and restart. A persisted Plugins disable overrides the
-config on subsequent starts; toggle it on again there when re-enabling.
+- Whitespace is collapsed; terminal escapes, control characters, and bidi
+  overrides are removed. Titles are capped at 35 graphemes including ellipsis.
+- The first Unicode letter deterministically selects one of six theme colors.
+- The additive `prompt.footer.status` slot stays near the prompt without
+  replacing the built-in status. Other plugins replacing that slot can hide it.
+- The session ID comes from slot props; reactive getters read current title and
+  theme. Missing sessions display empty text. No polling or state writes.
+- Layout is one line, no wrap, max 35 columns, with renderer truncation and
+  shrinking enabled. Wide glyphs/narrow terminals may truncate sooner.
+
+## Publication and preferences
+
+The canonical native `cli.json` explicitly carries all known tracked preferences
+(theme and title registration). When publishing into an existing private HOME,
+preserve unrelated preferences rather than replacing the private CLI config.
+Creating `cli.json` skips upstream's legacy TUI/KV migration, so a private
+installation with additional old preferences must use upstream migration first
+or deliberately convert those preferences. Docker mounts canonical config
+directly; its init does not project or rewrite config files.
+
+Restart the CLI after publication. Check `/plugins` for `local.session-title`
+and inspect short/long/renamed titles, theme changes, tabs, and narrow terminals.
+
+## Verification
+
+```sh
+node run-tests.mjs
+# Optional network smoke with real host/renderer dependencies in a temp HOME:
+node run-tests.mjs --runtime
+```
+
+The runner copies only owned assets into a disposable HOME/XDG tree and removes
+it afterward. Unit tests mock only the host renderer. The optional runtime
+contract smoke uses `@opencode/plugin@2.0.32`, `@opentui/solid@0.5.17`, and
+`solid-js@1.9.15`; these are test references, not CLI installation pins.
+
+Sources reviewed: the official `v2.0.32` plugin `tui/context.ts`, `host.ts`, TUI
+plugin discovery/loader, prompt footer, and CLI config migration code at
+<https://github.com/anomalyco/opencode>; CLI schema:
+<https://opencode.ai/v2/cli.json>.
+
+Mock tests and import/setup smoke do not establish live rendering, contrast,
+Solid scheduling, or supported-engine acceptance for every host version.

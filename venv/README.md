@@ -1,7 +1,8 @@
 # Shared VM harness runtime
 
 ✅ Source implementation for Pi, OMP, OpenCode and T3. **Not live-deployed or
-Docker-build-accepted on this controller.** This leaf extends the existing VM
+enrolled-image accepted.** OpenCode V2 has separate disposable-image verification.
+This leaf extends the existing VM
 launcher, not workstation wrappers or component deployment lifecycles.
 
 ## Selected Make installation (ordinary account, never login-time builds)
@@ -200,33 +201,55 @@ semantics still need canary acceptance; the launcher does not rewrite app stores
 - **OMP:** existing component application image, VM-only resource references to
   its native `.omp/agent` layout. The workstation init's fixed passwd identity and
   writable `/opt/agent` requirements are deliberately not used. No OMP web claim.
-- **OpenCode:** VM build invokes its maintained native installer at an exact
-  supplied version, not the workstation image's `@latest`. Web uses `opencode web
-  --hostname 0.0.0.0 --port <port>`; updates are disabled by the existing env knob.
-  `entry.py` owns agent registration and the approved KDCO plugin publication for future startup and the
-  infrastructure role's existing-installation reapply. It projects only the public
-  canonical agent map, preserving exact case, `all`/`subagent` modes, temperature,
-  description and explicit per-agent permissions. `system/` alone is not native
-  OpenCode agent discovery. No global provider/model/default/permission is copied.
-  The role supplies `<resources>/opencode-agents.json`; startup atomically seeds
-  private `.config/opencode/config.json` only when absent. v1.18.29 loads this
-  before `opencode.json` and `opencode.jsonc`. Existing inline agent overrides are
-  excluded wholesale. Existing global policy, discovery directories, legacy or
-  ambiguous configuration cause a reported skip rather than a permissions merge.
-  The agent seed is first-write-only: existing configs/files are never overwritten.
-  Separately, approved KDCO sources/dependencies are linked from shared
-  `<resources>/opencode-plugins` (or installed image defaults on fresh image startup)
-  into private `kdco/` and three `plugins/kdco-*.ts` entrypoints. This plugin scope
-  is active even when private policy prevents agent seeding; no policy is rewritten.
-  Conflicting managed names are preserved and rejected. Shared npm installation
-  is serialized and checks actual installed-tree plus manifest/lock fingerprints
-  as resource owner during enrollment; unchanged graphs skip npm. Genuine updates
-  require idle sessions and failed in-place npm may leave partial dependencies.
-  Image npm installation runs at build,
-  not during startup. See the [KDCO risks and provenance](../opencode/.opencode/config/kdco/README.md).
-  Restart the selected OpenCode session when idle after seeding; no hot reload or
-  automatic CLI/web restart is claimed. Existing images need only the maintained
-  Ansible reapply, not a rebuild; defaults and sealed source snapshots stay intact.
+- **OpenCode V2 only:** VM build invokes the maintained native `install_runtime`
+  directly, resolving `@opencode/cli@latest`. No `opencode_version` setting or
+  `OPENCODE_VERSION` build argument is required or consumed. Each selected build
+  invalidates only the OpenCode install layer so cached `latest` is not mistaken
+  for a new registry resolution. The install receipt records the resolved version;
+  metadata lives under `.runtime/node_modules/@opencode/cli`. Image activation's
+  immutable-ID/replacement rules remain unchanged.
+  Managed web runs `opencode serve --hostname 0.0.0.0 --port <port>`.
+  Explicit remote clients use `opencode --server <URL>` (not V1 `attach`).
+  `entry.py` first-write seeds private `.config/opencode/opencode.json` from the
+  canonical native V2 document: `agents`, `providers`, ordered `permissions`,
+  models, request settings and public defaults are retained. Prompt references
+  resolve to the original same-path resources. Literal public credential values
+  are refused; provider keys remain `{env:...}` references, never copied tokens.
+  The role may publish that **whole V2 public document** at the retained interface
+  `<resources>/opencode-agents.json`; fresh images fall back to image defaults.
+  Old agent-only manifests are rejected, not translated. Publish/check/ACL helper
+  Python signatures and command names remain stable, but now consume V2 documents.
+  The ACL plan includes each V2 `system` prompt (model-only overrides need no file).
+  Optional `<resources>/opencode-config` supplies canonical `cli.json`,
+  `plugins/first-prompt-title.js`, `plugins/background-subagents.js`,
+  `tui-plugins/session-title.mjs` and the complete `tui-plugins/session-title/`
+  package; otherwise image assets are used. Both standalone server plugins are
+  explicitly registered by default in freshly seeded server config; title's CLI
+  registration remains in canonical `cli.json`. Native background subagents are
+  the default unless a call explicitly sets `background: false`; no external
+  package/dependency installation is required. Existing private V1/V2 configurations
+  receive the same required managed registrations while retaining unrelated plugins,
+  options and preferences; upstream V2 owns legacy syntax compatibility. No global
+  public policy/provider merge or bespoke whole-schema converter is introduced.
+  Known prior managed defaults/assets migrate in the same HOME as documented below.
+  No KDCO dependency install or publisher runs. Unknown modified assets fail without
+  replacement; private credentials/session databases are not migration inputs.
+  Restart OpenCode after
+  initialization; no hot reload or live migration is claimed. Existing VM images
+  need a reviewed rebuild/replacement, not merely resource reapply.
+
+  **Source closure:** the VM component allowlist includes only the native installer,
+  public V2 config, standalone server plugins, CLI/title package and readiness helper.
+  The final VM overlay adds `entry.py`/`t3-start.sh` and public migration evidence
+  `opencode_legacy.json`. Prompt bodies, commands and
+  skills are deliberately **not** duplicated into image defaults: enrollment owns
+  the read-only same-path resource tree with `system/`, `gsd/`, `commands/`, and
+  `skills/`. Every canonical `{file:./system/...}` / `{file:./gsd/...}` reference
+  must resolve there. OpenCode-specific canonical system personas live under
+  `opencode/.opencode/config/system`; GSD source lives under `agent/gsd` (the
+  canonical config's GSD link targets the runtime resource location). Portable
+  `agent/system` is not assumed byte-identical to OpenCode's personas. Enrollment
+  must supply its reviewed prompt bytes; VM startup never replaces shared resources.
 - **T3:** existing pinned Dockerfile, lock, offline native hooks and final image
   smoke unchanged. VM startup calls its existing private initializer, keeps its
   `/home/t3code` server lock/logging and supplies the actual same-path workspace to
@@ -239,12 +262,81 @@ accounts and containers are not security boundaries. Resource budgets and droppe
 capabilities are operational conventions, bypassable by a Docker-authorized agent.
 
 Web publishes only to `127.0.0.1` on the VM, with the existing dedicated bridge.
-Pi/OpenCode's adapter configures no native web password: the owned gateway must
-protect all routes and firewall direct bridge access. T3 additionally retains its
+Pi's adapter configures no native web password: the owned gateway must protect
+all routes and firewall direct bridge access. T3 additionally retains its
 native pairing/session authentication; gateway authentication is an outer gate,
 not a replacement. Its API/WS header/cookie/Origin composition needs actual pinned
 release acceptance. No TLS disabling. See the integration contract for exact
 build commands, image-ID capture and cross-role handoff.
+
+### OpenCode V2 backend secret and gateway handoff
+
+```text
+browser/client -> existing TLS + gateway auth -> loopback published backend
+                                               Basic opencode:<backend secret>
+                                               GET /api/info for readiness
+```
+
+Infrastructure must provision `<account OpenCode HOME>/.config/opencode/server-password`
+as a physical, single-link, UID/GID-owned `0600` file, maximum 4096 bytes; one
+trailing newline is allowed. This is a **separate backend secret**, not the gateway
+user password or a provider token. Startup reads it into `OPENCODE_PASSWORD` only
+inside the container before `serve` (also for explicit `--server` clients). Missing
+or unsafe secrets fail closed. No password is generated or printed, baked into an
+image, placed in public policy, or passed as a Docker environment/argv value.
+The existing private HOME bind supplies it; no secret mount or public policy field
+is introduced. Local standalone CLI does not require the backend password.
+
+The infrastructure-owned gateway helper is outside `venv/` and must be updated
+before activation: preserve existing outer auth for **all** routes and WebSockets,
+replace client Authorization upstream with Basic `opencode:<backend secret>`,
+retain streaming/WS forwarding and localhost publication, and verify authenticated
+`GET /api/info` returning V2 `version` and integer `pid`. Test missing/wrong backend
+auth returns `401`; never use `/global/health` or a root-page `200` as acceptance.
+Do not log the injected header. Browser/frontend gateway auth remains independent.
+`/opt/opencode-health.py` runs this same authenticated info probe inside the VM
+image using `HOME` and `VENV_AGENT_PORT`, without credentials in argv/diagnostics.
+It does not replace the gateway's end-to-end API/WS/auth checks.
+
+Caller changes required: stop pinning OpenCode settings, publish the complete V2
+public config and plugin/CLI assets (not KDCO), provision/share the backend secret with
+the protected gateway, and use the V2 authenticated readiness path. No gateway or
+infrastructure deployment changes are included in this leaf.
+
+### Existing OpenCode HOME migration
+
+Stop old sessions/services while idle before applying the maintained initializer;
+it does not stop/restart them or claim hot migration. The brief `.vm-init.lock`
+serializes initialization, not active application state writers. No alternate HOME,
+V1 archive, backup tree, credential copy or recursive package deletion is created.
+
+| Existing content | In-place behavior |
+| --- | --- |
+| Prior managed agent-only `config.json` | Recognize exact reviewed per-agent fingerprints, including valid subsets; move only those current public V2 defaults into native `opencode.json`/JSONC, exclude all privately overridden names, then retire the recognized old seed. Never add global provider/policy defaults to an existing HOME. |
+| Lone private `config.json` | V2 does not load this old VM filename. Move its complete document to `opencode.json`, retaining settings and letting upstream normalize its syntax. |
+| Private `opencode.json` / `opencode.jsonc` | Preserve settings; reconcile required plugin paths, remove only recognized retired wrapper registrations, retain unrelated entries/options. Existing legacy syntax is not a rejection condition. |
+| Private agent/discovery directories without a config | Leave their content to upstream discovery; create managed registrations only, not global public policy/provider defaults. |
+| Unknown private old + native configs together | Refuse to guess at policy precedence; preserve both for explicit reconciliation. An exact interrupted filename-move publication is recoverable/idempotent. |
+| Regular title assets matching historical or current canonical bytes | Replace per-file with canonical links. Unknown edited files/links are retained and refused. |
+| KDCO wrappers/package links | Unlink only the exact historical resource/image symlink targets, or exact historical wrapper re-export bytes. Never follow/delete a shared package or remove unknown private content. |
+| Private CLI settings | Retain preferences/unrelated plugins and ensure managed title registration. |
+
+The original VM seeder wrote only `$schema` + `agent`, with absolute same-path
+prompt references, and could exclude private inline agent names. Recognition is
+not a whole-canonical-config digest: `opencode_legacy.json` pins reviewed agent
+and title fingerprints from commit `c8567a4f48a3b86a807aec28b474cca7b7bbb16c`.
+Tests run the immutable historical projector for a valid two-agent subset and use
+the actual historical title/wrapper bytes. Test controllers need that Git history;
+disposable images receive only those public fixture bytes via stdin.
+
+Deploy `opencode_legacy.json` next to any separately deployed `entry.py`; the VM
+image already includes it. Evidence is read only by OpenCode migration, not other
+harness startup. Public resources still require the full current V2 contract.
+Config updates retain semantic settings and existing modes, use atomic publication
+and content-drift checks, and never log private documents. Edited JSONC documents
+are serialized as JSON (comments/formatting are not retained). Multi-file migration
+is idempotent/retryable, not a transaction over application databases or concurrent
+user edits. Unknown conflicts require explicit review, not forced cleanup.
 
 ## SSH behavior preserved
 
@@ -270,6 +362,36 @@ real-Nginx tests skipped**. Activation tests simulate root identity and gateway/
 Docker effects; policy files, atomic publication, recovery journals and locks are
 real. These counts do not establish that peer on-demand enrollment wiring is complete.
 
-No Docker binary exists here: all image builds, native startup, gateway/API/WS,
-sshd/SCP/SFTP protocol and resource enforcement acceptance remain a later scoped
-canary. A running-container observation is not auth, provider or model acceptance.
+V2 focused checks (from this repository root):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s venv/tests -p 'test_opencode_v2.py' -v
+# Opt-in: a disposable VM-overlay image, no host state/resource/socket mounts:
+VENV_OPENCODE_TEST_IMAGE=<disposable-image> PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m unittest discover -s venv/tests -p 'test_opencode_v2.py' -v
+```
+
+Disposable OpenCode component/VM builds and mount-free startup can be checked
+without enrollment or activation. Gateway/API/WS end-to-end auth, provider/model
+calls, sshd/SCP/SFTP and resource enforcement still require a scoped canary.
+A running-container observation is not gateway, provider or model acceptance.
+
+V2 verification on this controller: maintained direct native installer and VM
+overlay built successfully, resolving `@opencode/cli@latest` to `2.0.32`. The
+mount-free, network-disabled disposable acceptance test passed for numeric non-root
+startup, canonical seeding, both standalone plugins reporting native `active` status,
+background-default/foreground-override hooks, exact canonical asset fingerprints,
+all canonical prompt texts loaded through `/api/agent`, authenticated `/api/info`,
+missing and wrong-password `401`, the private-file readiness helper, and no password
+in captured server output. These checks made no provider/model calls. Builds used
+the local legacy Docker builder and a disposable Node base, not the enrolled
+BuildKit/pinned-base activation flow. The OMP build fixture now supplies a valid
+source record/settings/hash/lock and exercises real snapshot verification, with
+simulated root-custody metadata only. A source-drift regression verifies build and
+activation are blocked. No production source-snapshot checks were weakened.
+The full venv suite includes fresh-HOME and actual prior-release-HOME disposable
+acceptance. The latter verifies same-HOME migration, active managed/unrelated
+plugins, upstream loading of retained private V1 policy/agent overrides, and
+preserved credential/database fixture bytes; no provider/model request is made.
+**84 tests passed, no failures or skips**, with the rebuilt disposable VM overlay
+and both fresh/prior-release HOME smoke tests enabled.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in foreground runtime and pure contract builder. No legacy adoption."""
 import argparse
+import base64
 import fcntl
 import hashlib
 import http.client
@@ -91,6 +92,7 @@ def validate_contract(contract: dict) -> None:
         require(source['path'] is None and not grants['checkout_write'], 'Baked startup has no editable checkout mount')
     if grants['root_user']:
         require(c['resources'] is None, 'Root mode refuses mutable resource/skill binds')
+        require(c['harness'] != 'opencode', 'OpenCode V2 requires an isolated ordinary-account HOME')
     limits = c['limits']
     require(set(limits) == {'memory_mb', 'cpus', 'pids'}, 'Explicit bounded resources required')
     require(type(limits['memory_mb']) is int and 128 <= limits['memory_mb'] <= 4096
@@ -228,9 +230,12 @@ def web_request(c: dict, route: str, *, upgrade: bool = False) -> tuple[int, byt
     connection = http.client.HTTPConnection('127.0.0.1', c['port'], timeout=2)
     try:
         headers = {'Connection': 'close'}
+        if c['harness'] == 'opencode':
+            credential = runtime_password(Path(c['home']))
+            headers['Authorization'] = 'Basic ' + base64.b64encode(('opencode:' + credential).encode()).decode()
         if upgrade:
-            headers = {'Connection': 'Upgrade', 'Upgrade': 'websocket', 'Sec-WebSocket-Version': '13',
-                       'Sec-WebSocket-Key': 'YWdlbnRzLXJ1bnRpbWUxMg=='}
+            headers.update({'Connection': 'Upgrade', 'Upgrade': 'websocket', 'Sec-WebSocket-Version': '13',
+                            'Sec-WebSocket-Key': 'YWdlbnRzLXJ1bnRpbWUxMg=='})
         connection.request('GET', route, headers=headers)
         response = connection.getresponse()
         body = response.read(1024 * 1024 + 1)
@@ -240,19 +245,36 @@ def web_request(c: dict, route: str, *, upgrade: bool = False) -> tuple[int, byt
         connection.close()
 
 
+def runtime_password(home: Path) -> str:
+    """Read the container-created credential without importing executable startup."""
+    fd = os.open(home / '.opencode-runtime-password', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                and (info.st_uid, info.st_gid) == (os.getuid(), os.getgid())
+                and not info.st_mode & 0o077, 'Unsafe runtime credential file')
+        password = os.read(fd, 256).decode().strip()
+        require(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', password), 'Invalid runtime credential file')
+        return password
+    finally:
+        os.close(fd)
+
+
 def web_ready(c: dict) -> None:
-    require(web_request(c, '/')[0] == 200, 'Application HTTP unavailable')
+    if c['harness'] != 'opencode':
+        require(web_request(c, '/')[0] == 200, 'Application HTTP unavailable')
     if c['harness'] == 't3':
         require(web_request(c, '/api/orchestration/snapshot')[0] == 401, 'T3 unpaired API gate missing')
         require(web_request(c, '/ws', upgrade=True)[0] == 401, 'T3 unpaired WS gate missing')
     else:
-        route = '/api/sessions' if c['harness'] == 'pi' else '/global/health'
+        route = '/api/sessions' if c['harness'] == 'pi' else '/api/info'
         status, body = web_request(c, route)
         require(status == 200, 'Application API unavailable')
         value = json.loads(body)
         require(isinstance(value, (dict, list)), 'Application JSON response required')
         if c['harness'] == 'opencode':
-            require(isinstance(value, dict) and value.get('healthy') is True, 'OpenCode API unhealthy')
+            require(isinstance(value, dict) and str(value.get('version', '')).startswith('2.')
+                    and type(value.get('pid')) is int, 'OpenCode V2 API unavailable')
 
 
 def wait_web(c: dict, process, *, timeout: float = 60) -> None:
@@ -371,11 +393,10 @@ def main(argv: list[str] | None = None) -> int:
             require(not existing.stdout.strip(), 'Prior runtime container still owns HOME; inspect/recover it explicitly')
             inspected = json.loads(install.docker(['image', 'inspect', c['image']]).stdout)[0]
             install.verify_image(receipt, inspected)
-            # Image rollback cannot reverse databases/provider-state writes. Until
-            # a reviewed state migration policy exists, image changes use a new
-            # explicit slot rather than silently opening an older private HOME.
+            # OpenCode switches in place only after exclusive writer/orphan checks
+            # and image verification above. Other harnesses keep immutable binding.
             if not args.root_user:
-                install.bind_home(home, c['image'])
+                install.bind_home(home, c['image'], advance=args.harness == 'opencode')
             install.atomic(root / (c['name'] + '.json'), c)
             process = subprocess.Popen(selected, env={'PATH': '/usr/bin:/bin', 'HOME': str(Path.home())})
             handlers = {}

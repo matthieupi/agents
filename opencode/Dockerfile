@@ -5,6 +5,7 @@ FROM node:22-bookworm
 LABEL maintainer="sys-ops"
 LABEL description="OpenCode Containerized AI Coding Assistant"
 LABEL version="1.0.0"
+LABEL dev.xmist.opencode.lifecycle="v2-serve-1"
 
 # Avoid prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -62,14 +63,17 @@ RUN mkdir -p /home/opencode/.config/opencode \
     && chown -R opencode:opencode /home/opencode
 
 # Install OpenCode globally
-RUN npm install -g opencode-ai@latest \
+RUN npm install -g @opencode/cli@latest \
     && npm cache clean --force
 
-# Public defaults; a mounted config gets dependencies through init.sh instead.
-COPY .opencode/config/kdco /opt/opencode-defaults/kdco/
-COPY .opencode/config/plugins/kdco-*.ts /opt/opencode-defaults/plugins/
-COPY scripts/publish-plugins.mjs /opt/opencode-publish-plugins.mjs
-RUN npm ci --prefix /opt/opencode-defaults/kdco --ignore-scripts --no-audit --no-fund
+# Canonical native config and title assets; bind mounts use these same paths.
+COPY init.sh scripts/docker-* /opt/harness/
+RUN chmod 0755 /opt/harness && chmod 0644 /opt/harness/*
+COPY --chown=opencode:opencode .opencode/config/opencode.json .opencode/config/cli.json /home/opencode/.config/opencode/
+COPY --chown=opencode:opencode .opencode/config/plugins/first-prompt-title.js /home/opencode/.config/opencode/plugins/
+COPY --chown=opencode:opencode .opencode/config/plugins/background-subagents.js /home/opencode/.config/opencode/plugins/
+COPY --chown=opencode:opencode .opencode/config/tui-plugins/session-title.mjs /home/opencode/.config/opencode/tui-plugins/
+COPY --chown=opencode:opencode .opencode/config/tui-plugins/session-title/tui.js /home/opencode/.config/opencode/tui-plugins/session-title/
 
 # Preinstall Playwright for frontend workflows
 RUN npm install -g playwright \
@@ -77,11 +81,12 @@ RUN npm install -g playwright \
 
 # Health check - verify CLI exists and responds
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD opencode --version || exit 1
+    CMD python3 /opt/harness/docker-health.py
 
 # Switch to opencode user
 USER opencode
 WORKDIR /workspace
 
 # Default: show help (override with entrypoint in compose)
-CMD ["opencode"]
+ENV OPENCODE_DOCKER_PORT=4096 OPENCODE_CONFIG_DIR=/home/opencode/.config/opencode
+CMD ["bash", "/opt/harness/docker-server.sh"]
