@@ -452,6 +452,17 @@ elif tool == 'python3':
             self.assertIn('server overrides', result.stderr)
             self.assertFalse(self.calls.exists())
 
+    def test_existing_application_directory_permissions_are_preserved(self):
+        for name in ('home-config', 'data', 'cache', 'state', 'locks'):
+            directory = self.root / 'opencode/.opencode' / name
+            directory.mkdir(exist_ok=True)
+            directory.chmod(0o777)
+        result, _ = self.run_copy('opencode/opencode-run', ['.'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ('home-config', 'data', 'cache', 'state', 'locks'):
+            directory = self.root / 'opencode/.opencode' / name
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o777)
+
     def test_concurrent_password_provisioning_is_stable(self):
         env = dict(self.env)
         env.pop('OPENCODE_PASSWORD')

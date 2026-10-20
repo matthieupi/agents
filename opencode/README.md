@@ -239,9 +239,10 @@ Wrapper builds create the named account/HOME using the invoking non-root **UID:G
 containers run with that identity. Root/sudo launches and mismatched image accounts
 are rejected; use `-r` to rebuild for the correct user, not runtime chown. Shared image
 tags are local defaults, so another user's rebuild may require rebuilding again.
-Checkout/private-state roots must be caller-owned, non-redirected and not group/other
-writable; newly created state directories are `0700`. Existing state is never reset
-or permission-repaired. Check mount ownership, not recursive chown of HOME/checkouts.
+Ordinary checkout/application-state directories are not rejected based on ownership
+or permissions; normal filesystem access errors still apply. Redirected paths remain
+rejected, and the backend credential directory retains strict owner-only protection.
+New state directories are `0700`; existing state is never reset or permission-repaired.
 
 Use the local Docker host filesystem and Unix-socket daemon, not a remote Docker
 context or a container with differently mapped host paths. A local socket alone does

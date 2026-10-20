@@ -14,11 +14,13 @@ def directory(path: Path, *, private: bool = False) -> None:
     if path.is_symlink() or path.resolve() != path:
         raise ValueError(f"Redirected directory: {path}")
     path.mkdir(mode=0o700, exist_ok=True)
+    if not private:
+        return
     info = path.stat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
             or not os.access(path, os.R_OK | os.W_OK | os.X_OK)
             or info.st_mode & 0o022
-            or (private and stat.S_IMODE(info.st_mode) != 0o700)):
+            or stat.S_IMODE(info.st_mode) != 0o700):
         raise ValueError(f"Unsafe ownership/permissions: {path}; preserved, not repaired")
 
 
