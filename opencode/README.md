@@ -269,6 +269,12 @@ Provision least-privilege remote accounts and verified SSH known_hosts separatel
   ordered `permissions`, `system` references and `request` settings. Default model
   is `openai/gpt-6-astra`; native `title` agent uses `openai/gpt-5-mini`.
   `DevOps` is selectable/callable (`mode: "all"`); `DevOps Junior` is hidden.
+- `worker` uses `openai/gpt-6-luna` for simple, atomic delegated tasks. Its
+  `mode: "subagent"` excludes it from primary TUI selection while leaving it
+  discoverable in the subagent catalog (it is not marked hidden). It can edit
+  and run checks under the existing permissions, but cannot launch subagents.
+  The shared prompt is `agent/system/worker.md`; OpenCode config enforces the
+  model, mode, and delegation restriction, not the portable prompt metadata.
 - Automatic compaction is disabled: `{auto: false, buffer: 50000}`. The buffer is
   not an enabled token trigger or a verified long-session request-size fix.
 - `plugins/background-subagents.js` defaults native subagent calls to background

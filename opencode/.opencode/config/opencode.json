@@ -110,6 +110,15 @@
       "mode": "all",
       "description": "Implements code changes with stepwise verification"
     },
+    "worker": {
+      "system": "{file:./system/worker.md}",
+      "model": "openai/gpt-6-luna",
+      "mode": "subagent",
+      "description": "Executes simple, well-scoped tasks with focused changes and verification",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    },
     "plan-inline": {
       "system": "{file:./system/plan-inline.md}",
       "request": { "body": { "temperature": 0.2 } },

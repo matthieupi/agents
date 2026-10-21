@@ -78,7 +78,7 @@ test('canonical workstation models, permissions and every prompt survive publica
   }
   assert.deepEqual(Object.keys(agents).sort(), [
     'COO', 'DevOps', 'DevOps Junior', 'Orchestrator', 'SecOps',
-    'build', 'explore', 'plan', 'plan-inline', 'reviewer', 'title',
+    'build', 'explore', 'plan', 'plan-inline', 'reviewer', 'title', 'worker',
   ].sort());
   assert.equal(agents.title.model, 'openai/gpt-5-mini');
   assert.equal(agents.Orchestrator.model, published.model);
@@ -89,6 +89,14 @@ test('canonical workstation models, permissions and every prompt survive publica
   assert.equal(agents['DevOps Junior'].model, 'openai/gpt-6-sol');
   assert.equal(agents['DevOps Medium'], undefined);
   assert.equal(agents['DevOps Low'], undefined);
+  assert.deepEqual(agents.worker, {
+    system: '{file:./system/worker.md}',
+    model: 'openai/gpt-6-luna',
+    mode: 'subagent',
+    description: 'Executes simple, well-scoped tasks with focused changes and verification',
+    permissions: [{ action: 'subagent', resource: '*', effect: 'deny' }],
+  });
+  assert.notEqual(agents.worker.hidden, true);
   assert.doesNotMatch(delivered, /gsd/i);
   for (const [name, agent] of Object.entries(agents)) {
     for (const legacy of ['prompt', 'temperature', 'permission']) {
@@ -96,7 +104,7 @@ test('canonical workstation models, permissions and every prompt survive publica
     }
     if (name === 'title') continue;
     assert.match(agent.system, /^\{file:\.\/system\/[\w-]+\.md\}$/);
-    if (name !== 'Orchestrator') assert.equal(typeof agent.request.body.temperature, 'number');
+    if (!['Orchestrator', 'worker'].includes(name)) assert.equal(typeof agent.request.body.temperature, 'number');
     for (const rule of agent.permissions ?? []) {
       assert.deepEqual(Object.keys(rule).sort(), ['action', 'effect', 'resource']);
       assert.ok(['allow', 'ask', 'deny'].includes(rule.effect));

@@ -141,12 +141,18 @@ class DockerV2Tests(unittest.TestCase):
         config = ROOT / ".opencode/config"
         values = json.loads((config / "opencode.json").read_text())
         expected = {"Orchestrator", "explore", "reviewer", "COO", "DevOps", "DevOps Junior",
-                    "SecOps", "plan", "build", "plan-inline", "title"}
+                    "SecOps", "plan", "build", "plan-inline", "title", "worker"}
         self.assertEqual(set(values["agents"]), expected)
         self.assertEqual(values["model"], "openai/gpt-6-astra")
         self.assertEqual(values["agents"]["DevOps"]["mode"], "all")
         self.assertEqual(values["agents"]["DevOps Junior"]["model"], "openai/gpt-6-sol")
         self.assertEqual(values["agents"]["title"]["model"], "openai/gpt-5-mini")
+        worker = values["agents"]["worker"]
+        self.assertEqual(worker["model"], "openai/gpt-6-luna")
+        self.assertEqual(worker["mode"], "subagent")
+        self.assertFalse(worker.get("hidden", False))
+        self.assertEqual(worker["system"], "{file:./system/worker.md}")
+        self.assertEqual(worker["permissions"], [{"action": "subagent", "resource": "*", "effect": "deny"}])
         self.assertEqual(values["compaction"], {"auto": False, "buffer": 50000})
         self.assertEqual(values["permissions"], [{"action": "*", "resource": "*", "effect": "allow"}])
         self.assertEqual(values["providers"]["openai"]["models"]["gpt-6-astra"]["limit"]["input"], 320000)
