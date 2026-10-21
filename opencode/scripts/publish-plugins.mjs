@@ -11,9 +11,12 @@ const knownSnapshots = new Set([
   'f90e64c84363535db05bbaa423e2cb51a16308ca37c3ac96dbe3902e2b212029', // migration public V2
 ]);
 const knownAssets = {
-  'plugins/first-prompt-title.js': 'cba82bd8132a28b2dba9cde7a2afa055b15d7a469c0f1734669968ac56ba6c22',
   'tui-plugins/session-title.mjs': '0d0499e92e4e68c1a5760316be216d2bf3186cada8c101bc6e7a43e799ec00b6',
 };
+const retiredTitleHashes = new Set([
+  'cba82bd8132a28b2dba9cde7a2afa055b15d7a469c0f1734669968ac56ba6c22', // V1 generator
+  'b06ebdc977552b942b6c407ee56202b3c2efc9d9b1c4d1be0a9e6e3bd0f66390', // V2 generator
+]);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const stat = path => lstat(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
 // Tracked public documentation/test inputs are not runtime plugin entrypoints.
@@ -108,6 +111,16 @@ export async function publishConfig(source, resources, destination) {
   // Retire only wrappers whose complete bytes or exact former managed link prove ownership.
   for (const directory of ['plugins', 'plugin']) {
     for (const name of await readdir(join(destination, directory))) {
+      if (name === 'first-prompt-title.js') {
+        const path = join(destination, directory, name), info = await lstat(path);
+        const relative = join(directory, name);
+        const owned = info.isSymbolicLink()
+          ? [join(source, relative), join('/opt/opencode-defaults', relative),
+            join('/opt/opencode/component/.opencode/config', relative)].includes(await readlink(path))
+          : info.isFile() && retiredTitleHashes.has(digest(await readFile(path)));
+        if (owned) retire.push(path);
+        continue;
+      }
       if (!name.startsWith('kdco-')) continue;
       const path = join(destination, directory, name), info = await lstat(path);
       const module = name.slice(5, -3);

@@ -90,7 +90,6 @@ COPY init.sh scripts/docker-* /opt/harness/
 RUN chmod 0755 /opt/harness && chmod 0644 /opt/harness/*
 COPY scripts/publish-plugins.mjs /opt/opencode/publish-plugins.mjs
 COPY .opencode/config/opencode.json .opencode/config/cli.json /opt/opencode-defaults/
-COPY .opencode/config/plugins/first-prompt-title.js /opt/opencode-defaults/plugins/
 COPY .opencode/config/plugins/background-subagents.js /opt/opencode-defaults/plugins/
 COPY .opencode/config/tui-plugins/session-title.mjs /opt/opencode-defaults/tui-plugins/
 COPY .opencode/config/tui-plugins/session-title/tui.js /opt/opencode-defaults/tui-plugins/session-title/

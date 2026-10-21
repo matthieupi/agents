@@ -16,9 +16,9 @@ async function fixture(t) {
   for (const directory of [home, defaults, resources, join(defaults, 'plugins'),
     join(defaults, 'tui-plugins'), join(defaults, 'tui-plugins/session-title')]) await mkdir(directory);
   for (const name of ['commands', 'skills', 'system']) await mkdir(join(resources, name));
-  const canonical = JSON.stringify({ plugins: ['./plugins/first-prompt-title.js', './plugins/background-subagents.js'] });
+  const canonical = JSON.stringify({ plugins: ['./plugins/background-subagents.js'] });
   await writeFile(join(defaults, 'opencode.json'), canonical);
-  for (const name of ['first-prompt-title', 'background-subagents']) await writeFile(join(defaults, `plugins/${name}.js`), `export default '${name}'`);
+  await writeFile(join(defaults, 'plugins/background-subagents.js'), "export default 'background-subagents'");
   await writeFile(join(defaults, 'cli.json'), '{"plugins":["./tui-plugins/session-title"]}');
   await writeFile(join(defaults, 'tui-plugins/session-title.mjs'), 'export {}');
   await writeFile(join(defaults, 'tui-plugins/session-title/tui.js'), 'export {}');
@@ -33,12 +33,12 @@ async function fixture(t) {
   return { home, defaults, resources, destination, canonical, launch };
 }
 
-test('VM startup publishes V2 config, both server plugins and CLI assets before exact exec', async t => {
+test('VM startup publishes V2 config, background plugin and footer assets before exact exec', async t => {
   const f = await fixture(t);
   const first = f.launch();
   assert.equal(first.status, 0, first.stderr);
   assert.equal(first.stdout, 'launched:exact argument');
-  for (const relative of ['opencode.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+  for (const relative of ['opencode.json', 'plugins/background-subagents.js',
     'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js']) {
     assert.equal(await readlink(join(f.destination, relative)), join(f.defaults, relative));
   }
@@ -47,6 +47,54 @@ test('VM startup publishes V2 config, both server plugins and CLI assets before 
   assert.equal(f.launch().status, 0);
   await writeFile(join(f.defaults, 'plugins/background-subagents.js'), 'updated');
   assert.equal(await readFile(join(f.destination, 'plugins/background-subagents.js'), 'utf8'), 'updated');
+});
+
+test('retires exact managed title-generator links in either discovery directory', async t => {
+  for (const directory of ['plugins', 'plugin']) {
+    for (const prefix of ['source', '/opt/opencode-defaults', '/opt/opencode/component/.opencode/config']) {
+      const f = await fixture(t);
+      await mkdir(join(f.destination, directory), { recursive: true });
+      const path = join(f.destination, directory, 'first-prompt-title.js');
+      await symlink(join(prefix === 'source' ? f.defaults : prefix, directory, 'first-prompt-title.js'), path);
+      const result = f.launch();
+      assert.equal(result.status, 0, result.stderr);
+      await assert.rejects(lstat(path), { code: 'ENOENT' });
+      assert.equal(await readlink(join(f.destination, 'plugins/background-subagents.js')),
+        join(f.defaults, 'plugins/background-subagents.js'));
+      assert.equal((await lstat(join(f.destination, 'tui-plugins/session-title/tui.js'))).isSymbolicLink(), true);
+    }
+  }
+});
+
+test('retires byte-identical title-generator copies but preserves private files and custom links', async t => {
+  for (const directory of ['plugins', 'plugin']) {
+    const f = await fixture(t);
+    await mkdir(join(f.destination, directory), { recursive: true });
+    const path = join(f.destination, directory, 'first-prompt-title.js');
+    const bytes = execFileSync('git', ['show', '8a6ba61:opencode/.opencode/config/plugins/first-prompt-title.js'],
+      { cwd: fileURLToPath(new URL('../..', import.meta.url)) });
+    await writeFile(path, bytes);
+    assert.equal(f.launch().status, 0);
+    await assert.rejects(lstat(path), { code: 'ENOENT' });
+    await writeFile(path, 'private custom title behavior');
+    assert.equal(f.launch().status, 0);
+    assert.equal(await readFile(path, 'utf8'), 'private custom title behavior');
+    await rm(path);
+    await symlink('/private/custom-title.js', path);
+    assert.equal(f.launch().status, 0);
+    assert.equal(await readlink(path), '/private/custom-title.js');
+  }
+});
+
+test('title-generator retirement waits until all configuration conflicts are checked', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.destination, 'plugins'), { recursive: true });
+  const path = join(f.destination, 'plugins/first-prompt-title.js');
+  await symlink('/opt/opencode-defaults/plugins/first-prompt-title.js', path);
+  await writeFile(join(f.destination, 'cli.json'), '{invalid');
+  const result = f.launch();
+  assert.notEqual(result.status, 0);
+  assert.equal(await readlink(path), '/opt/opencode-defaults/plugins/first-prompt-title.js');
 });
 
 test('existing CLI preferences allow startup and gain only required plugin registration idempotently', async t => {
@@ -270,7 +318,7 @@ test('complete canonical public source closure publishes without docs/test entry
   const resources = fileURLToPath(new URL('../../agent', import.meta.url));
   await publishConfig(source, resources, f.destination);
   assert.equal(await readFile(join(f.destination, 'opencode.json'), 'utf8'), await readFile(join(source, 'opencode.json'), 'utf8'));
-  for (const relative of ['plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+  for (const relative of ['plugins/background-subagents.js',
     'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js']) {
     assert.equal(await readlink(join(f.destination, relative)), join(source, relative));
   }

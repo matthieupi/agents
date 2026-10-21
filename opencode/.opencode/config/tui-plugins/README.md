@@ -12,9 +12,10 @@ cli.json: plugins ["./tui-plugins/session-title"]
 ```
 
 The directory entrypoint is required by the native TUI loader. Do not register
-the `.mjs` file directly. This is a display-only plugin: the separate canonical
-`../plugins/first-prompt-title.js` owns initial title generation through the
-native session title hook. The server host owns title persistence.
+the `.mjs` file directly. This remains a display-only plugin. Native V2 owns title
+generation through its built-in `title` agent (`openai/gpt-5-mini`) and the server
+host owns persistence. The custom `../plugins/first-prompt-title.js` generator is
+retired, not this prompt footer; its `OPENCODE_TITLE_*` overrides no longer apply.
 
 ## Behavior
 

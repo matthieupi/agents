@@ -275,17 +275,14 @@ Provision least-privilege remote accounts and verified SSH known_hosts separatel
   **only when omitted**. Explicit `background: false` works for every agent,
   including write-capable ones; native permissions/depth checks still apply.
   Prefer completion notifications and dependency-driven work over polling/barriers.
-- `plugins/first-prompt-title.js` owns initial title generation through the native
-  hook, preserves custom titles and leaves persistence/concurrent renames to the
-  host. Optional bounded OpenAI lookup uses `OPENCODE_TITLE_API_KEY` (fallback
-  `OPENAI_API_KEY`), `OPENCODE_TITLE_BASE_URL` (full chat-completions URL), and
-  `OPENCODE_TITLE_MODEL` (default `gpt-4.1-mini`). Failure/missing credentials
-  falls back to a first-prompt-derived title.
+- Native V2 owns title generation and persistence through its built-in `title`
+  agent (`openai/gpt-5-mini`). The custom `plugins/first-prompt-title.js` generator
+  is retired; its `OPENCODE_TITLE_*` overrides and first-prompt fallback no longer
+  apply. This does not retire the display-only prompt footer below.
 - `cli.json` selects theme `opencode` and `./tui-plugins/session-title`. Its shim
   loads a display-only sanitized, colored title (up to 35 graphemes) at
   `prompt.footer.status`, not a replacement footer/title generator. See
-  [title details](.opencode/config/tui-plugins/README.md). Title-specific environment
-  overrides are not automatically forwarded by the wrapper/template.
+  [title details](.opencode/config/tui-plugins/README.md).
 - Global permissions are permissive with per-agent overrides. Read-only role
   descriptions are not filesystem sandboxes. Provider env variables alone do not
   register arbitrary providers; use the native provider schema.

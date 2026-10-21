@@ -18,7 +18,9 @@ The user explicitly approved:
 - Make a hard, clean V2 switch. Do not retain a V1/V2 compatibility deployment, `config/v2/` tree, or separate V2 state roots.
 - Retain one server that clients connect to. Exiting a TUI must not stop that server.
 - Automatically replace workstation containers when their image/configuration changes; the user rejected the earlier refusal guard. Replacement interrupts active work, so schedule this production cutover deliberately.
-- Port the two homebrew plugins: first-prompt title generation and session-title display.
+- Retain the homebrew session-title prompt footer. The earlier port of custom
+  first-prompt title generation is superseded: use native V2's built-in `title`
+  agent with `openai/gpt-5-mini`; do not load `plugins/first-prompt-title.js`.
 - Default native `subagent` calls to `background: true` when omitted. Preserve explicit `background: false` and native permission/depth checks.
 - Preserve remote's subsequent architecture changes, including its agent roster/model choices and retirement of obsolete paths.
 
@@ -172,7 +174,7 @@ Avoid broad `compose down`, volume deletion, recursive chown, database resets, a
 - [ ] External unauthenticated access is rejected. Authorized browser/client access succeeds through the real gateway, including streaming. Native backend auth does not replace gateway protection.
 - [ ] TUI connects with `--server`; disconnect/reconnect preserves the session and does not create/replace a separate managed server or stop the backend.
 - [ ] Effective agents, models, providers and prompt references resolve. Remote's updated roster/default model is preserved; GSD is absent. Confirm the configured provider/model is actually available; do not silently substitute another model to hide a failure.
-- [ ] Server title and background-default plugins are active, and CLI footer registration loads. No obsolete KDCO loader runs.
+- [ ] The native `title` agent retains `openai/gpt-5-mini`; no custom `first-prompt-title` generator is loaded. The background-default plugin is active and CLI footer registration loads. No obsolete KDCO loader runs.
 - [ ] A fresh real user prompt obtains a sensible title; title display renders in the supported **prompt footer**. A later prompt does not overwrite a deliberate custom title.
 - [ ] A native subagent call omitting `background` returns control while the child runs. Its result reaches the caller. With two different-duration children, the first completion is usable without waiting for the unrelated slower child. Explicit `background: false` still behaves as foreground execution.
 - [ ] Background defaults do not bypass agent permissions/depth limits. No polling/sleep loop is needed to consume completion notifications.
@@ -199,7 +201,7 @@ Recovery is the old **image plus matched deployment/proxy configuration and comp
 ## Evidence already available / verification limits
 
 - The merge preserves both parents, remote retirements and agent defaults; unrelated N3TX files were hash-checked and preserved. No unresolved merge entries remain.
-- Disposable OpenCode service image built with **2.1.1**; authenticated health, complete tracked public-source publication, server title/background plugin activation, and CLI footer loading were checked.
+- Disposable OpenCode service image built with **2.1.1**; authenticated health, complete tracked public-source publication, then-current server title/background plugin activation, and CLI footer loading were checked. That title-generator evidence predates its retirement and does not establish native title generation; recheck native titles and the retained footer during acceptance.
 - Backend, startup/config, title/background, workstation, provider-verifier and service-template/wrapper checks ran during implementation. Review caught and fixed a daemon publisher COPY-path mismatch and stale agent-roster assertions.
 - Final merge checks were deliberately lightweight at the user's request: conflict/whitespace, JSON/config intent, shell syntax, and ancestry/local-work preservation. **A fresh exhaustive post-merge suite was not run.**
 - Real deployed providers, browser ingress, production V1 database compatibility, GPU, and live Paseo/Paperclip adapter flows are not established. Standalone Compose validation was used where this environment's Docker wrapper could not execute Compose correctly.

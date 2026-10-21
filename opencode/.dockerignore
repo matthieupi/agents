@@ -13,7 +13,6 @@
 !.opencode/config/opencode.json
 !.opencode/config/cli.json
 !.opencode/config/plugins
-!.opencode/config/plugins/first-prompt-title.js
 !.opencode/config/plugins/background-subagents.js
 !.opencode/config/tui-plugins
 !.opencode/config/tui-plugins/session-title.mjs

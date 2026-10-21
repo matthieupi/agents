@@ -628,7 +628,7 @@ elif tool == 'python3':
         (component / 'scripts').mkdir(exist_ok=True)
         shutil.copyfile(ROOT / 'opencode/scripts/publish-plugins.mjs', component / 'scripts/publish-plugins.mjs')
         defaults = component / '.opencode/config'
-        for relative in ('opencode.json', 'cli.json', 'plugins/first-prompt-title.js',
+        for relative in ('opencode.json', 'cli.json',
                          'plugins/background-subagents.js', 'tui-plugins/session-title.mjs',
                          'tui-plugins/session-title/tui.js'):
             destination = defaults / relative
@@ -667,10 +667,15 @@ initialize_home
         self.assertIn('agents', canonical)
         self.assertIn('providers', canonical)
         self.assertIn('permissions', canonical)
-        for relative in ('cli.json', 'plugins/first-prompt-title.js', 'plugins/background-subagents.js',
+        self.assertFalse((config / 'cli.json').is_symlink())
+        self.assertEqual(json.loads((config / 'cli.json').read_text()),
+                         json.loads((defaults / 'cli.json').read_text()))
+        for relative in ('plugins/background-subagents.js',
                          'tui-plugins/session-title.mjs', 'tui-plugins/session-title/tui.js'):
             self.assertEqual((config / relative).readlink(), defaults / relative)
         self.assertFalse((config / 'v2').exists())
+        self.assertFalse((config / 'plugins/first-prompt-title.js').exists())
+        self.assertFalse((config / 'plugins/first-prompt-title.js').is_symlink())
         self.assertFalse((config / 'auth.json').exists())
         legacy_shared = self.home / '.agents'
         legacy_shared.mkdir()

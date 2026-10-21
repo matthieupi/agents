@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_ASSETS = (
-    "opencode.json", "cli.json", "plugins/first-prompt-title.js",
+    "opencode.json", "cli.json",
     "plugins/background-subagents.js", "tui-plugins/session-title.mjs",
     "tui-plugins/session-title/tui.js",
 )
@@ -73,6 +73,8 @@ class DockerV2Tests(unittest.TestCase):
         for name in ("system", "commands", "skills"):
             self.assertEqual((self.config / name).resolve(), self.base / "resources" / name)
         self.assertFalse((self.config / 'gsd').exists())
+        self.assertFalse((self.config / 'plugins/first-prompt-title.js').exists())
+        self.assertFalse((self.config / 'plugins/first-prompt-title.js').is_symlink())
         preferences = {"theme": {"name": "custom"}, "plugins": ["private-plugin"]}
         (self.config / 'cli.json').write_text(json.dumps(preferences))
         result = self.run_init()
@@ -162,6 +164,8 @@ class DockerV2Tests(unittest.TestCase):
         self.assertEqual(cli["plugins"], ["./tui-plugins/session-title"])
         self.assertTrue((config / "tui-plugins/session-title/tui.js").is_file())
         self.assertFalse(list((config / "plugins").glob("kdco-*")))
+        self.assertFalse((config / "plugins/first-prompt-title.js").exists())
+        self.assertNotIn("first-prompt-title", json.dumps(values))
 
     def test_fingerprint_changes_with_canonical_config_credentials_and_web_exposure(self):
         def fingerprint(*args):
@@ -190,6 +194,7 @@ class DockerV2Tests(unittest.TestCase):
 
     def test_image_asset_manifest_and_background_source_closure(self):
         allowlist = (ROOT / ".dockerignore").read_text().splitlines()
+        self.assertNotIn("!.opencode/config/plugins/first-prompt-title.js", allowlist)
         for asset in IMAGE_ASSETS:
             source = ROOT / ".opencode/config" / asset
             self.assertTrue(source.is_file(), asset)
@@ -240,7 +245,9 @@ class DockerV2Tests(unittest.TestCase):
             self.assertIn("npm install -g @opencode/cli@latest", text)
             self.assertNotIn("COPY .opencode/config/kdco", text)
             self.assertNotIn(".opencode/config/v2", text)
-            self.assertIn(".opencode/config/plugins/first-prompt-title.js", text)
+            self.assertNotIn("first-prompt-title", text)
+            self.assertIn(".opencode/config/plugins/background-subagents.js", text)
+            self.assertIn(".opencode/config/tui-plugins/session-title/tui.js", text)
             self.assertIn(".opencode/config/cli.json", text)
             self.assertIn('CMD ["bash", "/opt/harness/docker-server.sh"]', text)
             self.assertIn("CMD python3 /opt/harness/docker-health.py", text)
@@ -405,7 +412,7 @@ elif args[0] == "port": print("127.0.0.1:7777")
         plugins = docker("exec", container, "opencode", "api", "--server", "http://127.0.0.1:4096",
                          "GET", "/api/plugin?directory=/workspace")
         for _ in range(10):
-            if all(name in plugins.stdout for name in ("first-prompt-title.js", "background-subagents.js")):
+            if "background-subagents.js" in plugins.stdout:
                 break
             time.sleep(1)
             plugins = docker("exec", container, "opencode", "api", "--server", "http://127.0.0.1:4096",
@@ -423,6 +430,7 @@ elif args[0] == "port": print("127.0.0.1:7777")
         self.assertEqual(public["providers"]["ollama"]["package"], "@opencode/ai/providers/openai-compatible")
         self.assertEqual(public["providers"]["openai"]["models"]["gpt-6-astra"]["limit"]["input"], 320000)
         self.assertEqual(public["compaction"], original["compaction"])
+        self.assertEqual(public["agents"]["title"]["model"], {"providerID": "openai", "model": "gpt-5-mini"})
         self.assertEqual(public["permissions"], [{"action": "*", "resource": "*", "effect": "allow"}])
         self.assertIn({"action": "subagent", "resource": "*", "effect": "allow"}, public["agents"]["Orchestrator"]["permissions"])
         self.assertIn({"action": "shell", "resource": "*", "effect": "allow"}, public["agents"]["Orchestrator"]["permissions"])
@@ -439,10 +447,8 @@ elif args[0] == "port": print("127.0.0.1:7777")
         links = docker("exec", container, "python3", "-c",
                        "from pathlib import Path; import json; print(json.dumps({n:str(Path('/home/opencode/.config/opencode',n).readlink()) for n in ['system','commands','skills']}))")
         self.assertEqual(json.loads(links.stdout), {name: "/opt/agent/" + name for name in ("system", "commands", "skills")})
-        self.assertIn("first-prompt-title.js", plugins.stdout, logs.stdout + logs.stderr + configs.stdout)
+        self.assertNotIn("first-prompt-title", plugins.stdout)
         self.assertNotIn("kdco-", plugins.stdout)
-        title = next(item for item in json.loads(plugins.stdout)["data"] if item.get("id") == "first-prompt-title")
-        self.assertEqual(title["state"], {"status": "active"})
         background = next(item for item in json.loads(plugins.stdout)["data"]
                           if item.get("id") == "background-subagents")
         self.assertEqual(background["state"], {"status": "active"})
