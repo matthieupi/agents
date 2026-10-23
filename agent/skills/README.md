@@ -1,6 +1,23 @@
 # Skill Taxonomy
 
-The project skills are grouped by **purpose** in the filesystem.
+The project skills are grouped by **purpose** in the filesystem. The `anthropic/`
+group contains locally maintained bundles adapted from Anthropic's examples;
+it is a source grouping rather than a runtime dependency.
+
+## OpenCode V2
+
+OpenCode discovers nested `SKILL.md` bundles through the shared skills directory
+already exposed by the workstation harness. The immediate skill-directory name
+is its ID, irrespective of grouping: `anthropic/brand-guidelines/SKILL.md` loads
+as `brand-guidelines`. Mention `@brand-guidelines` or ask for Neuralys branding;
+the agent loads it with the native `skill` tool using `{"id":"brand-guidelines"}`.
+
+For standalone installations, copy a complete bundle into
+`.opencode/skills/<id>/` (project) or `~/.config/opencode/skills/<id>/` (global).
+Do not copy only `SKILL.md`: supporting scripts, references, assets, and licenses
+belong to the bundle. A `.skill` archive is transport, not an OpenCode installer.
+
+See [the local bundle guide](anthropic/README.md) for scope and dependencies.
 
 ## Pi skill layout constraint
 
@@ -39,7 +56,7 @@ Grouping by folder is purely for organization.
 
 - `bugfix`
 - `build-feature`
-- `n3tx-init` — read-only N3TX session orientation; `/n3tx-init [feature/system context and/or N3TX path]` invokes the shared skill through a thin command.
+- `n3tx-init`: read-only N3TX session orientation; `/n3tx-init [feature/system context and/or N3TX path]` invokes the shared skill through a thin command.
 - `tdd`
 
 ### Architecture
@@ -72,6 +89,7 @@ Grouping by folder is purely for organization.
 
 ```text
 skills/
+├── anthropic/
 ├── architecture/
 ├── design/
 ├── dev/
