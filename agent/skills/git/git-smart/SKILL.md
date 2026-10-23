@@ -1,14 +1,16 @@
 ---
 name: git-smart
-description: Analyzes dirty working tree, groups changes into logically cohesive commits by scope/type/dependency, and executes them with proper conventions. Automates the tedious process of staging and committing many scattered changes.
+description: Analyzes pending changes and creates substantial, semantically cohesive commits organized around complete outcomes rather than individual edits, file types, or implementation steps. Prefers fewer meaningful commits while keeping unrelated work separate.
 argument-hint: "[--dry-run to stop after grouping, or blank to execute]"
 ---
 
 # Smart Commit
 
 You are a release engineer. Your job is to turn a messy working tree into a
-clean, logical commit history. You analyze all pending changes, group them
-by scope and type, order by dependency, and execute focused commits.
+clean, logical commit history. You analyze all pending changes, identify the
+outcomes they deliver, and create the fewest coherent commits that tell that
+story. A commit is a meaningful feature, fix, or workstream, not a transcript
+of the individual edits made along the way.
 
 **Arguments:** $ARGUMENTS
 
@@ -46,6 +48,10 @@ clearly belongs to a different wave.
 
 Use this project's directory-to-scope mapping:
 
+Use the repository's actual layout and recent commit conventions first. The map
+below is a fallback for matching layouts, not a reason to split a cross-layer
+outcome. Choose the scope that best describes the complete workstream.
+
 | Directory pattern | Scope |
 |---|---|
 | `core/agents/` | `agents` |
@@ -72,40 +78,51 @@ Use this project's directory-to-scope mapping:
 | `CLAUDE.md` | (chore) |
 | `.project/`, `.claude/` | (chore) |
 
-### Step 3: Group by cohesion
+### Step 3: Group by semantic outcome
 
 Apply these grouping rules in order:
 
-1. **Implementation + its tests together**: If `foo.py` changed and
-   `test_foo.py` also changed, they belong in the same commit.
+1. **Default to one commit per meaningful outcome.** Keep a coherent feature,
+   improvement pass, or operational change together even when it spans many
+   files or layers. Prefer a larger semantic unit over several micro-commits.
+   Do not impose a file-count or line-count target.
 
-2. **Separate by commit type**: Don't mix these types in one commit:
-   - `feat`: new functionality
-   - `fix`: bug fixes
-   - `refactor`: restructuring without behavior change
-   - `test`: test-only changes (no implementation counterpart)
-   - `docs`: documentation-only changes
-   - `chore`: tooling, config, meta-files
+2. **Include the complete supporting change set.** Implementation, necessary
+   fixes/refactors, configuration, migrations, assets, documentation, and tests
+   already present for the same outcome belong together. New versus modified
+   files, different directories, and different kinds of edits are not commit
+   boundaries. Do not create tests merely to prepare a commit.
 
-3. **Bulk mechanical changes together**: If many files have the same kind
-   of change (e.g., all e2e tests updated for a rename, all example apps
-   getting the same HTML change), group them into one commit even if they
-   span multiple scopes.
+3. **Choose one primary type after grouping.** A feature may include fixes,
+   refactoring, docs, and configuration without becoming separate `fix`,
+   `refactor`, `docs`, and `chore` commits. Use the type describing the outcome;
+   explain supporting changes in the body when useful.
 
-4. **New files vs modified files**: Untracked files that constitute a new
-   feature should be grouped with related modified files. Standalone new
-   files get their own commit.
+4. **Split only for a meaningful independent boundary.** Separate unrelated
+   goals, independently deployable or revertible changes, an independently
+   useful prerequisite, or materially different rollout/risk requirements.
+   A related cleanup or wording adjustment does not need its own commit unless
+   it has independent purpose. Do not combine unrelated work merely to reduce
+   the number of commits.
+
+5. **Merge artificial splits before staging.** For each proposed boundary ask:
+   would a reviewer understand, deploy, or revert these parts independently?
+   If not, combine them. When the whole tree serves one coherent goal, one
+   commit is the preferred result. Apply this to pending work only; do not
+   rewrite existing commits to achieve a tidier grouping.
+
+For example, a form's checkbox, spacing, validation feedback, and related docs
+can be one "Improve form usability" commit, not one commit per control or
+styling adjustment. A skill import, its local adaptations, discovery wiring,
+and usage documentation can be one complete capability commit.
 
 ### Step 4: Order by dependency
 
-Sort commit groups in this order:
-1. Core framework changes (models, storage, utils, actors)
-2. Feature implementations (agents, api, ssr)
-3. Frontend changes (static/)
-4. Example app changes (example_*)
-5. Test-only changes
-6. Documentation
-7. Chore (meta-files, config, traces)
+Order the semantic groups by real dependencies, with an independently useful
+prerequisite before its consumer. Keep each commit internally coherent. Do not
+split a complete outcome into backend, frontend, tests, and documentation commits
+just to follow a directory-based ordering. Independent groups can follow the
+user's priorities.
 
 ### Step 5: Flag mixed-concern files
 
@@ -126,14 +143,21 @@ type(scope): Description [wave]
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 ```
 
-- **type**: feat, fix, refactor, test, docs, chore
-- **scope**: from the scope mapping above
-- **Description**: imperative mood, capitalized, concise (under 70 chars)
+- **type**: feat, fix, refactor, test, docs, chore; select the primary outcome
+- **scope**: the complete workstream, informed by the repository's conventions
+- **Description**: imperative mood, capitalized, concise (under 70 chars).
+  Describe the capability or result, not a list of small edits or file names.
+  Put important implementation details in the body.
 - **[wave]**: detected wave tag
 
 ### Step 7: Present the plan
 
 Display the commit plan as a numbered list:
+
+If the user explicitly says to skip the plan and commit, proceed directly to
+execution after inspection and safety checks, then summarize the resulting
+commits. `--dry-run` always stops before any commit. Push only when explicitly
+requested; skipping the plan does not bypass secret checks or Git safety rails.
 
 ```
 Commit plan (N commits):
