@@ -11,10 +11,10 @@ comprehensive, data-driven, visually polished strategic analysis of a
 technology topic by coordinating parallel research agents and synthesis
 agents.
 
-All documents produced by this pipeline serve a **dual audience** — a
+All documents produced by this pipeline serve a **dual audience**: a
 semi-technical CEO who grasps architecture but isn't writing code daily,
 AND the engineering team who will evaluate and implement. The tone should
-be **confident, direct, and engaging** — accessible "so what?" intros
+be **confident, direct, and engaging**, with accessible "so what?" intros
 followed by technical depth, with icons and diagrams as the bridge.
 
 **Raw arguments:** $ARGUMENTS
@@ -25,8 +25,8 @@ Parse `$ARGUMENTS` to extract:
 - **Topic**: The main topic string (everything except recognized parameters)
 - **Agent count** (optional): `agents:N` where N is an integer (default: **4**)
 - **Synthesis mode** (optional): `synthesis:full` (default) or `synthesis:technical`
-  - `full` — launches all 3 synthesis agents (analysis report + executive summary + technical propositions & whitepaper)
-  - `technical` — launches only the `ideation-technical` agent (propositions + whitepaper). Skips the full analysis report and executive summary. Use for smaller/focused topics where the vision documents are sufficient.
+  - `full`: launches all 3 synthesis agents (analysis report + executive summary + technical propositions & whitepaper)
+  - `technical`: launches only the `ideation-technical` agent (propositions + whitepaper). Skips the full analysis report and executive summary. Use for smaller/focused topics where the vision documents are sufficient.
 
 Examples:
 - `"micro-frontend architecture"` → topic="micro-frontend architecture", agents=4, synthesis=full
@@ -50,15 +50,15 @@ topic comprehensively. The angles scale as follows:
 
 The standard angles are (use when N ≥ 3):
 
-1. **🏢 Industry landscape & decision framework** — Who uses this? Success
+1. **🏢 Industry landscape & decision framework**: Who uses this? Success
    stories, failures, adoption statistics, measured business outcomes. PLUS:
    build-vs-buy analysis, ROI calculations, when to adopt vs. avoid, decision
    trees with measurable criteria, anti-patterns, maintenance economics. This
    combined angle ensures the downstream synthesis agents have both the "what's
    out there" evidence AND the "should we do it" framework in one document.
-2. **⚡ Technical deep dive** — Architecture patterns, implementation approaches,
+2. **⚡ Technical deep dive**: Architecture patterns, implementation approaches,
    security considerations, DevOps implications, testing strategies
-3. **🔍 Relevance to our stack** — How our current architecture compares, what we
+3. **🔍 Relevance to our stack**: How our current architecture compares, what we
    already have, what gaps exist, competitive positioning
 
 Each **wildcard** slot (N=4 gets 1 wildcard, N=6 gets 3, etc.) is an angle
@@ -75,10 +75,10 @@ Adapt all angles to the specific topic as needed.
 Present the N angles to the user briefly before proceeding:
 
 > I'll research this topic from **N** angles:
-> 1. 🏢 [angle 1 — one line]
-> 2. ⚡ [angle 2 — one line]
-> 3. 🔍 [angle 3 — one line]
-> 4. 🎯 [wildcard angle — one line, with why this angle matters]
+> 1. 🏢 [angle 1 in one line]
+> 2. ⚡ [angle 2 in one line]
+> 3. 🔍 [angle 3 in one line]
+> 4. 🎯 [wildcard angle in one line, with why this angle matters]
 > *(list all N angles)*
 >
 > Synthesis mode: **full** / **technical-only**
@@ -129,10 +129,10 @@ For N>4, continue numbering: `05-<wildcard-2-slug>.md`, `06-<wildcard-3-slug>.md
 
 **Important for angle 1 (combined):** The researcher prompt for the industry +
 decision framework angle should explicitly request BOTH halves:
-- **Part A — Industry landscape:** Who uses this, success stories with measured
+- **Part A (Industry landscape):** Who uses this, success stories with measured
   outcomes, failure post-mortems, adoption statistics, market data, company
   case studies with team sizes and costs
-- **Part B — Decision framework:** Build-vs-buy analysis, ROI calculations,
+- **Part B (Decision framework):** Build-vs-buy analysis, ROI calculations,
   decision trees with measurable criteria, when to adopt vs. avoid, anti-patterns,
   maintenance economics, cost formulas
 
@@ -158,8 +158,8 @@ Once all research is complete, verify the research files exist and show the
 user a brief summary of what was gathered:
 
 > ✅ Research complete (`.project/research/<slug>/`):
-> - `01-<angle>.md` — N lines
-> - `02-<angle>.md` — N lines
+> - `01-<angle>.md`: N lines
+> - `02-<angle>.md`: N lines
 > - *(list all research files with line counts)*
 >
 > Synthesis mode: **full** / **technical-only**
@@ -167,7 +167,7 @@ user a brief summary of what was gathered:
 
 ### Vision Filename Convention
 
-Vision filenames use a **capitalized slug** — no run numbers, no document
+Vision filenames use a **capitalized slug**, with no run numbers or document
 numbers. Capitalize the first word of the slug, and capitalize known
 acronyms (AI, SSR, CLI, TUI, HTML, GraphQL, API, etc.).
 
@@ -179,9 +179,9 @@ Examples:
 - `html-compiler` → `HTML-compiler-summary.md`
 
 Vision documents for this run (depends on synthesis mode):
-- `<Slug>-summary.md` (executive summary — full mode only)
-- `<Slug>-propositions.md` (technical propositions — both modes)
-- `<Slug>-whitepaper.md` (whitepaper — both modes)
+- `<Slug>-summary.md` (executive summary, full mode only)
+- `<Slug>-propositions.md` (technical propositions, both modes)
+- `<Slug>-whitepaper.md` (whitepaper, both modes)
 
 ### Research Analysis Numbering
 
@@ -283,10 +283,10 @@ After all documents are written, verify they exist and report to the user:
 > *(list all N research files with line counts)*
 >
 > **📄 How to read these:**
-> - **5 min**: Executive summary (`.project/vision/<Slug>-summary.md`) — the board-meeting briefing
-> - **15 min**: Add the propositions (`.project/vision/<Slug>-propositions.md`) — see what we could build
-> - **30 min**: Add the whitepaper (`.project/vision/<Slug>-whitepaper.md`) — understand the deeper argument
-> - **60 min**: The full analysis (`.project/research/<slug>/0{N+1}-*-analysis.md`) — every detail, every number, every tradeoff
+> - **5 min**: Read the executive summary (`.project/vision/<Slug>-summary.md`) for the board-meeting briefing
+> - **15 min**: Add the propositions (`.project/vision/<Slug>-propositions.md`) to see what we could build
+> - **30 min**: Add the whitepaper (`.project/vision/<Slug>-whitepaper.md`) to understand the deeper argument
+> - **60 min**: Read the full analysis (`.project/research/<slug>/0{N+1}-*-analysis.md`) for every detail, every number, and every tradeoff
 
 ### Technical mode delivery example:
 
@@ -303,9 +303,9 @@ After all documents are written, verify they exist and report to the user:
 > *(list all N research files with line counts)*
 >
 > **📄 How to read these:**
-> - **10 min**: Propositions (`.project/vision/<Slug>-propositions.md`) — see what we could build
-> - **20 min**: Whitepaper (`.project/vision/<Slug>-whitepaper.md`) — understand the deeper argument
-> - **Browse**: Research files in `.project/research/<slug>/` — raw data and evidence
+> - **10 min**: Read the propositions (`.project/vision/<Slug>-propositions.md`) to see what we could build
+> - **20 min**: Read the whitepaper (`.project/vision/<Slug>-whitepaper.md`) to understand the deeper argument
+> - **Browse**: Read research files in `.project/research/<slug>/` for raw data and evidence
 
 ---
 
@@ -327,11 +327,11 @@ After all documents are written, verify they exist and report to the user:
 ## Customization
 
 ### Inline parameters (parsed from $ARGUMENTS)
-- **`agents:N`** — Number of research agents to launch (default: 4). Min: 2, max: 8.
-- **`synthesis:full|technical`** — Synthesis mode (default: full). `technical` skips analysis report and executive summary, produces only propositions + whitepaper.
+- **`agents:N`**: Number of research agents to launch (default: 4). Min: 2, max: 8.
+- **`synthesis:full|technical`**: Synthesis mode (default: full). `technical` skips analysis report and executive summary, produces only propositions + whitepaper.
 
 ### Natural language modifiers (in the topic string)
-- **Focus area**: "focus on security implications" — weight angle 2 toward security
-- **Audience**: "for engineering team only" — adjust tone to be more technical, less business
-- **Depth**: "quick overview" — equivalent to `agents:2 synthesis:technical`
-- **Comparison**: "compare X vs Y" — restructure angles around the two options
+- **Focus area**: "focus on security implications" means weight angle 2 toward security
+- **Audience**: "for engineering team only" means adjust tone to be more technical, less business
+- **Depth**: "quick overview" is equivalent to `agents:2 synthesis:technical`
+- **Comparison**: "compare X vs Y" means restructure angles around the two options

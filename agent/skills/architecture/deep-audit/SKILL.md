@@ -13,7 +13,7 @@ multi-resolution report that serves as the foundation for multiple downstream
 activities: bug hunting, feature development, integration planning, refactoring,
 and **strategic improvement**.
 
-Beyond diagnostics, you are expected to propose **concrete improvements** —
+Beyond diagnostics, you are expected to propose **concrete improvements**:
 simplifying mental models, tightening interfaces, improving composability,
 strengthening resilience, and making the system easier to extend. Every
 proposition must be grounded in evidence from the audit, not abstract best
@@ -27,8 +27,8 @@ Parse `$ARGUMENTS` to extract:
 - **Subsystem**: The subsystem or component to audit (e.g., "actor", "tx",
   "agents", "storage", "schema")
 - **Depth** (optional): `depth:quick` or `depth:deep` (default: **deep**)
-  - `quick` — 2 analysis agents with integrated propositions (~500-700 lines each)
-  - `deep` — 5 analysis agents (4 diagnostic + 1 strategic improvements), comprehensive reports (~500-800 lines each)
+  - `quick`: 2 analysis agents with integrated propositions (~500-700 lines each)
+  - `deep`: 5 analysis agents (4 diagnostic + 1 strategic improvements), comprehensive reports (~500-800 lines each)
 
 If no subsystem is provided, ask the user what they'd like to audit.
 
@@ -51,7 +51,7 @@ Glob: **/*<subsystem>*.js
 ```
 
 Also search for the subsystem in directory names, class names, and module names.
-Cast a wide net — it's better to include a false positive than miss a real file.
+Cast a wide net. It's better to include a false positive than miss a real file.
 Exclude `node_modules/`, `.git/`, `__pycache__/`, `*.egg-info/` directories.
 
 ### Step 2: Find usage sites
@@ -80,14 +80,14 @@ Present the discovered scope:
 > **Subsystem: `<subsystem>`**
 >
 > **Core files** (N files):
-> - `path/to/file1.py` — brief role description
-> - `path/to/file2.py` — brief role description
+> - `path/to/file1.py`: brief role description
+> - `path/to/file2.py`: brief role description
 > - ...
 >
 > **Key classes/functions**: `ClassName`, `function_name`, ...
 >
 > **Usage sites** (M files reference this subsystem):
-> - `path/to/consumer1.py` — how it uses the subsystem
+> - `path/to/consumer1.py`: how it uses the subsystem
 > - ...
 >
 > **Depth:** deep (5 dimensions) / quick (2 dimensions)
@@ -116,25 +116,25 @@ thoroughly, and write a structured report.
 ## Project Context
 <paste relevant sections from CLAUDE.md and sub-documents>
 
-## Core Files — READ ALL OF THESE
+## Core Files: READ ALL OF THESE
 <full file list from Phase 1>
 
-## Usage Sites — READ RELEVANT ONES
+## Usage Sites: READ RELEVANT ONES
 <usage site list from Phase 1>
 
 ## Rules
 - Read EVERY core file listed above. Do not skip any.
 - For each claim, cite the specific file:line_number.
 - Use tables, code snippets, and ASCII diagrams for clarity.
-- Be specific and concrete — no vague generalities.
+- Be specific and concrete. Avoid vague generalities.
 - If you find a bug or risk, show the exact code.
 - Do not launch sub-agents. Do not modify any source code.
 - Structure your report with clear H2/H3 headings for each topic.
-- Consider the project's design philosophy when evaluating — judge against
+- Consider the project's design philosophy when evaluating. Judge against
   the project's own principles, not abstract best practices.
 ```
 
-### Deep Mode (default) — 5 parallel agents
+### Deep Mode (default): 5 parallel agents
 
 Launch **5 parallel agents** using `subagent_type: "general-purpose"` in a
 **single message** (all 5 tool calls together).
@@ -161,7 +161,7 @@ Analyze the subsystem's structural design:
 - **Coupling analysis**: Which components know about each other directly.
   Identify tight coupling (concrete references) vs loose coupling (protocols,
   events, dependency injection). Rate each relationship.
-- **Cohesion assessment**: For each module — is it doing one thing well, or
+- **Cohesion assessment**: For each module, is it doing one thing well, or
   is it a grab bag? Identify any god classes or modules with mixed concerns.
 - **Boundary analysis**: What's internal implementation vs public surface.
   Are boundaries enforced (private, underscore convention, `__all__`) or just
@@ -181,9 +181,9 @@ Target: **500-800 lines** of dense, structured analysis.
 
 Analyze every public interface and usage pattern:
 
-- **Public API inventory**: Every public callable — parameters, return types,
+- **Public API inventory**: For every public callable, list parameters, return types,
   side effects, exceptions. Organize as a reference table.
-- **Contracts & invariants**: For each key API — what must be true before the
+- **Contracts & invariants**: For each key API, describe what must be true before the
   call (preconditions), what's guaranteed after (postconditions), what's
   always true (invariants).
 - **Error handling contracts**: What errors can each API raise? What does the
@@ -234,7 +234,7 @@ Find every bug, risk, and quality concern:
   calls in async context, missing caching opportunities, N+1 query patterns.
 - **Concurrency issues**: Shared mutable state, race conditions, async
   pitfalls, deadlock potential, missing locks or synchronization.
-- **Resource management**: File handles, connections, memory — are they
+- **Resource management**: Are file handles, connections, and memory
   properly opened/closed? Any leak potential?
 - **Technical debt inventory**: TODO/FIXME/HACK comments, workarounds,
   deprecated patterns, copy-paste duplication.
@@ -287,7 +287,7 @@ Target: **500-800 lines** of dense, structured analysis.
 **Output:** `.project/audits/<subsystem>/05-improvements.md`
 
 Propose concrete improvements to the subsystem. Every proposition must be
-grounded in what the code actually does today — not theoretical ideals.
+grounded in what the code actually does today, not theoretical ideals.
 The audience is a technical CEO and engineering team deciding what to invest in.
 
 - **Mental model simplification**: Where does the subsystem's mental model have
@@ -323,7 +323,7 @@ The audience is a technical CEO and engineering team deciding what to invest in.
 For each proposition:
 - **Current state**: What exists today (with file:line references)
 - **Problem**: Why this matters (concrete evidence, not opinion)
-- **Proposed change**: Specific design — code sketches, API signatures, data
+- **Proposed change**: Specific design with code sketches, API signatures, and data
   flow diagrams. Enough detail that an engineer could start implementing.
 - **Trade-offs**: What gets better, what gets worse, what might break
 - **Migration path**: How to get from here to there incrementally
@@ -332,7 +332,7 @@ Target: **500-800 lines** of dense, structured analysis.
 
 ---
 
-### Quick Mode — 2 parallel agents
+### Quick Mode: 2 parallel agents
 
 Launch **2 parallel agents** using `subagent_type: "general-purpose"` in a
 **single message**.
@@ -344,7 +344,7 @@ Launch **2 parallel agents** using `subagent_type: "general-purpose"` in a
 Cover all topics from the Architecture and API dimensions above, condensed.
 Additionally, include a **"Propositions"** section at the end covering:
 mental model simplification, interface tightening, composability improvements,
-and consistency gaps — drawn from the Strategic Improvements dimension.
+and consistency gaps, drawn from the Strategic Improvements dimension.
 Target: **500-700 lines**.
 
 #### Agent 2: Quality, Extensibility & Resilience (combines dimensions 3+4+5)
@@ -354,7 +354,7 @@ Target: **500-700 lines**.
 Cover all topics from the Quality and Extensibility dimensions above, condensed.
 Additionally, include a **"Propositions"** section at the end covering:
 resilience & error recovery, extensibility without modification, convention
-over configuration — drawn from the Strategic Improvements dimension.
+over configuration, drawn from the Strategic Improvements dimension.
 Target: **500-700 lines**.
 
 ---
@@ -369,11 +369,11 @@ Once all analysis reports are written, verify they exist and show the user
 a brief status:
 
 > Analysis complete (`.project/audits/<subsystem>/`):
-> - `01-architecture.md` — N lines
-> - `02-api-contracts.md` — N lines
-> - `03-quality-risks.md` — N lines
-> - `04-extensibility.md` — N lines
-> - `05-improvements.md` — N lines
+> - `01-architecture.md`: N lines
+> - `02-api-contracts.md`: N lines
+> - `03-quality-risks.md`: N lines
+> - `04-extensibility.md`: N lines
+> - `05-improvements.md`: N lines
 >
 > Synthesizing final audit...
 
@@ -401,14 +401,14 @@ Write the final audit to: <output path>
 
 The document MUST follow this exact structure:
 
-# <Subsystem> — Deep Audit Report
+# <Subsystem>: Deep Audit Report
 
 ## Executive Summary
 3-5 paragraphs written for a **technical CEO and engineering leads**:
 what this subsystem does, how well it does it, the most important findings,
 the top 3 recommendations, and the top 3 strategic improvement propositions.
 Frame findings in terms of engineering velocity, system resilience, and
-developer experience — not just correctness. A reader should be able to stop
+developer experience, not just correctness. A reader should be able to stop
 here and know what needs attention and what investments would pay off.
 
 ## Component Overview
@@ -440,7 +440,7 @@ Non-critical improvements ranked by impact/effort ratio. Table format:
 ## Strategic Propositions
 
 This section is the forward-looking heart of the audit. Each proposition is
-a concrete, evidence-based recommendation for improving the subsystem —
+a concrete, evidence-based recommendation for improving the subsystem,
 not a vague suggestion. Written for a technical CEO deciding what to invest
 in and an engineering team deciding how to execute.
 
@@ -494,7 +494,7 @@ Identify quick wins (high impact, low effort) and strategic investments
 
 ### For Refactoring
 - Technical debt items ranked by severity and coupling risk
-- Suggested refactoring sequence (dependency order — what to change first)
+- Suggested refactoring sequence (dependency order, showing what to change first)
 - Risk assessment for each proposed change
 - Before/after sketches for major refactoring candidates
 
@@ -505,18 +505,18 @@ Table of ALL findings and propositions across all dimensions:
 (Type: Finding / Proposition)
 
 ## Rules
-- Cross-reference findings across dimension reports — if Architecture and
+- Cross-reference findings across dimension reports. If Architecture and
   Quality both flag the same area, consolidate into one finding.
-- Cross-reference improvement propositions with findings — if a proposition
+- Cross-reference improvement propositions with findings. If a proposition
   directly addresses a finding, link them explicitly.
 - Resolve contradictions: if one report says X is good and another says X
   is risky, investigate and take a position.
 - Every finding must have a file:line citation.
-- Every proposition must include a concrete code sketch or API signature —
+- Every proposition must include a concrete code sketch or API signature,
   not just a description of what should change.
 - The Strategic Propositions section should be actionable enough that an
   engineer could create a task or PR from any single proposition.
-- The Downstream Use Guide sections must be ACTIONABLE — a developer should
+- The Downstream Use Guide sections must be ACTIONABLE. A developer should
   be able to pick up any section and start working immediately.
 - Target: 1000-1500 lines for the complete document.
 ```
@@ -543,20 +543,20 @@ After the final audit is written, verify it exists and report:
 > | **Final Audit** | `06-<subsystem>-audit.md` | N |
 >
 > **Top 3 findings:**
-> 1. [most critical finding — one line]
-> 2. [second finding — one line]
-> 3. [third finding — one line]
+> 1. [most critical finding in one line]
+> 2. [second finding in one line]
+> 3. [third finding in one line]
 >
 > **Top 3 propositions:**
-> 1. [highest-impact proposition — one line + effort estimate]
-> 2. [second proposition — one line + effort estimate]
-> 3. [third proposition — one line + effort estimate]
+> 1. [highest-impact proposition in one line + effort estimate]
+> 2. [second proposition in one line + effort estimate]
+> 3. [third proposition in one line + effort estimate]
 >
 > **How to use this audit:**
-> - **5 min**: Executive Summary in the final audit — big picture, key decisions, and strategic direction
-> - **15 min**: Key Findings + Strategic Propositions — what needs attention and what to invest in
-> - **30 min**: Downstream Use Guide — actionable next steps for your specific goal
-> - **Deep dive**: Individual dimension reports — every detail with file:line refs
+> - **5 min**: Executive Summary in the final audit (big picture, key decisions, and strategic direction)
+> - **15 min**: Key Findings + Strategic Propositions (what needs attention and what to invest in)
+> - **30 min**: Downstream Use Guide (actionable next steps for your specific goal)
+> - **Deep dive**: Individual dimension reports (every detail with file:line refs)
 >
 > **Next steps:** Use these findings with `/bugfix` or `/ideation`, or ask the
 > plan agent to turn selected recommendations into an implementation plan.
@@ -572,9 +572,9 @@ After the final audit is written, verify it exists and report:
 > | **Final Audit** | `03-<subsystem>-audit.md` | N |
 >
 > **Top 3 findings:**
-> 1. [most critical finding — one line]
-> 2. [second finding — one line]
-> 3. [third finding — one line]
+> 1. [most critical finding in one line]
+> 2. [second finding in one line]
+> 3. [third finding in one line]
 
 ---
 
@@ -601,13 +601,13 @@ These are embedded in every agent prompt:
 
 1. **Read the code, don't guess.** Every claim must cite file:line.
 2. **Be concrete.** "The error handling is weak" is useless. "In actor.py:142,
-   `send()` catches Exception but logs nothing — a failed message is silently
+   `send()` catches Exception but logs nothing, so a failed message is silently
    dropped" is useful.
 3. **Show, don't tell.** Include code snippets for bugs, patterns, and examples.
 4. **Quantify when possible.** "3 of 7 public methods lack input validation"
    beats "some methods lack validation."
 5. **Distinguish fact from opinion.** "This IS a bug" vs "This COULD be a bug
-   under condition X" — be explicit about certainty level.
+   under condition X": be explicit about certainty level.
 6. **Judge against the project's own philosophy.** Read CLAUDE.md. Evaluate
    against the project's stated principles, not generic best practices from
    a textbook.

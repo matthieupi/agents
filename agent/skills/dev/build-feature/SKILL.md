@@ -22,12 +22,12 @@ Parse `$ARGUMENTS` to extract:
 - **Plan name**: The feature plan to build (matches a directory or file in
   `.project/features/`)
 - **Execute** (optional): `execute:yes` (default) or `execute:no`
-  - `yes` — generate JSONL then execute tasks via subagents
-  - `no` — generate JSONL only (dry run, for review)
+  - `yes`: generate JSONL then execute tasks via subagents
+  - `no`: generate JSONL only (dry run, for review)
 - **Parallel** (optional): `parallel:yes` (default) or `parallel:no`
-  - `yes` — run tasks within the same wave in parallel (using worktree
+  - `yes`: run tasks within the same wave in parallel (using worktree
     isolation)
-  - `no` — run all tasks sequentially regardless of wave
+  - `no`: run all tasks sequentially regardless of wave
 
 If no plan name is provided, list available plans from `.project/features/`
 and ask the user to pick one using AskUserQuestion.
@@ -42,11 +42,11 @@ Find and read the plan files:
 
 Search for the plan in `.project/features/`:
 
-1. **Directory match**: `.project/features/<plan-name>/` — read ALL `.md`
+1. **Directory match**: For `.project/features/<plan-name>/`, read ALL `.md`
    files in the directory, sorted by filename (numbered files first:
    `1-backend.md`, `2-frontend.md`, etc., then the main plan file)
-2. **File match**: `.project/features/<plan-name>.md` — single file plan
-3. **Done directory**: `.project/features/done/<plan-name>/` — completed
+2. **File match**: `.project/features/<plan-name>.md` (single file plan)
+3. **Done directory**: `.project/features/done/<plan-name>/` contains completed
    features (warn user these are already implemented)
 
 If no match, search for partial matches and suggest alternatives.
@@ -61,15 +61,15 @@ Read ALL plan files found. For multi-file plans, read them in this order:
 
 Plans reference source files with specific paths and line numbers. Read
 the KEY source files referenced in the plan (the ones that will be modified).
-This is essential — you need to see the CURRENT state of the code, not just
+This is essential: you need to see the CURRENT state of the code, not just
 what the plan describes (the code may have changed since the plan was written).
 
 Limit to the 10-15 most important files. Read them in parallel.
 
 ### Step 4: Read project context
 
-Read `CLAUDE.md` and — based on whether this is backend, frontend, or
-full-stack work — read `claude-back.md` and/or `claude-front.md`. These
+Read `CLAUDE.md` and, based on whether this is backend, frontend, or
+full-stack work, read `claude-back.md` and/or `claude-front.md`. These
 contain conventions and patterns that every task must reference.
 
 ---
@@ -98,7 +98,7 @@ Each task must contain EVERYTHING a memoryless agent needs to implement it.
    - Wave 1: Tasks with no dependencies (can all run in parallel)
    - Wave 2: Tasks that depend on wave 1 tasks
    - Wave N: Tasks that depend on wave N-1 tasks
-   Minimize the number of waves — more parallelism = faster execution.
+   Minimize the number of waves: more parallelism = faster execution.
 
 5. **Test tasks are separate**: Writing tests is its own task, typically in
    a later wave (after the code it tests exists).
@@ -128,7 +128,7 @@ proofreadd)
 | `title` | string | Short imperative title: "Add debug flag to /_meta endpoint" |
 | `intent` | string | WHY this change exists. Business/technical motivation. 2-3 sentences. |
 | `context` | string | Architectural context the agent needs. How this fits the system, what patterns to follow, what other components interact with this. Include relevant excerpts from CLAUDE.md. 1-2 paragraphs. |
-| `instructions` | string | Step-by-step implementation guide. Include EXACT code snippets showing what to add/change. Reference specific functions, line patterns (not numbers — they drift). Use markdown formatting within the string. |
+| `instructions` | string | Step-by-step implementation guide. Include EXACT code snippets showing what to add/change. Reference specific functions, line patterns (not numbers, which drift). Use markdown formatting within the string. |
 | `files.read` | string[] | Absolute paths the agent MUST read before implementing. Include the files being modified plus any files needed for understanding context. |
 | `files.modify` | string[] | Absolute paths that will be changed. |
 | `files.create` | string[] | Absolute paths of new files to create. |
@@ -148,7 +148,7 @@ For the `context` field, include:
 
 For the `instructions` field, include:
 - The CURRENT code at the modification point (copy from the source file you
-  read — this serves as the agent's "old_string" for Edit tool)
+  read; this serves as the agent's "old_string" for Edit tool)
 - The TARGET code after modification
 - Step-by-step narrative connecting the changes
 - Any imports to add
@@ -167,7 +167,7 @@ Write the JSONL file to: `.project/features/<plan-name>/<plan-name>.jsonl`
 (for directory-based plans) or `.project/features/<plan-name>.jsonl` (for
 single-file plans).
 
-Use the Write tool. Each line must be valid JSON (use `json.dumps()` style —
+Use the Write tool. Each line must be valid JSON (use `json.dumps()` style:
 no trailing commas, proper escaping of quotes and newlines in strings).
 
 ---
@@ -180,7 +180,7 @@ Present the task breakdown to the user:
 >
 > Generated `<N>` tasks in `<W>` waves:
 >
-> **Wave 1** (no dependencies — can run in parallel):
+> **Wave 1** (no dependencies; can run in parallel):
 > | ID | Title | Files | Verification |
 > |----|-------|-------|-------------|
 > | task-01 | Add X to Y | `file.py` | pytest test_x.py |
@@ -231,11 +231,11 @@ For each wave (1, 2, 3, ...):
 2. After the wave completes, report wave status to the user
 3. Move to the next wave
 
-### Parallel Mode (`parallel:yes` — default)
+### Parallel Mode (`parallel:yes`, default)
 
 For each wave (1, 2, 3, ...):
 1. Identify all tasks in this wave
-2. Check for file conflicts — if two tasks modify the same file, they
+2. Check for file conflicts. If two tasks modify the same file, they
    CANNOT run in parallel. Split into sub-waves if needed:
    - Sub-wave A: tasks with no file overlap (run in parallel with worktrees)
    - Sub-wave B: remaining tasks (run sequentially after sub-wave A)
@@ -274,11 +274,11 @@ After each wave completes successfully:
    multiple tasks (e.g., full test suite)
 2. **Report progress**:
 
-> **Wave {N}/{total} complete** — {success_count}/{total_in_wave} tasks succeeded
+> **Wave {N}/{total} complete**: {success_count}/{total_in_wave} tasks succeeded
 >
 > | ID | Title | Status | Notes |
 > |----|-------|--------|-------|
-> | task-01 | ... | SUCCESS | — |
+> | task-01 | ... | SUCCESS | None |
 > | task-02 | ... | SUCCESS | Minor warning about X |
 >
 > Proceeding to wave {N+1}...
@@ -319,12 +319,12 @@ After all waves complete:
 > | Tests passing | N/M |
 >
 > **Files changed:**
-> - `path/to/file.py` — what changed (summary)
-> - `path/to/new_file.py` — new (purpose)
+> - `path/to/file.py`: what changed (summary)
+> - `path/to/new_file.py`: new (purpose)
 >
 > **Test results:**
-> - `test_suite_1` — N passed, M failed
-> - `test_suite_2` — N passed
+> - `test_suite_1`: N passed, M failed
+> - `test_suite_2`: N passed
 >
 > **PRD file:** `.project/features/<plan-name>/<plan-name>.jsonl`
 >
@@ -395,7 +395,7 @@ Given a plan with sections for "backend config", "API endpoint", and "tests",
 the JSONL might look like:
 
 ```jsonl
-{"id":"task-01","wave":1,"title":"Add debug flag to config module","intent":"The debug flag controls auto-reload, auto-admin, and request logging. It needs to be a runtime-mutable global in the config module.","context":"config.py is the central configuration module. It uses module-level globals set by configure(). DEBUG is already defined (line 21) but only controls Swagger docs. This change extends its reach.","instructions":"Step 1: Open /workspace/src/n3tx/core/config.py...\n\nStep 2: Find the existing DEBUG line...\n\nStep 3: No changes needed — DEBUG already exists and is mutable via configure().","files":{"read":["/workspace/src/n3tx/core/config.py"],"modify":[],"create":[]},"conventions":"Config uses module-level globals, not a Config class. configure() uses globals() to set them.","verification":{"commands":["python3 -c \"from n3tx.core.config import DEBUG; print(DEBUG)\""],"checks":["DEBUG is importable and defaults to False"]},"depends_on":[]}
+{"id":"task-01","wave":1,"title":"Add debug flag to config module","intent":"The debug flag controls auto-reload, auto-admin, and request logging. It needs to be a runtime-mutable global in the config module.","context":"config.py is the central configuration module. It uses module-level globals set by configure(). DEBUG is already defined (line 21) but only controls Swagger docs. This change extends its reach.","instructions":"Step 1: Open /workspace/src/n3tx/core/config.py...\n\nStep 2: Find the existing DEBUG line...\n\nStep 3: No changes needed because DEBUG already exists and is mutable via configure().","files":{"read":["/workspace/src/n3tx/core/config.py"],"modify":[],"create":[]},"conventions":"Config uses module-level globals, not a Config class. configure() uses globals() to set them.","verification":{"commands":["python3 -c \"from n3tx.core.config import DEBUG; print(DEBUG)\""],"checks":["DEBUG is importable and defaults to False"]},"depends_on":[]}
 {"id":"task-02","wave":1,"title":"Add debug key to /_meta endpoint","intent":"The frontend needs to know whether the backend is in debug mode so it can show a DEBUG badge and enable timing info in method responses.","context":"discovery.py builds the /_meta response via _build_meta(). The frontend fetches this on boot via ntx-topbar.js. Adding a key here propagates to the frontend automatically.","instructions":"Step 1: Read /workspace/src/n3tx/core/api/discovery.py\n\nStep 2: Add 'from n3tx.core import config' after the logger line\n\nStep 3: Add 'debug': config.DEBUG to the return dict in _build_meta()...","files":{"read":["/workspace/src/n3tx/core/api/discovery.py","/workspace/src/n3tx/core/config.py"],"modify":["/workspace/src/n3tx/core/api/discovery.py"],"create":[]},"conventions":"Imports: stdlib first, then n3tx.core. Use 'from n3tx.core import config' not 'from n3tx.core.config import DEBUG' (read at call time, not import time).","verification":{"commands":["cd /workspace && python3 -m pytest src/n3tx/core/tests/unit/test_discovery.py -v --tb=short"],"checks":["_build_meta() returns a dict with 'debug' key","debug value is a boolean matching config.DEBUG"]},"depends_on":[]}
 {"id":"task-03","wave":2,"title":"Write unit tests for debug mode","intent":"Tests validate that the debug flag propagates correctly and that debug-dependent behavior activates.","context":"Unit tests live in src/n3tx/core/tests/unit/. They use pytest with class-based grouping and pytestmark = pytest.mark.unit. Fixtures use autouse=True for cleanup.","instructions":"Create /workspace/src/n3tx/core/tests/unit/test_debug_mode.py with...\n\n[full test code here]","files":{"read":["/workspace/src/n3tx/core/tests/unit/test_discovery.py","/workspace/src/n3tx/core/tests/unit/conftest.py"],"modify":[],"create":["/workspace/src/n3tx/core/tests/unit/test_debug_mode.py"]},"conventions":"Test naming: test_{feature}_{scenario}. Class grouping: TestFeatureName. Marker: pytestmark = pytest.mark.unit. Fixtures: autouse=True for state restoration.","verification":{"commands":["cd /workspace && python3 -m pytest src/n3tx/core/tests/unit/test_debug_mode.py -v --tb=short"],"checks":["All new tests pass","No regressions in existing discovery tests"]},"depends_on":["task-01","task-02"]}
 ```

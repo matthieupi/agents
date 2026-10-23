@@ -46,13 +46,13 @@ If the working tree is clean, say so clearly and stop.
 
 Run these commands in parallel using the Bash tool:
 
-1. `git status --short --branch` — branch + staged/unstaged/untracked summary
-2. `git diff --stat` — unstaged scope summary
-3. `git diff --cached --stat` — staged scope summary
-4. `git diff --name-status` — unstaged file state list
-5. `git diff --cached --name-status` — staged file state list
-6. `git log --oneline -10` — recent context and commit style
-7. `git ls-files --others --exclude-standard` — exact untracked file list
+1. `git status --short --branch`: branch + staged/unstaged/untracked summary
+2. `git diff --stat`: unstaged scope summary
+3. `git diff --cached --stat`: staged scope summary
+4. `git diff --name-status`: unstaged file state list
+5. `git diff --cached --name-status`: staged file state list
+6. `git log --oneline -10`: recent context and commit style
+7. `git ls-files --others --exclude-standard`: exact untracked file list
 
 From this snapshot, determine:
 
@@ -149,12 +149,12 @@ Present the final answer as an engineering status report with these sections:
 
 For each workstream:
 
-- **Name** — concise title
-- **Type / State** — e.g. `feat / mixed`
-- **Files** — key paths only, grouped logically
-- **What changed** — concrete implementation summary
-- **Why it matters** — product, architecture, or workflow impact
-- **Notes** — risks, missing verification, mixed concerns, or blockers
+- **Name**: concise title
+- **Type / State**: e.g. `feat / mixed`
+- **Files**: key paths only, grouped logically
+- **What changed**: concrete implementation summary
+- **Why it matters**: product, architecture, or workflow impact
+- **Notes**: risks, missing verification, mixed concerns, or blockers
 
 ### 3. File State Breakdown
 
@@ -206,7 +206,7 @@ If your report only lists files or repeats raw git output, it is too shallow.
 
 ---
 
-## Safety Rails — NEVER Do These
+## Safety Rails: NEVER Do These
 
 - **NEVER** run `git add`, `git commit`, `git push`, `git reset`, `git stash`,
   `git checkout --`, or `git commit --amend`

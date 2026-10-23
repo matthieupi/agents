@@ -36,9 +36,9 @@ After both audit reports are complete, present a combined summary to the user
 and synthesize findings into a prioritized task list.
 
 Prioritize by:
-1. **Impact** — How much does this affect real-world user experience?
-2. **Blast radius** — How many operations/requests does this bottleneck affect?
-3. **Effort** — Prefer high-impact, low-effort fixes first.
+1. **Impact**: How much does this affect real-world user experience?
+2. **Blast radius**: How many operations/requests does this bottleneck affect?
+3. **Effort**: Prefer high-impact, low-effort fixes first.
 
 Create numbered tasks using the TaskCreate tool. Group related fixes that
 touch the same file (e.g., connection pooling + WAL mode = one task).
@@ -51,13 +51,13 @@ Present the full list to the user before starting implementation.
 
 For **each task**, follow this exact workflow:
 
-### Step 1 — Read before writing
+### Step 1: Read before writing
 
 Read every file you're about to change. Understand existing patterns, intent,
 and how the change fits the architecture. Never propose changes to code you
 haven't read.
 
-### Step 2 — Propose the diff
+### Step 2: Propose the diff
 
 Present the proposed changes with:
 - **Problem**: What's slow and why (1-2 sentences)
@@ -65,15 +65,15 @@ Present the proposed changes with:
 - **Diff**: Code changes in diff format with enough surrounding context
 - **Behavioral impact**: "Zero behavioral changes" or describe differences
 
-### Step 3 — Wait for approval
+### Step 3: Wait for approval
 
 **Do not apply changes until the user approves.** They may:
-- Approve as-is — apply and test
-- Request modifications — revise and re-propose
-- Reject entirely — skip and move to next task
-- Identify the architecture already handles it — scrub the task
+- Approve as-is: apply and test
+- Request modifications: revise and re-propose
+- Reject entirely: skip and move to next task
+- Identify that the architecture already handles it: scrub the task
 
-### Step 4 — Apply and test
+### Step 4: Apply and test
 
 After approval:
 - Apply changes using the Edit tool (surgical edits, not full rewrites)
@@ -81,10 +81,10 @@ After approval:
 - Run the full test suite immediately
 - Report: "N tests pass, M pre-existing failures"
 
-### Step 5 — Mark complete and continue
+### Step 5: Mark complete and continue
 
 Update task status and move to the next one. If tests fail, fix the root
-cause — don't revert unless the approach is fundamentally wrong.
+cause. Don't revert unless the approach is fundamentally wrong.
 
 ---
 
@@ -92,12 +92,12 @@ cause — don't revert unless the approach is fundamentally wrong.
 
 After all tasks are complete, create changelog entries:
 
-1. **Detailed reports** in the project's changelog directory (one per stack)
-   — Table of contents, summary table, per-fix sections with Problem/Fix/Rationale,
+1. **Detailed reports** in the project's changelog directory (one per stack):
+   Table of contents, summary table, per-fix sections with Problem/Fix/Rationale,
    file-by-file change summary, verification results
 
-2. **Concise entries** in the main CHANGELOG.md
-   — One bullet per optimization with a one-line description, linked to
+2. **Concise entries** in the main CHANGELOG.md:
+   One bullet per optimization with a one-line description, linked to
    the detailed report
 
 ---
@@ -129,10 +129,10 @@ After all tasks are complete, create changelog entries:
 
 ---
 
-## Anti-Patterns — Do NOT
+## Anti-Patterns: Do NOT
 
-- **Don't add caching that hides bugs** — stale cache is worse than slow
-- **Don't optimize code that runs once** — startup and migration can be slow
-- **Don't break dev experience for prod perf** — no aggressive HTTP caching in dev
-- **Don't pre-optimize for scale you don't have** — pool of 4 is fine for SQLite
-- **Don't change behavior** — same inputs, same outputs, faster
+- **Don't add caching that hides bugs**. A stale cache is worse than slow execution.
+- **Don't optimize code that runs once**. Startup and migration can be slow.
+- **Don't break dev experience for prod perf**. Avoid aggressive HTTP caching in dev.
+- **Don't pre-optimize for scale you don't have**. A pool of 4 is fine for SQLite.
+- **Don't change behavior**. Keep the same inputs and outputs, but execute faster.

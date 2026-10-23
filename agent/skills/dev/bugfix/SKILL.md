@@ -1,6 +1,6 @@
 ---
 name: bugfix
-description: Systematic bug fixing via TDD red-green-refactor cycle. Reproduces the bug with failing tests, fixes with surgical precision, then evaluates for deeper architectural improvements. Undoes and retries on failure — never ships a guess.
+description: Systematic bug fixing via TDD red-green-refactor cycle. Reproduces the bug with failing tests, fixes with surgical precision, then evaluates for deeper architectural improvements. Undoes and retries on failure; never ships a guess.
 argument-hint: "<description of the bug to fix>"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "<description of the bug to fix>"
 
 You are a senior debugger. Your job is to fix a bug using disciplined TDD:
 reproduce first, understand second, fix third, optimize fourth. You never
-guess-and-check — you prove the root cause before touching production code.
+guess-and-check; you prove the root cause before touching production code.
 
 **Bug description:** $ARGUMENTS
 
@@ -28,45 +28,45 @@ guess-and-check — you prove the root cause before touching production code.
 | 1 | **Write failing tests** | 3+ test files written |
 | 2 | **Confirm red** | All tests fail for the right reason |
 | 3 | **Diagnose** | Root cause identified, theory validated read-only |
-| 4 | **Propose fix — USER REVIEW** | User approves the proposed solution |
+| 4 | **Propose fix: USER REVIEW** | User approves the proposed solution |
 | 5 | **Apply fix** | All tests pass (or 4-iteration limit hit) |
 | 6 | **Root cause analysis** | Root cause categorized, assessment presented |
-| 7 | **Optimal fix — USER REVIEW** | User approves deeper fix if one exists |
+| 7 | **Optimal fix: USER REVIEW** | User approves deeper fix if one exists |
 | 8 | **Full suite validation** | No regressions in full test suite |
 | 9 | **Summary** | Summary presented, no auto-commit |
 
 ---
 
-## Phase 1: Reproduce — Write Failing Tests
+## Phase 1: Reproduce with Failing Tests
 
 > **This is your FIRST action. Before you read a single line of source code,
-> before you form any theory, before you investigate anything — write the
+> before you form any theory, before you investigate anything, write the
 > tests. The tests ARE the investigation. They tell you what's broken and
 > where.**
 
 Write **at least three** failing tests that reproduce the reported bug from
-different angles. Mix and match freely from these test types — any
+different angles. Mix and match freely from these test types, using any
 combination that best covers the bug:
 
-- **Unit** — isolate the broken function/method directly
-- **Integration** — exercise the bug through the API or multi-module path
-- **E2E / Playwright** — reproduce the bug as a user would see it
-- **Frontend unit JS** — test the broken rendering or interaction logic
-- **Edge-case** — hit boundary conditions around the bug
-- **Happy-path** — confirm the expected behavior is actually broken
-- **Backend + Frontend** — cover both sides when the bug spans the API boundary
+- **Unit**: isolate the broken function/method directly
+- **Integration**: exercise the bug through the API or multi-module path
+- **E2E / Playwright**: reproduce the bug as a user would see it
+- **Frontend unit JS**: test the broken rendering or interaction logic
+- **Edge-case**: hit boundary conditions around the bug
+- **Happy-path**: confirm the expected behavior is actually broken
+- **Backend + Frontend**: cover both sides when the bug spans the API boundary
 
 Pick the three (or more) that give the most useful signal for this specific
-bug. There is no fixed pairing — use your judgment.
+bug. There is no fixed pairing. Use your judgment.
 
 Place tests in the appropriate directory following project conventions:
-- `src/n3tx/core/tests/unit/` — framework unit tests
-- `example_api/tests/` — integration tests (Level 1/2 direct routes)
-- `example_actor/tests/` — integration tests (Level 3 actor routing)
-- `example_grants/tests/` — grants/agents app tests
-- `src/n3tx/static/tests/` — frontend tests
+- `src/n3tx/core/tests/unit/`: framework unit tests
+- `example_api/tests/`: integration tests (Level 1/2 direct routes)
+- `example_actor/tests/`: integration tests (Level 3 actor routing)
+- `example_grants/tests/`: grants/agents app tests
+- `src/n3tx/static/tests/`: frontend tests
 
-**Name the test functions clearly** — they should describe the bug, not the
+**Name the test functions clearly**. They should describe the bug, not the
 fix. Example: `test_like_returns_500_when_user_not_authenticated` rather than
 `test_like_fix`.
 
@@ -78,7 +78,7 @@ is the minimum.
 ## Phase 2: Confirm Red
 
 Run **only** the tests you just wrote. They must **all fail** for the reason
-the bug manifests. If a test passes, it doesn't reproduce the bug — rewrite
+the bug manifests. If a test passes, it doesn't reproduce the bug. Rewrite
 it until it fails correctly.
 
 ```bash
@@ -87,9 +87,9 @@ python3 -m pytest path/to/test_file.py::test_name_1 path/to/test_file.py::test_n
 
 Verify the failure messages match the reported bug behavior. If they fail
 for a different reason (import error, fixture issue, etc.), fix the test
-setup — don't proceed until failures are genuine reproductions.
+setup. Don't proceed until failures are genuine reproductions.
 
-Save the exact pytest command — you will reuse it in every iteration.
+Save the exact pytest command. You will reuse it in every iteration.
 
 ---
 
@@ -99,20 +99,20 @@ This phase is **read-only**. You investigate the bug without changing any
 production code. The goal is to understand the root cause well enough to
 propose a concrete fix.
 
-### 3.1 — Analyze
+### 3.1: Analyze
 
 Study the failing test output, relevant source code, and data flow. Form a
 theory about the root cause. Be specific: "the bug is in X function because
 Y condition isn't handled when Z happens."
 
-### 3.2 — Validate Theory Without Changing Code
+### 3.2: Validate Theory Without Changing Code
 
 Prove your theory through read-only investigation before making any edits:
 
 - Read the suspect code paths end-to-end
 - Trace the data flow from input to failure point
 - Check if the theory explains **all** failing tests, not just one
-- Look for prior art — has this pattern been handled correctly elsewhere?
+- Look for prior art: has this pattern been handled correctly elsewhere?
 - Add temporary `print()` / `console.log()` statements and run the tests
   to confirm the theory if needed (remove them after)
 
@@ -120,19 +120,19 @@ Do **not** proceed to Phase 4 unless you are confident in the root cause.
 
 ---
 
-## Phase 4: Propose Fix — USER REVIEW
+## Phase 4: Propose Fix (USER REVIEW)
 
 > **STOP. Do not write any fix yet.** Present your findings to the user and
 > wait for approval before touching production code.
 
 Use `AskUserQuestion` to present the following and get explicit approval:
 
-1. **Bug location** — exact file(s) and function(s) where the bug lives
-2. **Root cause** — why it happens (one clear sentence)
-3. **Proposed fix** — what you will change and why (be specific: "in
+1. **Bug location**: exact file(s) and function(s) where the bug lives
+2. **Root cause**: why it happens (one clear sentence)
+3. **Proposed fix**: what you will change and why (be specific: "in
    `file.py:function()`, change X to Y because Z")
-4. **Scope** — which files will be modified and roughly how many lines
-5. **Risk** — anything this fix might affect beyond the bug
+4. **Scope**: which files will be modified and roughly how many lines
+5. **Risk**: anything this fix might affect beyond the bug
 
 The user may:
 - **Approve** → proceed to Phase 5
@@ -147,24 +147,24 @@ Do **not** proceed to Phase 5 without explicit user approval.
 
 Iterate until green. Each iteration follows this strict sequence:
 
-### 5.1 — Apply Fix
+### 5.1: Apply Fix
 
 Make the **minimal change** needed to fix the bug, as approved in Phase 4.
-Do not refactor, do not clean up adjacent code, do not improve naming — just
+Do not refactor, do not clean up adjacent code, do not improve naming. Just
 fix the bug.
 
-### 5.2 — Verify
+### 5.2: Verify
 
 Run the **same three+ tests** from Phase 2 (the saved pytest command).
 
-### 5.3 — Evaluate Result
+### 5.3: Evaluate Result
 
 - **All tests pass** → exit the loop, proceed to Phase 6.
 - **Any test fails** → the fix is wrong. **Undo all changes** made in 5.1
   (`git checkout -- <files>`) and return to 5.1 with an adjusted approach.
   If the failure suggests the approved approach is fundamentally wrong,
   go back to Phase 4 and re-propose to the user. Do not iterate on a
-  broken fix — revert and rethink.
+  broken fix. Revert and rethink.
 
 **Hard limit: 4 iterations.** If you haven't found the fix after 4 loops,
 stop and present your findings to the user:
@@ -179,11 +179,11 @@ stop and present your findings to the user:
 The bug is fixed, but is the fix *right*? Analyze deeper:
 
 1. **Why did this bug exist?** Categorize:
-   - **Misunderstood architecture** — code conflicts with the system's patterns
-   - **Architecture gap** — no clean way to do the right thing, so a hack was used
-   - **Violated expectations** — success channel carrying failure (the 200-OK pattern)
-   - **Missing validation** — bad input accepted at a system boundary
-   - **Stale assumption** — code assumed something that changed upstream
+   - **Misunderstood architecture**: code conflicts with the system's patterns
+   - **Architecture gap**: no clean way to do the right thing, so a hack was used
+   - **Violated expectations**: success channel carrying failure (the 200-OK pattern)
+   - **Missing validation**: bad input accepted at a system boundary
+   - **Stale assumption**: code assumed something that changed upstream
 
 2. **Is this a band-aid or the real fix?** Ask:
    - Does the fix address the root cause or just suppress the symptom?
@@ -200,7 +200,7 @@ The bug is fixed, but is the fix *right*? Analyze deeper:
 
 ---
 
-## Phase 7: Optimal Fix — USER REVIEW (if applicable)
+## Phase 7: Optimal Fix (USER REVIEW, if applicable)
 
 If Phase 6 identified a better solution:
 
@@ -209,10 +209,10 @@ If Phase 6 identified a better solution:
 
 Use `AskUserQuestion` to present:
 
-1. **Current fix** — what's in place now and why it's suboptimal
-2. **Proposed optimal fix** — what you would change instead
-3. **Trade-off** — scope increase, risk, and benefit of the deeper fix
-4. **Recommendation** — your honest take on whether it's worth it
+1. **Current fix**: what's in place now and why it's suboptimal
+2. **Proposed optimal fix**: what you would change instead
+3. **Trade-off**: scope increase, risk, and benefit of the deeper fix
+4. **Recommendation**: your honest take on whether it's worth it
 
 The user may:
 - **Approve** → undo the Phase 5 fix, implement the optimal fix
@@ -224,14 +224,14 @@ If approved:
 1. **Undo the Phase 5 fix**: `git checkout -- <files>` to restore the
    buggy state. The failing tests are still in place.
 
-2. **Implement the optimal fix.** This may be a broader refactor — that's
+2. **Implement the optimal fix.** This may be a broader refactor. That's
    fine, as long as it's motivated by the bug and makes the system genuinely
    simpler or more correct.
 
 3. **Run the same failing tests** from Phase 2. Iterate until they pass
    (same 5.1→5.3 loop, same 4-iteration hard limit).
 
-If no better fix exists, skip this phase — the Phase 5 fix stands.
+If no better fix exists, skip this phase. The Phase 5 fix stands.
 
 ---
 
@@ -261,7 +261,7 @@ Present a concise summary:
 
 ```
 Bug: <one-line description>
-Root cause: <category> — <explanation>
+Root cause: <category> (<explanation>)
 Fix: <what changed and why>
 Tests added: <list of test files/functions>
 Files modified: <list>
@@ -275,11 +275,11 @@ or `/git-smart`).
 
 ## Safety Rails
 
-- **NEVER** commit during this skill — diagnosis and fix only
+- **NEVER** commit during this skill. Diagnose and fix only.
 - **NEVER** run the full test suite before the targeted tests pass (Phase 2-7)
-- **NEVER** iterate on a broken fix — always revert and rethink
-- **NEVER** modify tests to make them pass — tests are the spec, code is the fix
-- **NEVER** skip Phase 6 — understanding "why" prevents the next bug
+- **NEVER** iterate on a broken fix. Always revert and rethink.
+- **NEVER** modify tests to make them pass. Tests are the spec; code is the fix.
+- **NEVER** skip Phase 6. Understanding "why" prevents the next bug.
 - **NEVER** implement a fix without user approval (Phase 4 and Phase 7 gates)
 - **ALWAYS** undo failed fix attempts before trying a new theory
 - **ALWAYS** use the exact same test command throughout the session
@@ -287,16 +287,16 @@ or `/git-smart`).
 
 ---
 
-## Quick Reference — Execution Checklist
+## Quick Reference: Execution Checklist
 
 Re-read this before each action to stay on track:
 
-1. **WRITE TESTS FIRST** — 3+ failing tests, no source code analysis yet
-2. **RUN TESTS** — confirm they all fail for the right reason
-3. **DIAGNOSE** — analyze and validate theory, read-only investigation
-4. **PROPOSE FIX → USER REVIEW** — present findings, wait for approval
-5. **APPLY FIX → VERIFY** — implement approved fix, loop until green, revert on failure
-6. **ROOT CAUSE** — categorize why the bug existed
-7. **OPTIMAL FIX → USER REVIEW** — propose deeper fix if one exists, wait for approval
-8. **FULL SUITE** — run all tests to catch regressions
-9. **SUMMARY** — report results, do not commit
+1. **WRITE TESTS FIRST**: 3+ failing tests, no source code analysis yet
+2. **RUN TESTS**: confirm they all fail for the right reason
+3. **DIAGNOSE**: analyze and validate theory, read-only investigation
+4. **PROPOSE FIX → USER REVIEW**: present findings, wait for approval
+5. **APPLY FIX → VERIFY**: implement approved fix, loop until green, revert on failure
+6. **ROOT CAUSE**: categorize why the bug existed
+7. **OPTIMAL FIX → USER REVIEW**: propose deeper fix if one exists, wait for approval
+8. **FULL SUITE**: run all tests to catch regressions
+9. **SUMMARY**: report results, do not commit
