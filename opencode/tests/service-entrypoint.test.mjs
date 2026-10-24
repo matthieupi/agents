@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { publishConfig } from '../scripts/publish-plugins.mjs';
+import { publishConfig } from '../.opencode/config/publish-plugins.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'opencode-startup-'));
@@ -22,7 +22,7 @@ async function fixture(t) {
   await writeFile(join(defaults, 'cli.json'), '{"plugins":["./tui-plugins/session-title"]}');
   await writeFile(join(defaults, 'tui-plugins/session-title.mjs'), 'export {}');
   await writeFile(join(defaults, 'tui-plugins/session-title/tui.js'), 'export {}');
-  const helper = fileURLToPath(new URL('../scripts/publish-plugins.mjs', import.meta.url));
+  const helper = fileURLToPath(new URL('../.opencode/config/publish-plugins.mjs', import.meta.url));
   const shell = (await readFile(new URL('../service-entrypoint.sh', import.meta.url), 'utf8'))
     .replaceAll('/opt/opencode/component/scripts/publish-plugins.mjs', helper)
     .replaceAll('/opt/opencode-defaults', defaults).replaceAll('/opt/agent', resources);

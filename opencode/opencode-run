@@ -266,6 +266,7 @@ MOUNT_ARGS=()
 for binding in \
     "$WORKSPACE_PATH|/workspace|rw" "$AGENT_DIR|/opt/agent|rw" \
     "$INIT_SCRIPT|/opt/harness/init.sh|ro" "$SCRIPT_DIR/.opencode/config|/opt/opencode-defaults|ro" \
+    "$SCRIPT_DIR/.opencode/config/publish-plugins.mjs|/opt/opencode/publish-plugins.mjs|ro" \
     "$CONFIG_DIR|/home/opencode/.config/opencode|rw" "$DATA_DIR|/home/opencode/.local/share/opencode|rw" \
     "$CACHE_DIR|/home/opencode/.cache/opencode|rw" "$STATE_DIR|/home/opencode/.local/state/opencode|rw" \
     "$SSH_DIR|/home/opencode/.ssh|ro"; do
@@ -330,7 +331,7 @@ for name in ('OPENCODE_PASSWORD', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI
              'OPENAI_COMPAT_BASE_URL', 'SSH_DIR_PATH', 'OPENCODE_DOCKER_WEB_ENDPOINT'):
     digest.update(name.encode() + b'\0' + os.environ.get(name, '').encode() + b'\0')
 config = root / '.opencode/config'
-files = [root / 'init.sh', root / 'scripts/publish-plugins.mjs',
+files = [root / 'init.sh', config / 'publish-plugins.mjs',
          config / 'opencode.json', config / 'opencode.jsonc', config / 'cli.json']
 files += sorted((root / 'scripts').glob('docker-*'))
 for folder in ('plugins', 'tui-plugins'):

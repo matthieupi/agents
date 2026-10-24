@@ -47,7 +47,7 @@ initialize_home() (
     flock -x 8
     exec 7<"$HOME"
     flock -x 7
-    node "$OPENCODE_ROOT/scripts/publish-plugins.mjs" config \
+    node "$OPENCODE_ROOT/.opencode/config/publish-plugins.mjs" config \
         "$OPENCODE_ROOT/.opencode/config" "$OPENCODE_REPO/agent" "$OPENCODE_CONFIG_DIR"
 )
 

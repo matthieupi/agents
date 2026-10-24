@@ -52,7 +52,7 @@ class DockerV2Tests(unittest.TestCase):
                               env={**os.environ, "HOME": str(home),
                                     "OPENCODE_CONFIG_DIR": str(self.config),
                                     "OPENCODE_DEFAULTS": str(self.defaults),
-                                    "OPENCODE_PUBLISHER": str(ROOT / 'scripts/publish-plugins.mjs'),
+                                    "OPENCODE_PUBLISHER": str(ROOT / '.opencode/config/publish-plugins.mjs'),
                                    "OPENCODE_RESOURCES": str(resources)},
                               capture_output=True, text=True, timeout=10)
 
@@ -255,6 +255,7 @@ class DockerV2Tests(unittest.TestCase):
             self.assertIn(".opencode/config/plugins/background-subagents.js", text)
             self.assertIn(".opencode/config/tui-plugins/session-title/tui.js", text)
             self.assertIn(".opencode/config/cli.json", text)
+            self.assertIn("COPY .opencode/config/publish-plugins.mjs /opt/opencode/publish-plugins.mjs", text)
             self.assertIn('CMD ["bash", "/opt/harness/docker-server.sh"]', text)
             self.assertIn("CMD python3 /opt/harness/docker-health.py", text)
         client = (ROOT / "scripts/docker-client.sh").read_text()
@@ -266,7 +267,8 @@ class DockerV2Tests(unittest.TestCase):
         self.assertNotIn("--permission", wrapper)
         self.assertIn("{{.Image}}", wrapper)
         self.assertIn("has_requested_lifecycle_config", wrapper)
-        self.assertIn('!scripts/publish-plugins.mjs', (ROOT / '.dockerignore').read_text())
+        self.assertIn('!.opencode/config/publish-plugins.mjs', (ROOT / '.dockerignore').read_text())
+        self.assertNotIn('!scripts/publish-plugins.mjs', (ROOT / '.dockerignore').read_text())
 
     def run_wrapper(self, *args, existing=False, old_image=False, old_lifecycle=False, old_config=False, stopped=False):
         launcher = self.base / "opencode-run"

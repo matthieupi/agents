@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, symlink, readlink, rm } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as publication from '../scripts/publish-plugins.mjs';
+import * as publication from '../.opencode/config/publish-plugins.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'opencode-config-'));
@@ -22,11 +22,13 @@ async function fixture(t) {
 
 test('publishes whole configuration and resolvable resources without copying private state', async t => {
   const f = await fixture(t);
+  await writeFile(join(f.source, 'publish-plugins.mjs'), '// public runtime helper, not user config');
   await publication.publishConfig(f.source, f.resources, f.destination);
   assert.equal(await readFile(join(f.destination, 'opencode.json'), 'utf8'), await readFile(join(f.source, 'opencode.json'), 'utf8'));
   assert.equal(await readFile(join(f.destination, 'system/build.md'), 'utf8'), 'maintained prompt');
   assert.equal(await readlink(join(f.destination, 'tui.json')), join(f.source, 'tui.json'));
   assert.equal(await readlink(join(f.destination, 'plugins/title.js')), join(f.source, 'plugins/title.js'));
+  await assert.rejects(readFile(join(f.destination, 'publish-plugins.mjs')), { code: 'ENOENT' });
 });
 
 test('managed links follow updates and remove only retired managed links', async t => {

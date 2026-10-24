@@ -106,7 +106,7 @@ class ServiceTests(unittest.TestCase):
                 patch("subprocess.run", return_value=unsupported):
             self.assertEqual(compose_config(Path("/fixture")).returncode, 125)
 
-    def test_shared_publisher_copy_closure(self):
+    def test_shared_publisher_runtime_bind_closure(self):
         wrapper = (ROOT / "opencode/service-entrypoint.sh").read_text().replace("\\\n", " ")
         commands = [shlex.split(line) for line in wrapper.splitlines()
                     if line.strip().startswith("node ")]
@@ -117,31 +117,44 @@ class ServiceTests(unittest.TestCase):
         for product in ("opencode", "paseo-deamon", "paperclip-daemon"):
             with self.subTest(product=product):
                 copies = image_copies(product)
-                self.assertIn(publisher, copies, "Shared entrypoint's publisher must be installed")
-                self.assertEqual(copies[publisher], ROOT / "opencode/scripts/publish-plugins.mjs")
+                self.assertNotIn(publisher, copies, "Publisher is a runtime resource, not a build input")
+                dockerfile = (ROOT / product / "Dockerfile.service").read_text()
+                self.assertIn("/opt/opencode/component/scripts", dockerfile)
+                self.assertNotIn("publish-plugins.mjs", dockerfile)
+                template = (ROOT / product / "docker-compose.j2").read_text()
+                self.assertIn("source: {{ (opencode_config_source_path ~ '/opencode/.opencode/config/publish-plugins.mjs') | to_json }}\n"
+                              f"        target: {publisher}\n"
+                              "        read_only: true\n"
+                              "        bind: {create_host_path: false}", template)
                 self.assertEqual(copies["/opt/opencode/service-entrypoint.sh"],
                                  ROOT / "opencode/service-entrypoint.sh")
+        self.assertTrue((ROOT / "opencode/.opencode/config/publish-plugins.mjs").is_file())
+        self.assertFalse((ROOT / "opencode/scripts/publish-plugins.mjs").exists())
+        ignore = (ROOT / "opencode/Dockerfile.service.dockerignore").read_text()
+        self.assertNotIn("publish-plugins.mjs", ignore)
+        self.assertNotIn("!.opencode", ignore)
 
-    def test_daemon_startup_wrappers_reach_installed_publisher(self):
+    def test_daemon_startup_wrappers_reach_mounted_publisher(self):
         for product in ("paseo-deamon", "paperclip-daemon"):
             with self.subTest(product=product), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                # Model only the Dockerfile's actual COPY destinations. Rebase
-                # absolute /opt paths into a disposable filesystem, not host /opt.
+                # Model image COPY destinations plus the Compose publisher bind.
+                # Rebase absolute /opt paths into a disposable filesystem, not host /opt.
                 copies = image_copies(product)
                 for destination, source in copies.items():
                     target = root / destination.lstrip("/")
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    if source.name == "publish-plugins.mjs":
-                        target.write_text('import {appendFileSync} from "node:fs";\n'
-                                          'appendFileSync(process.env.EVENTS, JSON.stringify(process.argv.slice(2))+"\\n");\n')
-                    elif source.name == "entry.py":
+                    if source.name == "entry.py":
                         target.write_text('import os\nfrom pathlib import Path\n'
                                           'Path(os.environ["DONE"]).write_text("paseo-deamon")\n')
                     else:
                         text = source.read_text().replace("/opt/", str(root / "opt") + "/")
                         text = text.replace("/usr/sbin/runuser", str(root / "usr/sbin/runuser"))
                         target.write_text(text)
+                publisher = root / "opt/opencode/component/scripts/publish-plugins.mjs"
+                publisher.parent.mkdir(parents=True, exist_ok=True)
+                publisher.write_text('import {appendFileSync} from "node:fs";\n'
+                                     'appendFileSync(process.env.EVENTS, JSON.stringify(process.argv.slice(2))+"\\n");\n')
                 for directory in ("opt/agent", "opt/opencode-defaults", "home/agent"):
                     (root / directory).mkdir(parents=True, exist_ok=True)
                 if product == "paperclip-daemon":
@@ -183,9 +196,9 @@ class ServiceTests(unittest.TestCase):
             self.assertIn("/opt/opencode/component/.runtime", dockerfile)
             self.assertIn("/opt/opencode-install.json", dockerfile)
             copies = [line for line in dockerfile.splitlines() if "COPY --from=opencode" in line]
-            self.assertEqual(len(copies), 3)
+            self.assertEqual(len(copies), 2)
             self.assertTrue(all(any(source in line for source in (
-                "scripts/entrypoint.sh", "scripts/publish-plugins.mjs", "service-entrypoint.sh"
+                "scripts/entrypoint.sh", "service-entrypoint.sh"
             )) for line in copies))
             self.assertNotIn("OPENCODE_VERSION", (ROOT / product / "docker-compose.j2").read_text())
         paseo = ROOT / "paseo-deamon"
@@ -232,8 +245,12 @@ class ServiceTests(unittest.TestCase):
                 self.assertIn("/opt/agent", rendered)
                 template_service = yaml.safe_load(rendered)["services"][product]
                 public_mounts = {mount["target"]: mount for mount in template_service["volumes"]}
-                for target in ("/opt/agent", "/opt/opencode-defaults"):
+                publisher = "/opt/opencode/component/scripts/publish-plugins.mjs"
+                self.assertEqual(public_mounts[publisher]["source"],
+                                 "/fixture/public/opencode/.opencode/config/publish-plugins.mjs")
+                for target in ("/opt/agent", "/opt/opencode-defaults", publisher):
                     self.assertIs(public_mounts[target]["bind"]["create_host_path"], False)
+                    self.assertTrue(public_mounts[target]["read_only"])
                 compose = directory / "compose.yaml"
                 compose.write_text(rendered)
                 rendered_env = env.from_string((ROOT / product / "env.j2").read_text()).render(**values)
@@ -250,7 +267,7 @@ class ServiceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 service = json.loads(result.stdout)["services"][product]
                 mounts = {mount["target"]: mount for mount in service["volumes"]}
-                for target in ("/opt/agent", "/opt/opencode-defaults"):
+                for target in ("/opt/agent", "/opt/opencode-defaults", publisher):
                     self.assertTrue(mounts[target]["read_only"])
                     # Compose omits false-valued fields in normalized JSON.
                     self.assertFalse(mounts[target]["bind"].get("create_host_path", False))

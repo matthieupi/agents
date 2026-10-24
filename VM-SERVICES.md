@@ -160,9 +160,13 @@ The parent service flow enumerates tracked `agent/` and `opencode/.opencode/conf
 files into `service_base_path/agent-config`, removes retired public files, and
 preserves the known discovery symlinks without following them. All three execution
 consumers bind its resources at `/opt/agent` and config at `/opt/opencode-defaults`,
-read-only. It is not a full checkout or private HOME mount. Config-only edits
-request native Compose recreation, not a rebuild. The retained filename
-`scripts/publish-plugins.mjs` now exposes only `config SOURCE_CONFIG RESOURCES
+read-only. They also bind the single delivered
+`opencode/.opencode/config/publish-plugins.mjs` read-only at the stable runtime path
+`/opt/opencode/component/scripts/publish-plugins.mjs`, with `create_host_path: false`.
+It is not a full checkout or private HOME mount. Config/publisher edits
+request native Compose recreation, not a rebuild. Atomic host-file replacement
+leaves an existing file bind on the old inode, so a restart alone is insufficient.
+The retained publisher filename exposes only `config SOURCE_CONFIG RESOURCES
 DESTINATION_CONFIG`: no KDCO package/install mode or dependency installation.
 It links selected config/CLI/plugin assets and shared commands/skills/system into
 a private config directory, not the complete source directory. Known managed
@@ -178,18 +182,24 @@ copy `.opencode`, node_modules, HOME, or the repository.
 | Product | `docker_service_extra_files` inputs |
 |---|---|
 | Pi | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `scripts/entrypoint.sh` |
-| OpenCode | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `scripts/entrypoint.sh`, `scripts/publish-plugins.mjs`, `backend-health.mjs` |
+| OpenCode | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `scripts/entrypoint.sh`, `backend-health.mjs` |
 | Daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `entry.py`, `verify-paseo.mjs`; named public OpenCode context below |
 | Hub | `Dockerfile.dockerignore`; conventional `Dockerfile` is copied by the common role |
 | Paperclip daemon | `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`; same named public OpenCode inputs |
 
 Daemon and Paperclip daemon named contexts contain **only** OpenCode's
-`scripts/entrypoint.sh`, `scripts/publish-plugins.mjs` and `service-entrypoint.sh`.
-Public config/resources are read-only runtime mounts, not baked KDCO/build inputs.
+`scripts/entrypoint.sh` and `service-entrypoint.sh`.
+Public config/resources and publisher are read-only runtime mounts, not baked build inputs.
 These contexts are build dependencies, not OpenCode service selection: daemon-only
 hosts still need the finite public inputs. Each image reuses `install_runtime()`
 to resolve **`@opencode/cli@latest`**; no OpenCode `version`, `opencode_version`, or
 `OPENCODE_VERSION` pin input remains. Resolved metadata is evidence, not a selector.
+
+**External reconciliation boundary:** the parent finite build-input catalog is
+outside this repository. Remove its obsolete `scripts/publish-plugins.mjs` source
+entries for OpenCode and both named contexts; deliver the canonical publisher
+through the public config tree instead. These source changes do not establish
+that the external catalog or any deployed host has been updated.
 
 **Sibling delivery contract:** U is adding `docker_service_extra_files_source_path`,
 defaulting to the selected service source. For daemon delivery, S explicitly selects

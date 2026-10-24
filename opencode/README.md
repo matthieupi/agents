@@ -77,12 +77,19 @@ sshd; root's HOME is not initialized. Paseo has ephemeral HOME and separate
 persistent provider state. The static Hub UI gets agents from the selected backend,
 not Hub-local config.
 
-Despite its retained filename, `scripts/publish-plugins.mjs` is a **V2 config-only
+Despite its retained filename, `.opencode/config/publish-plugins.mjs` is a **V2 config-only
 publisher**, invoked as:
 
 ```sh
-node scripts/publish-plugins.mjs config SOURCE_CONFIG RESOURCES DESTINATION_CONFIG
+node .opencode/config/publish-plugins.mjs config SOURCE_CONFIG RESOURCES DESTINATION_CONFIG
 ```
+
+All three VM consumers bind that one delivered file read-only at
+`/opt/opencode/component/scripts/publish-plugins.mjs`, preserving the existing
+image entrypoint path. It is a public runtime resource, not a service build input.
+Workstation containers bind the same source at `/opt/opencode/publish-plugins.mjs`;
+their CPU/GPU images retain a fallback copy from the canonical source.
+The publisher itself is not linked into private user config.
 
 It installs no dependencies and imports no plugin code. It publishes selected
 config/CLI/plugin assets and `commands`, `skills`, `system` links, **not a symlink
@@ -106,9 +113,12 @@ working-tree content; `git` materializes the agents submodule at the
 **parent-recorded commit**, not a floating branch. Publish nested commit and parent
 gitlink together. There is no startup Git pull or new repository credential.
 Quiesce every shared-config consumer on the selected host first: publication is
-not a transactional live update. Config-only delivery requests Compose recreation,
+not a transactional live update. Config/publisher delivery requests Compose recreation,
 not image rebuild; installer/entrypoint/build-input changes require the image build
-path. A pull alone or restart before delivery is insufficient. Recreate affected
+path. Atomic publisher replacement leaves existing file binds on the old inode,
+so recreate containers rather than merely restarting them. Workstation launch
+fingerprinting includes the publisher and recreates on changed content.
+A pull alone or restart before delivery is insufficient. Recreate affected
 idle consumers, inspect effective config/plugin/prompt loading through the authenticated
 backend on one host, then expand. Do not redeploy static Hub UI to change agents.
 
@@ -233,6 +243,7 @@ CPU/GPU containers have separate names but share canonical state.
 | Workstation host path | Container use |
 |---|---|
 | `.opencode/config` | `/opt/opencode-defaults`, read-only maintained public source |
+| `.opencode/config/publish-plugins.mjs` | `/opt/opencode/publish-plugins.mjs`, exact read-only publisher bind |
 | `.opencode/home-config` | `~/.config/opencode`, private writable directory with selected managed links |
 | `.opencode/data` | `~/.local/share/opencode`, sessions/provider authentication |
 | `.opencode/cache`, `.opencode/state` | private persistent XDG cache/state |

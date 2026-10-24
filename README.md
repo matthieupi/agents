@@ -71,9 +71,13 @@ maintained installation paths, with application auto-update disabled and no oper
 version pin. Its public workstation source `.opencode/config` is mounted read-only;
 selected assets link into private `.opencode/home-config`, not a full-source config
 symlink. VM consumers share read-only `/opt/opencode-defaults` and `/opt/agent`
-public mounts, preserving private HOME/auth/session state. The retained
-`scripts/publish-plugins.mjs` is config-only and reconciles known managed content
+public mounts, preserving private HOME/auth/session state. The shared
+`opencode/.opencode/config/publish-plugins.mjs` is also file-bound read-only at the
+stable service path `/opt/opencode/component/scripts/publish-plugins.mjs`.
+It is config-only and reconciles known managed content
 while preserving unknown conflicts; KDCO package/install and GSD are retired.
+Publisher updates require consumer recreation, not a VM image rebuild: an atomic
+host-file replacement does not refresh an existing file bind.
 The opt-in `runtime/` framework and its public-resource projection are retired.
 Pi/OpenCode native start/manage scripts and OpenCode static Compose are also
 retired; the product installers and ordinary VM Compose templates remain.

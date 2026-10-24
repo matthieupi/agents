@@ -33,11 +33,15 @@ before the scoped service reapply. This configuration change has not been deploy
 ## Native V2 build inputs
 
 The finite named `opencode_inputs` context contains only
-`scripts/entrypoint.sh`, `scripts/publish-plugins.mjs` and
-`service-entrypoint.sh`. The publisher is installed at
+`scripts/entrypoint.sh` and `service-entrypoint.sh`. The single delivered publisher
+`opencode/.opencode/config/publish-plugins.mjs` is file-bound read-only at
 `/opt/opencode/component/scripts/publish-plugins.mjs`, matching the shared
-entrypoint's actual Node command; public config and agent resources stay runtime
-read-only mounts, not baked checkout contents. The shared initializer runs the
+entrypoint's actual Node command and existing images. Public config, publisher and
+agent resources stay runtime read-only mounts, not baked checkout contents.
+Publisher-only updates require recreation, not an image rebuild: atomic host-file
+replacement leaves an existing file bind on the old inode. The external parent
+build catalog must drop its obsolete `scripts/publish-plugins.mjs` input; that
+catalog is not updated in this repository. The shared initializer runs the
 single config-publication call as `agent` before sshd starts. No OpenCode version
 template argument or plugin source/dependency copy is required.
 
@@ -128,8 +132,8 @@ contracts and renders Paseo, Paperclip and OpenCode service templates, including
 positive/negative socket grants, when Jinja2/PyYAML and Compose are available.
 It accepts `DOCKER_COMPOSE_BINARY=/absolute/path/to/docker-compose` to bypass a
 Docker CLI shim; see the [verification command](../paseo-deamon/README.md#verification-and-deferred-acceptance).
-It derives the shared publisher command and verifies its COPY mapping in all
-three OpenCode-consuming service images. Disposable COPY-layout fixtures then
+It derives the shared publisher command and verifies its read-only runtime bind
+in all three OpenCode-consuming services. Disposable COPY-plus-bind fixtures then
 execute the real Paperclip and inherited shared shell wrappers with a stub
 publisher, account switch and sshd endpoint: no server, SSH session, credential or
 live HOME is used. This checks startup path closure, not image/runtime acceptance.

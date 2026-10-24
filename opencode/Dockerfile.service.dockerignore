@@ -3,4 +3,3 @@
 !backend-health.mjs
 !scripts
 !scripts/entrypoint.sh
-!scripts/publish-plugins.mjs

@@ -110,7 +110,7 @@ The source entrypoint deliberately fails early for direct `opencode serve` witho
 |---|---|
 | VM image | `opencode/Dockerfile.service` and its Dockerfile-specific ignore file |
 | Native installer helper | `opencode/scripts/entrypoint.sh`; installs scoped package `@opencode/cli@latest` and verifies it; no `OPENCODE_VERSION` build argument |
-| Shared public publisher | `opencode/scripts/publish-plugins.mjs`; V2 config-only publication, no KDCO package/install mode |
+| Shared public publisher | `opencode/.opencode/config/publish-plugins.mjs`; V2 config-only publication, no KDCO package/install mode |
 | Runtime startup | `opencode/service-entrypoint.sh`; publish resources/config before exec, retain locks and non-root execution |
 | Service templates | `opencode/docker-compose.j2`, `opencode/env.j2` |
 | Backend readiness | `opencode/backend-health.mjs`; authenticated `/api/info`, V2 version validation |
@@ -124,13 +124,20 @@ node /opt/opencode/component/scripts/publish-plugins.mjs config \
   /opt/opencode-defaults /opt/agent "$OPENCODE_CONFIG_DIR"
 ```
 
-Keep this exact installed publisher path consistent in OpenCode, Paseo daemon, and Paperclip daemon images. A mismatch was found and fixed during review.
+Keep this exact runtime publisher path consistent in OpenCode, Paseo daemon, and
+Paperclip daemon. Each service overlays the existing image path with a read-only
+file bind from the single delivered config source (`create_host_path: false`).
+New service builds do not COPY the publisher. Workstations bind that same source
+at `/opt/opencode/publish-plugins.mjs` and fingerprint it for recreation.
+After atomic host-file replacement, recreate consumers: restart alone retains
+the old file-bind inode. Publisher-only updates do not require service rebuilds.
 
 ### Parent build-input catalog updates
 
-- OpenCode finite inputs: `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `backend-health.mjs`, `scripts/entrypoint.sh`, and `scripts/publish-plugins.mjs`.
+- OpenCode finite inputs: `Dockerfile.service`, `Dockerfile.service.dockerignore`, `service-entrypoint.sh`, `backend-health.mjs`, and `scripts/entrypoint.sh`.
 - Remove retired KDCO package files, entrypoints, dependency-install steps, and OpenCode version selectors from delivery/build catalogs.
-- Paseo/Paperclip named OpenCode build contexts need the installer, publisher, and shared wrapper used by their Dockerfiles—not the deleted KDCO package. Follow the current Dockerfile COPY closure.
+- Paseo/Paperclip named OpenCode build contexts need only the installer and shared wrapper used by their Dockerfiles, not the publisher or deleted KDCO package. Follow the current Dockerfile COPY closure.
+- External reconciliation required: remove obsolete `scripts/publish-plugins.mjs` source entries from the parent's finite build-input catalog. Deliver the publisher via `opencode/.opencode/config/` instead. That catalog is outside this repository and is not claimed updated here.
 - Deliver `paseo-deamon/verify-paseo.mjs` for Paseo builds. Select a reviewed Paseo image with its native V2 adapter; the repository's compatibility floor is **0.12.0**. Do not assume the existing selected image supports V2.
 - Keep maintained config/resources as read-only runtime mounts; do not bake private HOME/provider credentials or copy the whole checkout into an image.
 - Parent catalog/ingress integration lives outside this repo. `VM-SERVICES.md` describes its expected ordinary service flow; locate the actual owners rather than inventing a parallel deployment framework.

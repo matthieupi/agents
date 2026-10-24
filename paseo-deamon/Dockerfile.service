@@ -10,9 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 util-li
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/local/bin/npm /usr/bin/npm \
-    && install -d -o 1000 -g 1000 /opt/opencode/build-home /opt/opencode/component
+    && install -d -o 1000 -g 1000 /opt/opencode/build-home /opt/opencode/component /opt/opencode/component/scripts
 COPY --from=opencode-inputs scripts/entrypoint.sh /opt/opencode/native-contract.sh
-COPY --from=opencode-inputs scripts/publish-plugins.mjs /opt/opencode/component/scripts/publish-plugins.mjs
 COPY --from=opencode-inputs service-entrypoint.sh /opt/opencode/service-entrypoint.sh
 COPY verify-paseo.mjs /opt/paseo-component/verify-paseo.mjs
 RUN node /opt/paseo-component/verify-paseo.mjs "$PASEO_VERSION"

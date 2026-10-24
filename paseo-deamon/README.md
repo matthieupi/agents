@@ -12,8 +12,9 @@ ordinary service catalog interface and canonical `agent` NSS UID/GID. See
 
 ```text
 parent finite public staging -> named opencode-inputs build context
-                               installer + publisher + service wrapper
+                               installer + service wrapper
 parent config delivery ------> /opt/opencode-defaults + /opt/agent (read-only)
+                               publisher file bind at stable entrypoint path
                                |
                         shared service-entrypoint
                                |
@@ -29,9 +30,15 @@ call before executing the daemon entrypoint:
 node /opt/opencode/component/scripts/publish-plugins.mjs config /opt/opencode-defaults /opt/agent "$OPENCODE_CONFIG_DIR"
 ```
 
-The named context contains only `scripts/entrypoint.sh`,
-`scripts/publish-plugins.mjs` and `service-entrypoint.sh`. Public config and resource
-trees are runtime mounts, not copied checkout contents or image dependencies.
+The named context contains only `scripts/entrypoint.sh` and `service-entrypoint.sh`.
+The single delivered `opencode/.opencode/config/publish-plugins.mjs` is file-bound
+read-only at `/opt/opencode/component/scripts/publish-plugins.mjs`, retaining
+compatibility with existing images. Public config, publisher and resource trees
+are runtime mounts, not copied checkout contents or image dependencies.
+Publisher-only updates require recreation, not an image rebuild: atomic host-file
+replacement leaves an existing file bind on the old inode. The external parent
+build catalog must remove its obsolete `scripts/publish-plugins.mjs` input; that
+catalog is not updated in this repository.
 The local service build context admits only `entry.py` and `verify-paseo.mjs`.
 Parent delivery must include the verifier alongside the existing entrypoint.
 See the [shared update/conflict contract](../opencode/README.md#shared-workstation-configuration-on-vm-consumers).
@@ -165,8 +172,9 @@ Tests use synthetic temporary package fixtures and rendered public templates;
 they do not install packages, access credentials or touch live state. The old
 component/projection test suite and progress document are retired, not restored.
 Cross-file checks derive the publisher command from the shared entrypoint and
-resolve its installed source through all three service Dockerfiles. Disposable
-COPY-layout fixtures execute both daemon wrapper chains with a stub publisher
+verify its read-only runtime bind across all three services, separately from the
+Dockerfile COPY closure. Disposable COPY-plus-bind fixtures execute both daemon
+wrapper chains with a stub publisher
 and terminal service, proving the installed path is reached exactly once before
 handoff. They are not image builds: only absolute fixture paths are rebased;
 account switching and actual daemon/sshd execution are not exercised.

@@ -38,6 +38,11 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
+        source: {{ (opencode_config_source_path ~ '/opencode/.opencode/config/publish-plugins.mjs') | to_json }}
+        target: /opt/opencode/component/scripts/publish-plugins.mjs
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
         source: {{ agent_home | to_json }}
         target: {{ agent_home | to_json }}
         bind: {create_host_path: false}

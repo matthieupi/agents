@@ -7,9 +7,9 @@
 !scripts
 !init.sh
 !scripts/docker-*
-!scripts/publish-plugins.mjs
 !.opencode
 !.opencode/config
+!.opencode/config/publish-plugins.mjs
 !.opencode/config/opencode.json
 !.opencode/config/cli.json
 !.opencode/config/plugins

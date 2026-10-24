@@ -108,6 +108,8 @@ class LegacyExecution(unittest.TestCase):
         for directory in (component / 'ssh', component / '.opencode/config', self.root / 'agent'):
             directory.mkdir(parents=True)
         (component / 'init.sh').write_text('# fixture\n')
+        shutil.copyfile(ROOT / 'opencode/.opencode/config/publish-plugins.mjs',
+                        component / '.opencode/config/publish-plugins.mjs')
         # No fallback PATH: only ordinary filesystem/text utilities used by these
         # copied scripts. Docker and sleep are always stubs.
         for name in ('dirname', 'basename', 'realpath', 'mkdir', 'grep', 'awk',
@@ -227,8 +229,20 @@ elif tool == 'python3':
         self.assertNotIn('-p', run)
         self.assertIn('OPENCODE_EXPERIMENTAL_WORKSPACES=1', run)
         self.assertIn(f'type=bind,src={self.root}/opencode/.opencode/config,dst=/opt/opencode-defaults,readonly', run)
+        self.assertIn(f'type=bind,src={self.root}/opencode/.opencode/config/publish-plugins.mjs,dst=/opt/opencode/publish-plugins.mjs,readonly', run)
         self.assertIn(f'type=bind,src={self.root}/opencode/.opencode/home-config,dst=/home/opencode/.config/opencode', run)
         self.assertFalse(any('init.sh' in str(call) for call in calls if call[0] == 'exec'))
+
+    def test_publisher_content_changes_workstation_fingerprint(self):
+        fingerprints = []
+        publisher = self.root / 'opencode/.opencode/config/publish-plugins.mjs'
+        for suffix in ('', '\n// changed publisher\n'):
+            publisher.write_text(publisher.read_text() + suffix)
+            result, calls = self.run_copy('opencode/opencode-run', ['.'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            run = next(call for call in calls if call[0] == 'run')
+            fingerprints.append(next(value for value in run if value.startswith('dev.xmist.opencode.config=')))
+        self.assertNotEqual(*fingerprints)
 
     def test_direct_run_privileged_flags(self):
         for flag in ('--privileged', '--priviliged'):
@@ -625,10 +639,8 @@ elif tool == 'python3':
         component.mkdir(exist_ok=True)
         script = component / 'entrypoint.sh'
         shutil.copyfile(ROOT / 'opencode/scripts/entrypoint.sh', script)
-        (component / 'scripts').mkdir(exist_ok=True)
-        shutil.copyfile(ROOT / 'opencode/scripts/publish-plugins.mjs', component / 'scripts/publish-plugins.mjs')
         defaults = component / '.opencode/config'
-        for relative in ('opencode.json', 'cli.json',
+        for relative in ('opencode.json', 'cli.json', 'publish-plugins.mjs',
                          'plugins/background-subagents.js', 'tui-plugins/session-title.mjs',
                          'tui-plugins/session-title/tui.js'):
             destination = defaults / relative
