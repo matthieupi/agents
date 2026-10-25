@@ -87,15 +87,25 @@ unrelated user work while standardizing the edited file.
 
 - Always document code using the language's documentation conventions:
   Python docstrings, JavaScript/TypeScript JSDoc, or the native equivalent.
-- In each edited code file, add missing file/module, class, and function
+- In each edited code file, add missing file/module, class, and named-function
   documentation, including for previously undocumented definitions in that
   file. Reading a file or function alone does not trigger this requirement.
+- Anonymous functions and inline callbacks do not need separate documentation
+  blocks. Document their surrounding operation instead when it is not obvious.
 - Update documentation for changed functions so it describes their current
   contracts and behavior accurately.
-- Write complete JSDoc: a concise title/summary, a description of the contract,
-  and an `@param` entry for every parameter with its type and purpose. Document
+- Keep documentation proportional to the function. For a small, straightforward
+  function, one concise summary is sufficient prose; do not add a redundant
+  description paragraph. Explain additional contract details only when useful.
+- Write complete JSDoc for named functions and methods: a concise summary and
+  an `@param` entry for every parameter with its type and purpose. Document
   optional/default values and destructured options; include `@returns` and
-  `@throws` where applicable. Use standard JSDoc syntax, not a custom title tag.
+  `@throws` where applicable. A short summary does not remove these tags.
+  Use standard JSDoc syntax, not a custom title tag.
+- Put the documentation block's closing delimiter on its last content line,
+  for example `* @returns {void} */`, rather than on a separate empty line.
+  Use the language's valid native delimiter and keep the line within 80
+  characters, wrapping the content when needed.
 - Comment the main operations within each function using numbered section
   comments immediately before each operation, for example
   `// 0. Extract declarations`, `// 1. Set visual attributes`, and
