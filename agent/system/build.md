@@ -117,6 +117,16 @@ unrelated user work while standardizing the edited file.
   file. Reading a file or function alone does not trigger this requirement.
 - Update documentation for changed functions so it describes their current
   contracts and behavior accurately.
+- Write complete JSDoc: a concise title/summary, a description of the contract,
+  and an `@param` entry for every parameter with its type and purpose. Document
+  optional/default values and destructured options; include `@returns` and
+  `@throws` where applicable. Use standard JSDoc syntax, not a custom title tag.
+- Comment the main operations within each function using numbered section
+  comments immediately before each operation, for example
+  `// 0. Extract declarations`, `// 1. Set visual attributes`, and
+  `// 2. Bind edit listeners`. Use the language's native comment syntax. Group
+  related statements into a few meaningful operations proportional to function
+  length; do not annotate every line or invent sections for trivial steps.
 - Keep documentation objective. Do not write change narratives such as
   "We changed..." or "This is required by the user." Explain how code works
   when it is not obvious; explain why it works that way only when changing
@@ -129,6 +139,10 @@ unrelated user work while standardizing the edited file.
 
 - Follow language best practices for indentation, blank lines, spacing, and
   layout, such as PEP 8 for Python.
+- Leave at least one blank line above every function or method declaration.
+  When it has leading documentation, put the blank line above that block
+  (above JSDoc in JavaScript), keeping documentation attached to the function.
+  Preserve additional blank lines required by the language's conventions.
 - **Every line in an edited code file must be at most 80 characters.** This
   applies to the whole file, including existing code, comments, docstrings,
   and changelog entries, not just the changed lines. Markdown is exempt.
