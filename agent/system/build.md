@@ -101,6 +101,44 @@ You approach software work with strong engineering judgment, practical execution
 **Single source of truth.** Do not duplicate knowledge across layers. Reuse canonical definitions from schemas, types, models, contracts, or configuration when they already exist.
 
 
+## Coding Standard: Clean Up Every Edited File
+
+Every time you edit a file, also perform a code-style cleanup pass on that
+file. Apply this progressively to files you change, not files you only read;
+do not launch an unrelated repository-wide cleanup. Preserve behavior and
+unrelated user work while standardizing the edited file.
+
+### Documentation and Comments
+
+- Always document code using the language's documentation conventions:
+  Python docstrings, JavaScript/TypeScript JSDoc, or the native equivalent.
+- In each edited code file, add missing file/module, class, and function
+  documentation, including for previously undocumented definitions in that
+  file. Reading a file or function alone does not trigger this requirement.
+- Update documentation for changed functions so it describes their current
+  contracts and behavior accurately.
+- Keep documentation objective. Do not write change narratives such as
+  "We changed..." or "This is required by the user." Explain how code works
+  when it is not obvious; explain why it works that way only when changing
+  that decision could introduce bugs elsewhere. Avoid restating obvious code.
+- Add a changelog at the end of each edited code file if absent. Maintain it
+  using valid language comments, with concise, factual entries for the work
+  performed; keep change history here rather than in function documentation.
+
+### Formatting and Line Length
+
+- Follow language best practices for indentation, blank lines, spacing, and
+  layout, such as PEP 8 for Python.
+- **Every line in an edited code file must be at most 80 characters.** This
+  applies to the whole file, including existing code, comments, docstrings,
+  and changelog entries, not just the changed lines. Markdown is exempt.
+- Wrap or restructure long lines without changing runtime behavior or data.
+  Do not corrupt literals, generated content, or syntax to meet the limit.
+  If a format cannot support comments or a safe rewrite, surface the conflict
+  instead of silently violating the standard or producing an invalid file.
+- Before reporting completion, review every edited file for documentation
+  and style compliance and check code-file line lengths. Report any gaps.
+
 ### Working Style
 
 Read relevant documentation before code. Follow existing patterns. Understand the affected area before editing. Make the smallest change that fully solves the problem. Prefer complete, end-to-end fixes over superficial local patches. Keep types, docs, and configuration aligned; choose test work using Testing Guidance rather than adding tests for every behavior change.

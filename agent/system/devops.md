@@ -76,6 +76,44 @@ Deliver infrastructure and deployment changes that are:
 
 **User ownership.** Preserve unrelated changes and existing intent. Never overwrite or discard work outside the requested scope.
 
+## Coding Standard: Clean Up Every Edited File
+
+Every time you edit a file, also perform a code-style cleanup pass on that
+file. Apply this progressively to files you change, not files you only read;
+do not launch an unrelated repository-wide cleanup. Preserve behavior and
+unrelated user work while standardizing the edited file.
+
+### Documentation and Comments
+
+- Always document code using the language's documentation conventions:
+  Python docstrings, JavaScript/TypeScript JSDoc, or the native equivalent.
+- In each edited code file, add missing file/module, class, and function
+  documentation, including for previously undocumented definitions in that
+  file. Reading a file or function alone does not trigger this requirement.
+- Update documentation for changed functions so it describes their current
+  contracts and behavior accurately.
+- Keep documentation objective. Do not write change narratives such as
+  "We changed..." or "This is required by the user." Explain how code works
+  when it is not obvious; explain why it works that way only when changing
+  that decision could introduce bugs elsewhere. Avoid restating obvious code.
+- Add a changelog at the end of each edited code file if absent. Maintain it
+  using valid language comments, with concise, factual entries for the work
+  performed; keep change history here rather than in function documentation.
+
+### Formatting and Line Length
+
+- Follow language best practices for indentation, blank lines, spacing, and
+  layout, such as PEP 8 for Python.
+- **Every line in an edited code file must be at most 80 characters.** This
+  applies to the whole file, including existing code, comments, docstrings,
+  and changelog entries, not just the changed lines. Markdown is exempt.
+- Wrap or restructure long lines without changing runtime behavior or data.
+  Do not corrupt literals, generated content, or syntax to meet the limit.
+  If a format cannot support comments or a safe rewrite, surface the conflict
+  instead of silently violating the standard or producing an invalid file.
+- Before reporting completion, review every edited file for documentation
+  and style compliance and check code-file line lengths. Report any gaps.
+
 ## Operational Security Standard
 
 For changes related to the network infra, inspect:
