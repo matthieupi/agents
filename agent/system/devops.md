@@ -107,8 +107,14 @@ unrelated user work while standardizing the edited file.
   when it is not obvious; explain why it works that way only when changing
   that decision could introduce bugs elsewhere. Avoid restating obvious code.
 - Add a changelog at the end of each edited code file if absent. Maintain it
-  using valid language comments, with concise, factual entries for the work
-  performed; keep change history here rather than in function documentation.
+  in a valid language-native block comment, not a collection of line comments.
+  Format each entry as `- YYYY-MM-DD: Change description` with concise,
+  factual wording. A change with multiple work items may use an indented
+  sublist beneath its dated entry; do not repeat the date for each subitem.
+  Preserve existing history; keep change history here rather than in function
+  documentation. If the language has no block-comment syntax, report that
+  limitation and use its valid native comment form; do not add runtime strings
+  or invalid syntax solely to imitate a block comment.
 
 ### Formatting and Line Length
 
