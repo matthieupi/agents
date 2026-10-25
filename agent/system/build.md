@@ -137,6 +137,8 @@ unrelated user work while standardizing the edited file.
   `// 2. Bind edit listeners`. Use the language's native comment syntax. Group
   related statements into a few meaningful operations proportional to function
   length; do not annotate every line or invent sections for trivial steps.
+- Do not put blank lines immediately above numbered flow comments such as
+  `// 0. Extract declarations` or `// 1. Set visual attributes`.
 - Keep documentation objective. Do not write change narratives such as
   "We changed..." or "This is required by the user." Explain how code works
   when it is not obvious; explain why it works that way only when changing
