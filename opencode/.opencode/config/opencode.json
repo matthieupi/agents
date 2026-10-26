@@ -28,6 +28,7 @@
     },
     "explore": {
       "system": "{file:./system/explore.md}",
+      "model": "openai/gpt-6.1-sol",
       "request": { "body": { "temperature": 0.1 } },
       "mode": "all",
       "description": "Read-only codebase exploration and discovery",
