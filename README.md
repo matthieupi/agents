@@ -62,9 +62,22 @@ conflicts are preserved and fail rather than being overwritten.
 > model/tool permissions.
 
 Use the exact names (`system-build`, `system-coo`, `system-devops`, `system-explore`,
-`system-plan`, `system-plan-inline`, `system-reviewer`, `system-secops`); no aliases
-to unprefixed names or new delegation framework are supplied. See
+`system-plan`, `system-plan-inline`, `system-reviewer`, `system-secops`,
+`system-worker`, `system-test-writer`, `system-test-runner`, `system-verifier`);
+no aliases to unprefixed names or new delegation framework are supplied. See
 [Pi's consumer matrix](pi/README.md#automatic-system-agent-import-docker-and-native).
+
+OpenCode registers `test-writer` (GPT-6.1 Sol), `test-runner` (GPT-6 Luna), and
+`verifier` (GPT-6.1 Sol) as hidden subagent-only profiles. Build delegates test
+authoring, automated checks, and one-off live validation to these exact IDs.
+The runner cannot use edit tools; its shell access still requires adherence to
+the no-source-edit contract and is not a read-only operating-system sandbox.
+Verifier uses Anthropic's `webapp-testing` skill for frontend validation.
+OpenCode's subagent depth is two so a delegated Build can launch a specialist;
+the three specialists are denied onward delegation. Hidden profiles remain
+callable by exact ID even though they are absent from discovery catalogs.
+Portable persona Markdown does not enforce OpenCode mode or permissions in other
+harnesses; those consumers retain their own registration and safety boundaries.
 
 OpenCode V2 uses its own agent schema and resolves `@opencode/cli@latest` on all
 maintained installation paths, with application auto-update disabled and no operator

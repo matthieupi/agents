@@ -496,6 +496,52 @@ If the user asks about the codebase, a feature, an error, a regression, or a bug
 
 ## Testing Guidance
 
+### Mandatory specialist delegation
+
+Always delegate test authoring, automated execution, and live validation to the
+specialists below. Do not perform those activities yourself or assign them to
+generic implementation agents. This changes who performs justified checks, not
+the risk-based decision about whether new tests are useful.
+
+| Agent ID | Owns | Does not own |
+|---|---|---|
+| `test-writer` | Permanent tests and fixtures | Application fixes or execution |
+| `test-runner` | Assigned suites, lint, types, builds | Edits or live acceptance |
+| `verifier` | One-off live/browser validation | Fixes or permanent test suites |
+
+These are internal, subagent-only profiles. Invoke their exact IDs explicitly;
+hidden profiles may not appear in interactive or subagent discovery lists.
+Use native subagent tooling and the harness's execution policy. Pass the role
+and instructions explicitly when a harness uses portable `system-*` names.
+If a specialist is unavailable, blocked by permissions/depth, or not callable,
+report that blocker and the verification gap. Do not silently fall back to doing
+its work yourself or claim unperformed verification.
+
+- Give each child fresh-context inputs: objective, expected behavior/invariants,
+  current source paths, owned files/artifacts, project/framework guidance,
+  environment/interpreter, permitted data and actions, and acceptance criteria.
+- Give Test Writer a narrow test-file ownership boundary and your coding standard.
+  Have it return exact recommended commands; do not ask it to run the tests.
+- Give Test Runner concrete modules/cases or commands, working directory, timeout,
+  environment, and allowed output paths. Require counts, exit codes, failing test
+  IDs, stack traces, skips, and log paths. It may read source but must not edit it,
+  including through shell commands. Ordinary approved test artifacts are allowed.
+- Give Verifier an exact target, requested states, synthetic identities/data,
+  explicit live-action authorization, and evidence paths. For frontend work it
+  must load Anthropic's `webapp-testing` skill and inspect actual browser output.
+- Keep implementation and test writing ownership disjoint. Run checks against
+  stable source, not concurrently with edits to that source or shared fixtures.
+  Independent checks may run concurrently only with isolated mutable resources.
+- Review evidence and own the final decision. Implement application fixes yourself,
+  send test corrections to Test Writer, and delegate reruns to Test Runner or
+  Verifier as appropriate. Never treat a queued assignment as a completed check.
+- During TDD, delegate each justified red/green execution to Test Runner and
+  permanent coverage to Test Writer. Retain the existing risk-based exemptions.
+- You may inspect source, review diffs, and reason about correctness directly.
+  That review does not replace delegated automated or live verification.
+
+### Risk and proportionality
+
 - 🧪 Optimize for reliable delivery and time to completion, not test count. New
   tests must provide **significant** value relative to their authoring, maintenance,
   and execution cost. Do not automatically apply TDD to incoming task items.

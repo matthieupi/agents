@@ -5,6 +5,7 @@
   "compaction": { "auto": false, "buffer": 50000 },
   "lsp": true,
   "plugins": [],
+  "experimental": { "subagent_depth": 2 },
   "agents": {
     "title": { "model": "openai/gpt-5-mini" },
     "Orchestrator": {
@@ -116,6 +117,38 @@
       "model": "openai/gpt-6-luna",
       "mode": "subagent",
       "description": "Executes simple, well-scoped tasks with focused changes and verification",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    },
+    "test-writer": {
+      "system": "{file:./system/test-writer.md}",
+      "model": "openai/gpt-6.1-sol",
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Write focused tests for caller-defined behavior",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    },
+    "test-runner": {
+      "system": "{file:./system/test-runner.md}",
+      "model": "openai/gpt-6-luna",
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Run caller-specified tests and report exact evidence",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "allow" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    },
+    "verifier": {
+      "system": "{file:./system/verifier.md}",
+      "model": "openai/gpt-6.1-sol",
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Perform bounded one-off live validation with evidence",
       "permissions": [
         { "action": "subagent", "resource": "*", "effect": "deny" }
       ]
