@@ -46,6 +46,7 @@
     },
     "reviewer": {
       "system": "{file:./system/reviewer.md}",
+      "model": "openai/gpt-6.1-sol",
       "request": { "body": { "temperature": 0.2 } },
       "mode": "all",
       "description": "Architecture and code review focused on simplification and elegance",

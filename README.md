@@ -68,8 +68,12 @@ no aliases to unprefixed names or new delegation framework are supplied. See
 [Pi's consumer matrix](pi/README.md#automatic-system-agent-import-docker-and-native).
 
 OpenCode registers `test-writer` (GPT-6.1 Sol), `test-runner` (GPT-6 Luna), and
-`verifier` (GPT-6.1 Sol) as hidden subagent-only profiles. Build delegates test
-authoring, automated checks, and one-off live validation to these exact IDs.
+`verifier` (GPT-6.1 Sol) as hidden subagent-only profiles. For substantive work,
+Build delegates test authoring, automated checks, and one-off live validation to
+these exact IDs, alongside independent `reviewer` review (GPT-6.1 Sol). Small,
+low-risk edits are implemented and verified directly without Test Writer/Runner.
+Substantial verification gaps return to approach review and developer approval;
+minor findings receive focused fixes and rechecks within the current slice.
 The runner cannot use edit tools; its shell access still requires adherence to
 the no-source-edit contract and is not a read-only operating-system sandbox.
 Verifier uses Anthropic's `webapp-testing` skill for frontend validation.

@@ -220,6 +220,13 @@ the slice, check it once, then show a compact diff or concrete change summary.
 Do not turn each bullet into its own proposal, implementation, test, and report
 cycle. Use the Testing Guidance below to keep verification proportionate.
 
+Build verifies this direct path itself, including relevant one-off live/browser
+checks. Do not involve Test Writer or Test Runner for these small, low-risk edits
+or add permanent tests by default. Use the available browser/testing skill when
+needed; unavailable verification must be reported, not treated as a pass.
+If the change reveals substantial risk or scope, reclassify it and use the
+substantive path rather than stretching the lightweight exception.
+
 ### Continuous task intake and steering
 
 The normal collaboration flow is request -> work -> additions or steering ->
@@ -265,6 +272,13 @@ The overview should include, when relevant:
 
 After each meaningful implementation slice, present its diff or concrete change summary before moving on to the next substantial slice. Small related edits belong in one checkpoint, not one checkpoint per bullet.
 
+Delegate verification and independent code review as described in Testing
+Guidance, then inspect the evidence yourself. If verification or review reveals
+substantial gaps requiring a different approach, broader scope, or material
+contract/risk decisions, return to the implementation overview and obtain fresh
+developer approval before proceeding. Minor findings stay in the current slice:
+fix them and delegate the relevant rechecks without restarting approval.
+
 If the user asks a question about the codebase, a feature, or a bug, answer the question first and do not begin implementation unless the user then asks for changes or clearly validates proceeding.
 
 ## Core Behavior
@@ -287,52 +301,60 @@ If the user asks a question about the codebase, a feature, or a bug, answer the 
 ## Build Flow
 
 ```text
-+----------------------+
-| Understand the task  |
-+----------------------+
-           |
-           v
-+----------------------+
-| Propose a hypothesis |
-| and present it       |
-+----------------------+
-           |
-           v
-+----------------------+
-| Explore the code     |
-| Present the overview |
-+----------------------+
-           |
-           v
-+----------------------+
-| Validate direction   |
-+----------------------+
-           |
-           v
-+----------------------+
-| Implement one step   |
-+----------------------+
-           |
-           v
-+----------------------+
-| Show step diff       |
-+----------------------+
-           |
-           v
-+----------------------+
-| Continue or adjust   |
-+----------------------+
-           |
-           v
-+----------------------+
-| Verify and refine    |
-+----------------------+
-           |
-           v
-+----------------------+
-| Report what changed  |
-+----------------------+
+                   Understand request
+              Read docs + inspect current code
+                            |
+                            v
+                 Small, low-risk change?
+                     /             \
+                   YES              NO
+                    |                |
+                    v                v
+          │ Implement directly   │ Present approach <--------------------+
+          │  - Verify directly   │  - Files, signatures, diffs, risks    |
+                    |            │  - Wait for developer approval       |
+                    |                |                                  |
+                    |                v                                  |
+                    |            │ Implement coherent slices            |
+                    |            │  - Show diff/change summary          |
+                    |                |                                  |
+                    |                v                                  |
+                    |      ┌──────────────────────────────────┐         |
+                    |      │ Delegate verification            │         |
+                    |      │                                  │         |
+                    |      │ Test Writer  Tests if warranted  │         |
+                    |      │ Test Runner  Selected checks     │         |
+                    |      │ Verifier     Live/browser checks │         |
+                    |      │ Reviewer     Independent review  │         |
+                    |      │              GPT-6.1 Sol         │         |
+                    |      └──────────────────────────────────┘         |
+                    |                |                                  |
+                    |                v                                  |
+                    |       Build reviews the evidence                  |
+                    |                |                                  |
+                    |                v                                  |
+                    |       Substantial gaps found?                     |
+                    |           /           \                           |
+                    |         YES            NO                         |
+                    |          |              |                         |
+                    |          +--------------|-------------------------+
+                    |                         v
+                    |              │ Fix minor findings, if any
+                    |              │  - Delegate relevant rechecks
+                    |                         |
+                    +------------+------------+
+                                 |
+                                 v
+                       │ Report outcome + evidence
+                       │  - Remaining gaps, risks, next steps
+
+Throughout: clean up edited files; preserve unrelated work;
+            keep checks proportional; maintain one evolving queue.
 ```
+
+Vertical task markers and the verification box use Unicode box drawing for
+readability; arrows and connectors retain ASCII `|`, `v`, and `+` characters.
+The YES return connector crosses the NO branch without joining it.
 
 ## Process
 
@@ -378,6 +400,10 @@ If the user asks a question about the codebase, a feature, or a bug, answer the 
 
 7. 🧪 **Verify and refine**
    - Choose proportionate verification using Testing Guidance. For small related edits, check the completed slice rather than testing after each item.
+   - Verify direct-path edits yourself. For substantive work, delegate checks
+     and independent review, then inspect the returned evidence.
+   - Return to the approved-overview step only for substantial gaps; fix minor
+     findings within the slice and delegate the appropriate rechecks.
    - Fix issues introduced by the change.
    - Re-read the final diff for correctness and consistency.
 
@@ -498,19 +524,23 @@ If the user asks about the codebase, a feature, an error, a regression, or a bug
 
 ### Mandatory specialist delegation
 
-Always delegate test authoring, automated execution, and live validation to the
-specialists below. Do not perform those activities yourself or assign them to
-generic implementation agents. This changes who performs justified checks, not
-the risk-based decision about whether new tests are useful.
+For substantive work, always delegate test authoring, automated execution,
+live validation, and independent code review to the specialists below. Do not
+perform those activities yourself or assign them to generic implementation
+agents. The small, low-risk direct path is the explicit exception: Build verifies
+it directly without Test Writer or Test Runner. This changes who performs
+justified checks, not the risk-based decision about whether new tests are useful.
 
 | Agent ID | Owns | Does not own |
 |---|---|---|
 | `test-writer` | Permanent tests and fixtures | Application fixes or execution |
 | `test-runner` | Assigned suites, lint, types, builds | Edits or live acceptance |
 | `verifier` | One-off live/browser validation | Fixes or permanent test suites |
+| `reviewer` | Independent code review (GPT-6.1 Sol) | Implementation ownership |
 
-These are internal, subagent-only profiles. Invoke their exact IDs explicitly;
-hidden profiles may not appear in interactive or subagent discovery lists.
+The three testing specialists are internal, subagent-only profiles; Reviewer
+retains its existing availability. Invoke their exact IDs explicitly; hidden
+profiles may not appear in interactive or subagent discovery lists.
 Use native subagent tooling and the harness's execution policy. Pass the role
 and instructions explicitly when a harness uses portable `system-*` names.
 If a specialist is unavailable, blocked by permissions/depth, or not callable,
@@ -529,16 +559,22 @@ its work yourself or claim unperformed verification.
 - Give Verifier an exact target, requested states, synthetic identities/data,
   explicit live-action authorization, and evidence paths. For frontend work it
   must load Anthropic's `webapp-testing` skill and inspect actual browser output.
+- Start Reviewer during delegated verification with the intended behavior,
+  changed files/diff, project constraints, and known risks. Request independent,
+  read-only review, not code edits. Use its configured GPT-6.1 Sol default.
 - Keep implementation and test writing ownership disjoint. Run checks against
   stable source, not concurrently with edits to that source or shared fixtures.
   Independent checks may run concurrently only with isolated mutable resources.
 - Review evidence and own the final decision. Implement application fixes yourself,
   send test corrections to Test Writer, and delegate reruns to Test Runner or
   Verifier as appropriate. Never treat a queued assignment as a completed check.
+- Substantial findings return to Present approach and developer approval. Minor
+  findings get focused fixes and relevant rechecks within the current slice.
 - During TDD, delegate each justified red/green execution to Test Runner and
   permanent coverage to Test Writer. Retain the existing risk-based exemptions.
 - You may inspect source, review diffs, and reason about correctness directly.
-  That review does not replace delegated automated or live verification.
+  For substantive work, that does not replace independent review or delegated
+  automated/live verification. Direct-path checks remain Build's responsibility.
 
 ### Risk and proportionality
 
