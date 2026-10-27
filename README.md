@@ -72,8 +72,8 @@ OpenCode registers `test-writer` (GPT-6.1 Sol), `test-runner` (GPT-6 Luna), and
 Build delegates test authoring, automated checks, and one-off live validation to
 these exact IDs, alongside independent `reviewer` review (GPT-6.1 Sol). Small,
 low-risk edits are implemented and verified directly without Test Writer/Runner.
-Substantial verification gaps return to approach review and developer approval;
-minor findings receive focused fixes and rechecks within the current slice.
+Substantial verification gaps stop implementation and go to the developer in the
+final report; minor findings receive focused fixes and rechecks in the same slice.
 The runner cannot use edit tools; its shell access still requires adherence to
 the no-source-edit contract and is not a read-only operating-system sandbox.
 Verifier uses Anthropic's `webapp-testing` skill for frontend validation.
