@@ -153,6 +153,88 @@ unrelated user work while standardizing the edited file.
   limitation and use its valid native comment form; do not add runtime strings
   or invalid syntax solely to imitate a block comment.
 
+#### At-a-Glance File and Class Documentation
+
+Every backend and frontend source file must have an at-a-glance overview near
+the top, using a Python module docstring, JavaScript/TypeScript file-level
+JSDoc, or the language's native equivalent. Apply this to every file you create
+or edit, including files without classes; do not sweep untouched files. Respect
+required shebangs, encoding declarations, licenses, and framework directives.
+This supplements all existing documentation and commenting rules above; it
+does not replace class/function documentation, numbered comments, or changelogs.
+
+The overview must let an agent understand the file without reading its full
+implementation. Use the following structure, proportional to the file's scope:
+
+- **Identity and purpose:** name the module, class, or component and summarize
+  what it does, offers, and owns.
+- **Capabilities and API Surface:** list the relevant entrypoints or exports
+  with concise roles. Include methods, routes, components, hooks, props, or
+  events as applicable; distinguish public entrypoints from internal engines.
+  For files with no exposed API, describe their internal role instead.
+- **Boundaries and flow:** explain responsibility splits, constraints, and
+  relationships to neighboring modules. State which layer callers should use
+  when bypassing it would skip policy, validation, or other guarantees.
+- **Integration:** show how the capability is activated, injected, configured,
+  composed, or consumed when that is not obvious.
+- **Usage:** include a small, representative example when it clarifies the
+  contract; show variants such as streaming only when relevant.
+
+Use the same structure for substantial class docstrings, scoped to that class
+rather than duplicating the entire file overview. Keep small files concise;
+omit inapplicable sections instead of inventing APIs or padding the comment.
+Check every claim, symbol, and example against the current implementation.
+Keep these overviews current when behavior or APIs change, and preserve useful
+existing explanations instead of replacing them with generic one-line summaries.
+
+The following AgentMixin docstring is preserved verbatim as a reference for
+class/module documentation. Adapt its explanatory structure to the actual file,
+not its domain-specific claims. The existing line-length and closing-delimiter
+rules still apply to documentation written in source files; this historical
+example is not a formatting exception for new code.
+
+```python
+"""AgentMixin — injected into models with __agent__ = True.
+
+Self-aware models: one flag gives a model LLM-powered reasoning about itself.
+``__agent__ = True`` is as powerful as ``__storable__ = True`` — zero config,
+full capability.
+
+API Surface (all @fullmethod — unified class/instance dispatch):
+    ctx()            @fullmethod  — Build LLM context from schema (class or instance)
+    tools()          @fullmethod  — Discover tool addresses (self + neighbors + extras)
+    agentic()        @fullmethod  — Policy layer: config cascade, prompt/tool assembly
+    run()            @fullmethod  — Engine: raw LLM loop, explicit params, no magic
+    agentic_stream() @fullmethod  — Streaming policy (delegates to run_stream)
+    run_stream()     @fullmethod  — Streaming engine: yields TX-aligned chunks
+
+The split: agentic() is the boundary where you enforce constraints and resolve config.
+run() is the engine that just works. Expose agentic() via HTTP, never run().
+
+Injection follows the same pattern as StorableMixin:
+    __storable__ = True  →  injects StorableMixin
+    __agent__    = True  →  injects AgentMixin
+
+Usage:
+    class Product(ActorModel):
+        __agent__ = True
+
+        @expose_route('/analyze', methods=['POST'])
+        async def analyze(self, query: str) -> str:
+            result = await self.agentic(task=query)
+            return result['answer']
+
+    # Streaming variant
+    class Product(ActorModel):
+        __agent__ = True
+
+        @expose_route('/analyze', methods=['POST'], stream=True)
+        async def analyze(self, query: str):
+            async for chunk in self.agentic_stream(task=query):
+                yield chunk
+"""
+```
+
 ### Formatting and Line Length
 
 - Follow language best practices for indentation, blank lines, spacing, and
