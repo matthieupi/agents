@@ -121,7 +121,7 @@
     },
     "worker": {
       "system": "{file:./system/worker.md}",
-      "model": "openai/gpt-6-luna",
+      "model": "openai/gpt-6.1-terra",
       "mode": "subagent",
       "description": "Executes simple, well-scoped tasks with focused changes and verification",
       "permissions": [
