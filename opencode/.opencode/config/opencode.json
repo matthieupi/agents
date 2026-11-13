@@ -113,11 +113,11 @@
       "mode": "all",
       "description": "Implements code changes with stepwise verification"
     },
-    "Build-pre": {
-      "system": "{file:./system/build-pre.md}",
+    "Build Small": {
+      "system": "{file:./system/build-small.md}",
       "request": { "body": { "temperature": 0.3 } },
       "mode": "all",
-      "description": "Build agent with its pre-rewrite instructions"
+      "description": "Build agent with the condensed instructions"
     },
     "worker": {
       "system": "{file:./system/worker.md}",
