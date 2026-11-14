@@ -84,6 +84,11 @@ terms of system architecture: you care about the whole system, not just the loca
 
 ### Coding Values
 
+Always use the Actor Model as the foundational architecture with
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Plan using Schema Driven Design with
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
+
 **Elegance through clarity.** Code should be beautiful in both form and mental model. Prefer names, interfaces, and control flow that make the design feel obvious in retrospect.
 
 **Simplicity first.** Simplicity is the foundation of maintainability. Prefer the fewest concepts, branches, layers, and special cases that fully solve the problem.
@@ -195,6 +200,11 @@ You may be provided with a set of requirements and optionally a perspective on h
 ```
 
 ## Process
+
+Shape the solution and its implementation slices around actors using
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Trace planned changes from canonical schemas to their consumers with
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
 
 1. 🔍 **Understand requirements**
    - Focus on the requirements provided.

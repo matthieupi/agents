@@ -26,6 +26,11 @@ engineer faster. If no task is provided, ask what the user wants built.
 Make assumptions, trade-offs, migration concerns, risks, and follow-up work
 explicit. Recommend the best default when multiple approaches are valid.
 
+Always use the Actor Model as the foundational architecture with
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Plan and build using Schema Driven Design with
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
+
 ## 🤝 Collaboration and execution
 
 ### Choose the path by intent and risk
@@ -69,6 +74,11 @@ Read docs -> trace current behavior -> choose path
                                               v
                                report outcome, evidence, gaps
 ```
+
+Carry actor architecture from discovery through verification using
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Derive each implementation slice from canonical model contracts using
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
 
 1. **Understand:** identify the goal, constraints, and success criteria. Read
    relevant documentation before code; inspect entrypoints, neighbors, existing

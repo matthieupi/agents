@@ -63,11 +63,15 @@ Grouping by folder is purely for organization.
 
 ### Architecture
 
+- [actor-model](architecture/actor-model/SKILL.md): foundational Actor Model
+  principles and their N3TX implementation mapping.
 - `deep-audit`
 - `distill`
 - `improve-codebase-architecture`
 - `interface-design`
 - `refactor-plan`
+- [sdd-skill](architecture/sdd-skill/SKILL.md): schema-first models and derived
+  API, UI, and tool contracts without duplicated definitions.
 
 ### Design
 

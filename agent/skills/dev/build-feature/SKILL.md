@@ -72,6 +72,11 @@ Read `CLAUDE.md` and, based on whether this is backend, frontend, or
 full-stack work, read `claude-back.md` and/or `claude-front.md`. These
 contain conventions and patterns that every task must reference.
 
+Always use [actor-model](../../architecture/actor-model/SKILL.md) as the
+foundational architecture in implementation task briefs.
+Plan and build schema-driven contracts in task briefs using
+[sdd-skill](../../architecture/sdd-skill/SKILL.md).
+
 ---
 
 ## Phase 2: Decomposition

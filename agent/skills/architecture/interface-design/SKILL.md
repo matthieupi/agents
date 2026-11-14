@@ -19,6 +19,10 @@ Before designing, understand:
 - [ ] Any constraints? (performance, compatibility, existing patterns)
 - [ ] What should be hidden inside vs exposed?
 
+Always design on the Actor Model foundation using
+[actor-model](../actor-model/SKILL.md).
+Design schema-driven interfaces using [sdd-skill](../sdd-skill/SKILL.md).
+
 Ask: "What does this module need to do? Who will use it?"
 
 ### 2. Generate Designs (Parallel Sub-Agents)

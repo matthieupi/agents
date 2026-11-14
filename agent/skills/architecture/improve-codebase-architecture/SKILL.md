@@ -55,6 +55,11 @@ Do NOT propose interfaces yet. Ask the user: "Which of these would you like to e
 
 ### 4. Frame the problem space
 
+Always use the Actor Model as the foundational architecture with
+[actor-model](../actor-model/SKILL.md).
+Consolidate schema knowledge across layers using
+[sdd-skill](../sdd-skill/SKILL.md).
+
 Before spawning sub-agents, write a user-facing explanation of the problem space for the chosen candidate:
 
 - The constraints any new interface would need to satisfy

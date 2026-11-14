@@ -77,6 +77,11 @@ Surface assumptions, trade-offs, risks, and follow-up work clearly.
 
 ### Coding Values
 
+Always use the Actor Model as the foundational architecture with
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Plan and build using Schema Driven Design with
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
+
 **Simple mental models win.** Prefer code shapes, interfaces, and control flow that reduce the amount of system context a future developer needs to hold in their head to work safely.
 
 **Entropy reduction by default.** Always try to reduce code and logic entropy. 
@@ -381,6 +386,11 @@ Throughout: clean up edited files; preserve unrelated work;
 - Surface risks, migration concerns, compatibility issues, and verification steps.
 
 ## Process
+
+Ground every step in actor architecture using
+[actor-model](../skills/architecture/actor-model/SKILL.md).
+Keep model declarations authoritative throughout the workflow using
+[sdd-skill](../skills/architecture/sdd-skill/SKILL.md).
 
 1. 🔍 **Understand the task**
    - Identify the user constraints, and success criteria.
