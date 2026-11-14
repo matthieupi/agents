@@ -1,9 +1,11 @@
 # Frozen webapp-loop review criteria
 
-**Version: v1 (2026-11-14).** Researched once during skill creation by an Explore
-agent using the six primary sources below. Use this version throughout a run;
-do not perform recurring web research or change anchors between iterations.
-Explicit future updates must identify a new version and their changed criteria.
+**Version: v1.1 (2026-11-14).** Researched once during skill creation by an Explore
+agent using the six primary sources below. Version 1.1 limits default evidence
+collection to a quick pass; dimensions, scoring anchors and sources are unchanged.
+Use this version throughout a run; do not perform recurring web research or
+change anchors between iterations. Explicit future updates must identify a new
+version and their changed criteria.
 
 This is a scoped expert-review rubric, not a scientifically validated scoring
 instrument. It evaluates the requested product intent, not a preferred template.
@@ -33,10 +35,17 @@ conformance, representative-user usability, assistive-technology compatibility,
 security, performance or general code quality. Report only what was inspected.
 WCAG conformance has full-page and complete-process requirements [1, section 5].
 
-Before rating, identify applicable features and the required state/viewport set.
-For each check record **pass / fail / unverified / N/A**, evidence and severity.
+Before rating, use the agreed capture scope: by default, one viewport, a base
+screenshot and up to five representative interactions. The dimensions below are
+review lenses, not a requirement to collect every possible kind of evidence.
+For relevant checks record **pass / fail / unverified / N/A**, evidence and
+severity.
 N/A needs an applicability reason; an inaccessible state is unverified, not N/A.
 Do not shrink the agreed state set just to improve the score.
+Do not block a quick visual review merely because optional measurements, keyboard
+tours or source-level checks were not requested. Mark those areas unverified and
+scores provisional as appropriate; do not force a wider capture to fill the
+rubric.
 
 ## Rating scale: 0–10, higher is better
 
@@ -154,6 +163,8 @@ not critical. A high aesthetic score cannot cancel a failure.
 
 These are applicable **AA requirements from [1]**, not aesthetic scoring anchors.
 Read each criterion's full applicability and exceptions before finding a failure.
+Use them for requested or directly relevant measurements, not as a mandatory
+checklist for the default quick capture.
 
 - **1.4.3:** text contrast at least **4.5:1**, or **3:1** for large-scale text.
   Large-scale means at least 18pt, or 14pt bold, with equivalent-size provisions
@@ -178,11 +189,16 @@ Read each criterion's full applicability and exceptions before finding a failure
 
 Measure contrast and target areas; do not estimate them from a screenshot.
 
-## Interaction-state matrix
+## Optional interaction probes
 
-Apply present features only. Use synthetic data and safe authorized actions.
-Capture the actual intermediate states and the resulting state, not just a click
-log. An unavailable feature can be N/A; a present but untested feature is not.
+This is a menu of deeper probes, not a per-run capture checklist. Default to the
+base screenshot and at most five useful actions; do not execute every row or every
+state within a row. Use additional probes only when requested or necessary for a
+selected change or observed serious issue. Keep the reason explicit.
+
+Apply present features only, with synthetic data and safe authorized actions.
+For chosen probes capture the relevant state, not just a click log. An unavailable
+feature can be N/A; a present but untested feature is unverified.
 
 | Feature | Probes and screenshots |
 | --- | --- |

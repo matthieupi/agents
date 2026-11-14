@@ -65,14 +65,14 @@ Grouping by folder is purely for organization.
 
 - `deep-audit`
 - `distill`
-- `distill-deep`
 - `improve-codebase-architecture`
+- `interface-design`
 - `refactor-plan`
 
 ### Design
 
+- `frontend-design`
 - `grill-me`
-- `interface-design`
 - [webapp-loop](design/webapp-loop/SKILL.md): bounded, fresh-agent UI improvement
   rounds with interactive Playwright screenshots and frozen 0–10 review criteria.
 

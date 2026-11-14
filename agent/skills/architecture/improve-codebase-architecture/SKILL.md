@@ -1,25 +1,40 @@
 ---
 name: improve-codebase-architecture
-description: Explore a codebase to find opportunities for architectural improvement, focusing on making the codebase more testable by deepening shallow modules. Use when user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a codebase more AI-navigable.
+description: Explore a codebase to find opportunities for architectural improvement, focusing on making the codebase simpler by deepening shallow modules and removing bloat. Use when user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a codebase more AI-navigable.
 ---
 
 # Improve Codebase Architecture
 
-Explore a codebase like an AI would, surface architectural friction, discover opportunities for improving testability, and propose module-deepening refactors as GitHub issue RFCs.
+Explore a codebase like an Architect would, surface architectural friction, discover opportunities for simplifying flows, mental models, reduce bloat and overengineering. Propose module-deepening refactors that would lead to simpler, less error prone, and
 
 A **deep module** (John Ousterhout, "A Philosophy of Software Design") has a small interface hiding a large implementation. Deep modules are more testable, more AI-navigable, and let you test at the boundary instead of inside.
+
+## Goal
+- Improve developper velocity with targeted simplifying refactors.
+- **REDUCE CODE ENTROPY** Code entropy, just like in physics, always grows. We aim to fight it. We aim to clean it up.
+- Reduce code. Removing > adding.
+- Think out of the box.
+- Clean code, shallow modules, composable systems.
 
 ## Process
 
 ### 1. Explore the codebase
 
-Use the Agent tool with subagent_type=Explore to navigate the codebase naturally. Do NOT follow rigid heuristics. Explore organically and note where you experience friction:
+Use subagent_type=Explore to navigate the codebase naturally.
 
+- Are there obvious code smell?
+- Is there overcomplication/overengineering?
+- Are we following the framework design or working against it? Things should be
+  made simpler and complexity should be hidden behind simple (deep) modules by
+  using the framework, not more bloated.
+- Are there refactors that could significantly reduce line count / steps required
+  for an operation.
 - Where does understanding one concept require bouncing between many small files?
-- Where are modules so shallow that the interface is nearly as complex as the implementation?
-- Where have pure functions been extracted just for testability, but the real bugs hide in how they're called?
 - Where do tightly-coupled modules create integration risk in the seams between them?
 - Which parts of the codebase are untested, or hard to test?
+- Large files / large functions are a red flag.
+- Refactor and simplification opportunities.
+- DRY
 
 The friction you encounter IS the signal.
 
@@ -28,13 +43,15 @@ The friction you encounter IS the signal.
 Present a numbered list of deepening opportunities. For each candidate, show:
 
 - **Cluster**: Which modules/concepts are involved
-- **Why they're coupled**: Shared types, call patterns, co-ownership of a concept
+- **Gains** What simplification, long term system improvements do we gain with this candidate
+- **Tradeoffs**
 - **Dependency category**: See [REFERENCE.md](REFERENCE.md) for the four categories
 - **Test impact**: What existing tests would be replaced by boundary tests
+- What can be removed
 
 Do NOT propose interfaces yet. Ask the user: "Which of these would you like to explore?"
 
-### 3. User picks a candidate
+### 3. User picks candidates
 
 ### 4. Frame the problem space
 
@@ -48,7 +65,7 @@ Show this to the user, then immediately proceed to Step 5. The user reads and th
 
 ### 5. Design multiple interfaces
 
-Spawn 3+ sub-agents in parallel using the Agent tool. Each must produce a **radically different** interface for the deepened module.
+Spawn 3+ sub-agents in parallel using the Agent tool. Each must produce a **radically different** interface for target refactor candidate.
 
 Prompt each sub-agent with a separate technical brief (file paths, coupling details, dependency category, what's being hidden). This brief is independent of the user-facing explanation in Step 4. Give each agent a different design constraint:
 
@@ -65,12 +82,8 @@ Each sub-agent outputs:
 4. Dependency strategy (how deps are handled; see [REFERENCE.md](REFERENCE.md))
 5. Trade-offs
 
-Present designs sequentially, then compare them in prose.
+Present designs sequentially, then compare them.
 
-After comparing, give your own recommendation: which design you think is strongest and why. If elements from different designs would combine well, propose a hybrid. Be opinionated. The user wants a strong read, not just a menu.
+After comparing, give your own recommendation: which design you think is strongest and why. If elements from different designs would combine well, propose an improved hybrid. Be opinionated. We are collaborating with the user, we need to share relevant information to get a shared understanding of the problem/scope/solution.
 
 ### 6. User picks an interface (or accepts recommendation)
-
-### 7. Create GitHub issue
-
-Create a refactor RFC as a GitHub issue using `gh issue create`. Use the template in [REFERENCE.md](REFERENCE.md). Do NOT ask the user to review before creating. Just create it and share the URL.

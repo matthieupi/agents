@@ -1,12 +1,10 @@
 ---
 name: frontend-design
 description: Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.
-license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
 
-> Local adaptation (2026-10-23): use available OpenCode V2 file tools and `shell` in the user's project. Deliver real source/HTML files, not a host-specific artifact. Verify with installed browser tooling or an available browser integration; do not assume either exists. For intended organization branding, consult the local `brand-guidelines` skill; otherwise follow the user's design brief.
 
 Approach this as the design lead at a design studio known for giving every client a distinct visual identity that is not mistaken for anyone else's. This client has already rejected proposals that felt cliché or templated, and is paying for a distinctive point of view: make deliberate, opinionated choices about palette, typography, and layout that are specific to this brief, and take aesthetic risk if justified.
 
@@ -22,7 +20,7 @@ Typography carries the personality of the page. You don't need a different typef
 
 Choose your typefaces deliberately, not the default families you would reach for on any other project, and set a clear type scale following the default guidance of The Elements of Typographic Style with intentional weights, widths, and spacing. When type is used as a headline or visual element, use the type treatment itself as an active part of the design, not a neutral delivery vehicle for the content.
 
-Default to line lengths of less than 80 characters. Serif typefaces can have slightly longer line lengths; give serif body text slightly more line-height than a sans-serif.
+Serif typefaces can have slightly longer line lengths; give serif body text slightly more line-height than a sans-serif.
 
 Avoid these default typographic treatments; they are the commonest tells of a generated page:
 - Accenting just a single word or phrase in a headline, like putting one word in italic/bold or a different color.
@@ -59,6 +57,37 @@ When writing the code, be careful of structuring your CSS selector specificities
 ## Restraint and self-critique
 
 Spend your boldness in one place. Let one element be the memorable thing, keep everything around it quiet and disciplined, and cut any decoration that does not serve the brief. Build to a quality floor without announcing it: responsive down to mobile, visible keyboard focus, reduced motion respected, visually accessible, harmonious color palettes. Critique your own work as you build, taking screenshots to review if your environment supports it. A picture is worth 1000 tokens. Consider Chanel's advice: before leaving the house, take a look in the mirror and remove one accessory. Human creatives have memory and always try to do something new, so if you have a space to quickly jot down notes about what you've tried, it can help you in future passes.
+
+### PHILOSOPHY
+
+**"Concrete Poetry"**
+Philosophy: Communication through monumental form and bold geometry.
+Visual expression: Massive color blocks, sculptural typography (huge single words, tiny labels), Brutalist spatial divisions, Polish poster energy meets Le Corbusier. Ideas expressed through visual weight and spatial tension, not explanation. Text as rare, powerful gesture - never paragraphs, only essential words integrated into the visual architecture. Every element placed with the precision of a master craftsman.
+
+**"Chromatic Language"**
+Philosophy: Color as the primary information system.
+Visual expression: Geometric precision where color zones create meaning. Typography minimal - small sans-serif labels letting chromatic fields communicate. Think Josef Albers' interaction meets data visualization. Information encoded spatially and chromatically. Words only to anchor what color already shows. The result of painstaking chromatic calibration.
+
+**"Analog Meditation"**
+Philosophy: Quiet visual contemplation through texture and breathing room.
+Visual expression: Paper grain, ink bleeds, vast negative space. Photography and illustration dominate. Typography whispered (small, restrained, serving the visual). Japanese photobook aesthetic. Images breathe across pages. Text appears sparingly - short phrases, never explanatory blocks. Each composition balanced with the care of a meditation practice.
+
+**"Organic Systems"**
+Philosophy: Natural clustering and modular growth patterns.
+Visual expression: Rounded forms, organic arrangements, color from nature through architecture. Information shown through visual diagrams, spatial relationships, iconography. Text only for key labels floating in space. The composition tells the story through expert spatial orchestration.
+
+**"Geometric Silence"**
+Philosophy: Pure order and restraint.
+Visual expression: Grid-based precision, bold photography or stark graphics, dramatic negative space. Typography precise but minimal - small essential text, large quiet zones. Swiss formalism meets Brutalist material honesty. Structure communicates, not words. Every alignment the work of countless refinements.
+
+### ESSENTIAL PRINCIPLES
+- **VISUAL PHILOSOPHY**: Create an aesthetic worldview to be expressed through design
+- **MINIMAL TEXT**: Always emphasize that text is sparse, essential-only, integrated as visual element - never lengthy
+- **SPATIAL EXPRESSION**: Ideas communicate through space, form, color, composition - not paragraphs
+- **ARTISTIC FREEDOM**: The implementing agent interprets the philosophy visually - provide creative room
+- **PURE DESIGN**: This is about making ART OBJECTS, not documents with decoration
+- **EXPERT CRAFTSMANSHIP**: Repeatedly emphasize the final work must look meticulously crafted, labored over with care, the product of countless hours by someone at the top of their field
+
 
 ## More on writing in design
 
