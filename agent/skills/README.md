@@ -56,7 +56,9 @@ Grouping by folder is purely for organization.
 
 - `bugfix`
 - `build-feature`
-- `n3tx-init`: read-only N3TX session orientation; `/n3tx-init [feature/system context and/or N3TX path]` invokes the shared skill through a thin command.
+- `n3tx-init`: read-only N3TX session orientation;
+  `/n3tx-init [feature/system context and/or N3TX path]` invokes the shared skill
+  through a thin command.
 - `tdd`
 
 ### Architecture
@@ -71,6 +73,8 @@ Grouping by folder is purely for organization.
 
 - `grill-me`
 - `interface-design`
+- [webapp-loop](design/webapp-loop/SKILL.md): bounded, fresh-agent UI improvement
+  rounds with interactive Playwright screenshots and frozen 0–10 review criteria.
 
 ### Planning
 
